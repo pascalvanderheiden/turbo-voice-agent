@@ -38,9 +38,13 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
     if (!file) return;
     setUploading(true);
     try {
-      const result = await userApi.uploadPhoto(file);
-      setCurrentPhotoUrl(result.photoUrl);
-      onPhotoChange?.(result.photoUrl);
+      await userApi.uploadPhoto(file);
+      // Re-fetch photo via authenticated proxy to get a displayable object URL
+      const objectUrl = await userApi.getPhotoObjectUrl();
+      if (objectUrl) {
+        setCurrentPhotoUrl(objectUrl);
+        onPhotoChange?.(objectUrl);
+      }
     } catch (err) {
       console.error("Photo upload failed:", err);
     } finally {

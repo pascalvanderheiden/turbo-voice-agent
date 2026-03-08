@@ -416,4 +416,15 @@ export const userApi = {
     return res.json();
   },
   getPhotoUrl: (): string => `${API_BASE}/api/me/photo`,
+  /** Fetch profile photo via authenticated API and return an object URL for <img src>. */
+  getPhotoObjectUrl: async (): Promise<string | null> => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/me/photo`);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  },
 };

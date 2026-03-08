@@ -33,13 +33,11 @@ export function SiteHeader() {
           name: accounts[0].name || "",
           email: accounts[0].username || "",
         });
-        // Fetch profile photo URL from backend profile
+        // Fetch profile photo as blob via authenticated API proxy
         import("@/lib/api").then(({ userApi }) => {
-          userApi.getProfile().then((profile) => {
-            if (profile?.profilePhotoUrl) {
-              setPhotoUrl(profile.profilePhotoUrl);
-            }
-          }).catch(() => { /* profile not available */ });
+          userApi.getPhotoObjectUrl().then((url) => {
+            if (url) setPhotoUrl(url);
+          }).catch(() => { /* photo not available */ });
         });
       }
     });

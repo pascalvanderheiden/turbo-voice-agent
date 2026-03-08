@@ -50,7 +50,7 @@ resource uploadsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   parent: blobServices
   name: 'uploads'
   properties: {
-    publicAccess: 'Blob'
+    publicAccess: 'None'
   }
 }
 
