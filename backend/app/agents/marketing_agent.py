@@ -522,9 +522,9 @@ class MarketingAgent:
             from azure.storage.blob.aio import BlobServiceClient
             from azure.storage.blob import generate_blob_sas, BlobSasPermissions, ContentSettings
 
-            storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT", "")
+            storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME", os.environ.get("AZURE_STORAGE_ACCOUNT", ""))
             if not storage_account:
-                logger.warning("AZURE_STORAGE_ACCOUNT not set, skipping blob upload")
+                logger.warning("AZURE_STORAGE_ACCOUNT_NAME not set, skipping blob upload")
                 return None
 
             blob_url_base = f"https://{storage_account}.blob.core.windows.net"
