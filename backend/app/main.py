@@ -136,7 +136,7 @@ async def lifespan(app: FastAPI):
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
     dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)
     skills_agent = SkillsAgent(skills_service)
-    marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service)
+    marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
     supervisor = SupervisorAgent(notes_agent, brainstorm_agent, research_agent, spec_agent, dev_agent, skills_agent, marketing_agent=marketing_agent)
 
     notes.set_notes_service(notes_service)

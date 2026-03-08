@@ -25,10 +25,12 @@ class MarketingAgent:
         marketing_service: InMemoryMarketingService,
         dev_service=None,
         spec_service=None,
+        profile_service=None,
     ):
         self._service = marketing_service
         self._dev_service = dev_service
         self._spec_service = spec_service
+        self._profile_service = profile_service
         self._openai: AsyncAzureOpenAI | None = None
 
     def _get_openai(self) -> AsyncAzureOpenAI:
@@ -225,14 +227,19 @@ class MarketingAgent:
                 await service.set_status(video_id, "failed", error="No screenshots found in linked dev task")
                 return
 
+            # Fetch user's profile photo for personalized video
+            profile_photo: bytes | None = None
+            if user_id and self._profile_service:
+                profile_photo = await self._fetch_profile_photo(user_id)
+
             # Clear previous error on new run
             await service.set_status(video_id, "scripting", error=None)
-            script = await self._generate_script(video.title, spec_content, screenshots)
+            script = await self._generate_script(video.title, spec_content, screenshots, has_profile_photo=profile_photo is not None)
             await service.set_status(video_id, "scripting", script_content=script)
 
             # Generate video (multi-segment + ffmpeg stitch)
             await service.set_status(video_id, "generating")
-            video_path, duration, blob_url = await self._generate_video(video_id, script, screenshots)
+            video_path, duration, blob_url = await self._generate_video(video_id, script, screenshots, profile_photo=profile_photo)
 
             # Complete
             await service.set_status(
@@ -286,7 +293,44 @@ class MarketingAgent:
         logger.info("Gathered %d screenshots for video %s", len(screenshots), video.id)
         return screenshots, spec_content
 
-    async def _generate_script(self, title: str, spec_content: str, screenshots: list[tuple[str, bytes]]) -> str:
+    async def _fetch_profile_photo(self, user_id: str) -> bytes | None:
+        """Fetch the user's custom profile photo from Blob Storage."""
+        try:
+            profile = await self._profile_service.get_profile(user_id)
+            if not profile:
+                return None
+            photo_url = profile.get("profilePhotoUrl")
+            if not photo_url:
+                return None
+
+            # Download from blob storage using managed identity
+            from azure.identity.aio import DefaultAzureCredential
+            from azure.storage.blob.aio import BlobServiceClient
+            from urllib.parse import urlparse
+
+            parsed = urlparse(photo_url)
+            account_url = f"{parsed.scheme}://{parsed.hostname}"
+            # path is like /uploads/profile-photos/user-id/file.jpg
+            path_parts = parsed.path.lstrip("/").split("/", 1)
+            container_name = path_parts[0]
+            blob_name = path_parts[1] if len(path_parts) > 1 else ""
+
+            credential = DefaultAzureCredential()
+            try:
+                blob_service = BlobServiceClient(account_url=account_url, credential=credential)
+                blob_client = blob_service.get_blob_client(container_name, blob_name)
+                download = await blob_client.download_blob()
+                photo_bytes = await download.readall()
+                logger.info("Fetched profile photo for user %s (%d bytes)", user_id, len(photo_bytes))
+                return photo_bytes
+            finally:
+                await credential.close()
+                await blob_service.close()
+        except Exception:
+            logger.warning("Could not fetch profile photo for user %s", user_id, exc_info=True)
+            return None
+
+    async def _generate_script(self, title: str, spec_content: str, screenshots: list[tuple[str, bytes]], has_profile_photo: bool = False) -> str:
         """Generate a video script with per-segment Sora prompts using GPT-5.2."""
         client = self._get_openai()
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
@@ -306,6 +350,17 @@ class MarketingAgent:
                         "3 individual segments of ~10 seconds each.\n\n"
                         "Each segment will be generated as a separate Sora-2 video clip, "
                         "then stitched together into one final video.\n\n"
+                        "IMPORTANT: Each segment will receive a reference image as input to Sora-2. "
+                        "The Sora prompt should describe how to ANIMATE that reference image into a video clip.\n"
+                        + (
+                            "- HOOK and CTA segments will receive the user's profile photo as input. "
+                            "Write the Sora prompt so the user appears as the PRESENTER/MAIN CHARACTER — "
+                            "the person in the photo presenting the app, speaking to camera, gesturing at screens.\n"
+                            if has_profile_photo else ""
+                        )
+                        + "- FEATURES segment will receive an app screenshot as input. "
+                        "Write the Sora prompt to animate the screenshot — zooming into UI elements, "
+                        "scrolling, highlighting features, with the screen coming alive.\n\n"
                         "OUTPUT FORMAT — output ONLY a JSON array of 3 segment objects:\n"
                         "```json\n"
                         "[\n"
@@ -315,16 +370,26 @@ class MarketingAgent:
                         "]\n"
                         "```\n\n"
                         "SECTIONS (exactly 3 segments total):\n"
-                        "1. HOOK (1 segment) — Grab attention, show the problem, introduce the app\n"
-                        "2. FEATURES (1 segment) — Walk through the key features and design\n"
-                        "3. CTA (1 segment) — Call to action, closing, logo/tagline\n\n"
-                        "SORA PROMPT RULES (critical for quality):\n"
+                        "1. HOOK (1 segment) — " + (
+                            "The user/presenter introduces the app confidently, "
+                            "standing in a futuristic tech environment with floating screens\n"
+                            if has_profile_photo else
+                            "Grab attention, show the problem, introduce the app\n"
+                        )
+                        + "2. FEATURES (1 segment) — The app screenshot comes alive: UI animations, "
+                        "zooming into features, scrolling through the interface on sleek displays\n"
+                        "3. CTA (1 segment) — " + (
+                            "The presenter delivers the call to action, "
+                            "logo/tagline appears, inspiring closing shot\n\n"
+                            if has_profile_photo else
+                            "Call to action, closing, logo/tagline\n\n"
+                        )
+                        + "SORA PROMPT RULES (critical for quality):\n"
                         "- Follow: [Main subject] + [Scene environment] + [Action] + "
                         "[Camera effects] + [Lighting] + [Style]\n"
                         "- Max 150 words per prompt\n"
                         "- Be highly visual and cinematic\n"
-                        "- For software demos: show the app on sleek monitors, floating screens, "
-                        "or holographic displays in futuristic settings\n"
+                        "- Reference the INPUT IMAGE: describe how it should be animated/extended\n"
                         "- Vary camera angles: orbit, dolly, pan, close-up, wide establishing\n"
                         "- Maintain consistent style: dark theme, neon cyan/pink/purple accents\n"
                         "- Include motion: UI animations, transitions, typing, scrolling\n\n"
@@ -345,7 +410,7 @@ class MarketingAgent:
         )
         return response.choices[0].message.content or ""
 
-    async def _generate_video(self, video_id: str, script: str, screenshots: list[tuple[str, bytes]]) -> tuple[Path, int, str | None]:
+    async def _generate_video(self, video_id: str, script: str, screenshots: list[tuple[str, bytes]], profile_photo: bytes | None = None) -> tuple[Path, int, str | None]:
         """Generate multiple Sora-2 clips and concatenate into a ~30s video. Returns (path, duration, blob_url)."""
         import aiohttp
         import subprocess
@@ -409,6 +474,30 @@ class MarketingAgent:
                         "prompt": prompt,
                         "size": "1280x720",
                     }
+
+                    # Attach reference image: profile photo for hook/cta, screenshot for features
+                    input_image = None
+                    section = seg.get("section", "").lower()
+                    if section in ("hook", "cta") and profile_photo:
+                        input_image = profile_photo
+                        logger.info("Segment %d: attaching profile photo as input image", idx)
+                    elif screenshots:
+                        # Pick a screenshot (spread across available ones)
+                        screenshot_idx = idx % len(screenshots)
+                        input_image = screenshots[screenshot_idx][1]
+                        logger.info("Segment %d: attaching screenshot '%s' as input image", idx, screenshots[screenshot_idx][0])
+
+                    if input_image:
+                        img_b64 = base64.b64encode(input_image).decode()
+                        # Detect image type
+                        mime = "image/png"
+                        if input_image[:3] == b'\xff\xd8\xff':
+                            mime = "image/jpeg"
+                        elif input_image[:4] == b'\x89PNG':
+                            mime = "image/png"
+                        payload["image"] = {
+                            "url": f"data:{mime};base64,{img_b64}"
+                        }
 
                     # Create video
                     async with session.post(create_url, headers=headers, json=payload) as resp:
