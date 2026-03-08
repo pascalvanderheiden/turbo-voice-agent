@@ -358,6 +358,7 @@ export interface MarketingVideo {
   specId: string | null;
   status: "pending" | "scripting" | "generating" | "composing" | "completed" | "failed";
   videoPath: string | null;
+  videoUrl: string | null;
   scriptContent: string | null;
   durationSeconds: number | null;
   error: string | null;

@@ -23,6 +23,7 @@ class MarketingVideo(BaseModel):
     spec_id: str | None = Field(None, alias="specId")
     status: str = "pending"  # pending | scripting | generating | composing | completed | failed
     video_path: str | None = Field(None, alias="videoPath")
+    video_url: str | None = Field(None, alias="videoUrl")
     script_content: str | None = Field(None, alias="scriptContent")
     duration_seconds: int | None = Field(None, alias="durationSeconds")
     error: str | None = None

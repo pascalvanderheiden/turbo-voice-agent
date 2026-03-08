@@ -232,12 +232,13 @@ class MarketingAgent:
 
             # Generate video (multi-segment + ffmpeg stitch)
             await service.set_status(video_id, "generating")
-            video_path, duration = await self._generate_video(video_id, script, screenshots)
+            video_path, duration, blob_url = await self._generate_video(video_id, script, screenshots)
 
             # Complete
             await service.set_status(
                 video_id, "completed",
                 video_path=str(video_path),
+                video_url=blob_url or "",
                 duration_seconds=duration,
                 script_content=script,
             )
@@ -344,8 +345,8 @@ class MarketingAgent:
         )
         return response.choices[0].message.content or ""
 
-    async def _generate_video(self, video_id: str, script: str, screenshots: list[tuple[str, bytes]]) -> tuple[Path, int]:
-        """Generate multiple Sora-2 clips and concatenate into a 2-3 min video."""
+    async def _generate_video(self, video_id: str, script: str, screenshots: list[tuple[str, bytes]]) -> tuple[Path, int, str | None]:
+        """Generate multiple Sora-2 clips and concatenate into a ~30s video. Returns (path, duration, blob_url)."""
         import aiohttp
         import subprocess
         import tempfile
@@ -498,7 +499,13 @@ class MarketingAgent:
                 pass
 
             logger.info("Final video: %s (%d bytes, ~%ds)", output_path, output_path.stat().st_size, duration)
-            return output_path, duration
+
+            # Upload to Azure Blob Storage for public playback
+            blob_url = await self._upload_to_blob(video_id, output_path)
+            if blob_url:
+                logger.info("Video uploaded to blob storage: %s", blob_url)
+
+            return output_path, duration, blob_url
 
         except Exception as e:
             logger.error("Sora-2 multi-segment generation failed: %s", e)
@@ -506,6 +513,56 @@ class MarketingAgent:
         finally:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    async def _upload_to_blob(self, video_id: str, video_path: Path) -> str | None:
+        """Upload final video to Azure Blob Storage and return a SAS URL for playback."""
+        try:
+            from datetime import timedelta
+            from azure.identity.aio import DefaultAzureCredential
+            from azure.storage.blob.aio import BlobServiceClient
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions, ContentSettings
+
+            storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT", "")
+            if not storage_account:
+                logger.warning("AZURE_STORAGE_ACCOUNT not set, skipping blob upload")
+                return None
+
+            blob_url_base = f"https://{storage_account}.blob.core.windows.net"
+            credential = DefaultAzureCredential()
+            try:
+                blob_service = BlobServiceClient(account_url=blob_url_base, credential=credential)
+                container_client = blob_service.get_container_client("marketing-videos")
+                blob_name = f"{video_id}.mp4"
+                blob_client = container_client.get_blob_client(blob_name)
+
+                with open(video_path, "rb") as f:
+                    await blob_client.upload_blob(f, overwrite=True, content_settings=ContentSettings(
+                        content_type="video/mp4",
+                    ))
+
+                # Generate user delegation SAS (valid 7 days)
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                delegation_key = await blob_service.get_user_delegation_key(
+                    key_start_time=now,
+                    key_expiry_time=now + timedelta(days=7),
+                )
+                sas_token = generate_blob_sas(
+                    account_name=storage_account,
+                    container_name="marketing-videos",
+                    blob_name=blob_name,
+                    user_delegation_key=delegation_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=now + timedelta(days=7),
+                )
+                sas_url = f"{blob_url_base}/marketing-videos/{blob_name}?{sas_token}"
+                return sas_url
+            finally:
+                await credential.close()
+                await blob_service.close()
+        except Exception:
+            logger.exception("Failed to upload video %s to blob storage", video_id)
+            return None
 
     def _parse_segments(self, script: str, screenshots: list[tuple[str, bytes]]) -> list[dict]:
         """Parse segment prompts from the GPT-generated JSON script."""

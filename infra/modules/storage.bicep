@@ -58,6 +58,14 @@ resource uploadsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
+resource marketingVideosContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobServices
+  name: 'marketing-videos'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 output name string = storageAccount.name
 output id string = storageAccount.id
 output key string = storageAccount.listKeys().keys[0].value

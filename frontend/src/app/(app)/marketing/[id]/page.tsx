@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   IconVideo, IconPlayerPlay, IconLoader2, IconAlertCircle,
   IconCode, IconFileCode, IconArrowLeft, IconTrash, IconScript,
+  IconDownload,
 } from "@tabler/icons-react";
 import { marketingApi, type MarketingVideo } from "@/lib/api";
 
@@ -13,7 +14,6 @@ export default function MarketingDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [video, setVideo] = useState<MarketingVideo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -27,22 +27,6 @@ export default function MarketingDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
-
-  // Fetch video blob when status becomes completed
-  useEffect(() => {
-    if (!video || video.status !== "completed") return;
-    if (videoBlobUrl) return; // already fetched
-    let cancelled = false;
-    marketingApi.fetchVideoBlob(video.id).then((url) => {
-      if (!cancelled) setVideoBlobUrl(url);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [video, videoBlobUrl]);
-
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => { if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl); };
-  }, [videoBlobUrl]);
 
   // Auto-refresh when in progress
   useEffect(() => {
@@ -178,26 +162,37 @@ export default function MarketingDetailPage() {
       </div>
 
       {/* Video Player */}
-      {video.status === "completed" && (
+      {video.status === "completed" && video.videoUrl && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
-          {videoBlobUrl ? (
-            <video
-              controls
-              className="w-full aspect-video bg-black"
-              src={videoBlobUrl}
+          <video
+            controls
+            className="w-full aspect-video bg-black"
+            src={video.videoUrl}
+          >
+            Your browser does not support the video element.
+          </video>
+          <div className="px-4 py-2 flex items-center justify-between border-t border-[var(--color-border-dark)]">
+            {video.durationSeconds ? (
+              <span className="text-xs text-[var(--color-text-muted)]">
+                Duration: {Math.floor(video.durationSeconds / 60)}:{(video.durationSeconds % 60).toString().padStart(2, "0")}
+              </span>
+            ) : <span />}
+            <a
+              href={video.videoUrl}
+              download={`${video.title.replace(/\s+/g, "-").toLowerCase()}.mp4`}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors"
             >
-              Your browser does not support the video element.
-            </video>
-          ) : (
-            <div className="aspect-video bg-[var(--color-bg-tertiary)] flex items-center justify-center">
-              <IconLoader2 size={32} className="animate-spin text-[var(--color-brand-cyan)]" />
-            </div>
-          )}
-          {video.durationSeconds && (
-            <div className="px-4 py-2 text-xs text-[var(--color-text-muted)] border-t border-[var(--color-border-dark)]">
-              Duration: {Math.floor(video.durationSeconds / 60)}:{(video.durationSeconds % 60).toString().padStart(2, "0")}
-            </div>
-          )}
+              <IconDownload size={14} />
+              Download
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* Completed but no video URL (legacy) */}
+      {video.status === "completed" && !video.videoUrl && (
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 text-center">
+          <p className="text-sm text-[var(--color-text-muted)]">Video generated but URL unavailable. Try re-triggering generation.</p>
         </div>
       )}
 
