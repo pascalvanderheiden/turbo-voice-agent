@@ -382,6 +382,12 @@ export const marketingApi = {
   listByDevTask: (devTaskId: string): Promise<MarketingVideo[]> =>
     fetchApi(`/api/marketing/by-dev-task/${devTaskId}`),
   videoUrl: (id: string): string => `${API_BASE}/api/marketing/${id}/video`,
+  fetchVideoBlob: async (id: string): Promise<string> => {
+    const res = await authFetch(`${API_BASE}/api/marketing/${id}/video`);
+    if (!res.ok) throw new Error("Failed to fetch video");
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
 };
 
 /* ── User Profile ── */

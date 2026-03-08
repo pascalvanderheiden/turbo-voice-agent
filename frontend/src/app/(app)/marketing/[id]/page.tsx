@@ -13,6 +13,7 @@ export default function MarketingDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [video, setVideo] = useState<MarketingVideo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -26,6 +27,22 @@ export default function MarketingDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Fetch video blob when status becomes completed
+  useEffect(() => {
+    if (!video || video.status !== "completed") return;
+    if (videoBlobUrl) return; // already fetched
+    let cancelled = false;
+    marketingApi.fetchVideoBlob(video.id).then((url) => {
+      if (!cancelled) setVideoBlobUrl(url);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [video, videoBlobUrl]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => { if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl); };
+  }, [videoBlobUrl]);
 
   // Auto-refresh when in progress
   useEffect(() => {
@@ -163,13 +180,19 @@ export default function MarketingDetailPage() {
       {/* Video Player */}
       {video.status === "completed" && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
-          <video
-            controls
-            className="w-full aspect-video bg-black"
-            src={marketingApi.videoUrl(video.id)}
-          >
-            Your browser does not support the video element.
-          </video>
+          {videoBlobUrl ? (
+            <video
+              controls
+              className="w-full aspect-video bg-black"
+              src={videoBlobUrl}
+            >
+              Your browser does not support the video element.
+            </video>
+          ) : (
+            <div className="aspect-video bg-[var(--color-bg-tertiary)] flex items-center justify-center">
+              <IconLoader2 size={32} className="animate-spin text-[var(--color-brand-cyan)]" />
+            </div>
+          )}
           {video.durationSeconds && (
             <div className="px-4 py-2 text-xs text-[var(--color-text-muted)] border-t border-[var(--color-border-dark)]">
               Duration: {Math.floor(video.durationSeconds / 60)}:{(video.durationSeconds % 60).toString().padStart(2, "0")}
