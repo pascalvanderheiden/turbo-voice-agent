@@ -281,24 +281,22 @@ class MarketingAgent:
                     "role": "system",
                     "content": (
                         "You are a creative marketing scriptwriter for software products. "
-                        "You will create a ~1 minute promotional video script broken into "
-                        "6 individual segments of ~10 seconds each.\n\n"
+                        "You will create a ~30 second promotional video script broken into "
+                        "3 individual segments of ~10 seconds each.\n\n"
                         "Each segment will be generated as a separate Sora-2 video clip, "
                         "then stitched together into one final video.\n\n"
-                        "OUTPUT FORMAT — output ONLY a JSON array of 6 segment objects:\n"
+                        "OUTPUT FORMAT — output ONLY a JSON array of 3 segment objects:\n"
                         "```json\n"
                         "[\n"
                         '  {"section": "hook", "narration": "...", "sora_prompt": "..."},\n'
-                        '  {"section": "intro", "narration": "...", "sora_prompt": "..."},\n'
-                        "  ...\n"
+                        '  {"section": "features", "narration": "...", "sora_prompt": "..."},\n'
+                        '  {"section": "cta", "narration": "...", "sora_prompt": "..."},\n'
                         "]\n"
                         "```\n\n"
-                        "SECTIONS (exactly 6 segments total):\n"
-                        "1. HOOK (1 segment) — Grab attention, show the problem\n"
-                        "2. INTRO (1 segment) — App name, value proposition, first look\n"
-                        "3. FEATURES (2 segments) — Walk through 2 key features\n"
-                        "4. DESIGN (1 segment) — Highlight visual design and UX quality\n"
-                        "5. CTA (1 segment) — Call to action, closing, logo/tagline\n\n"
+                        "SECTIONS (exactly 3 segments total):\n"
+                        "1. HOOK (1 segment) — Grab attention, show the problem, introduce the app\n"
+                        "2. FEATURES (1 segment) — Walk through the key features and design\n"
+                        "3. CTA (1 segment) — Call to action, closing, logo/tagline\n\n"
                         "SORA PROMPT RULES (critical for quality):\n"
                         "- Follow: [Main subject] + [Scene environment] + [Action] + "
                         "[Camera effects] + [Lighting] + [Style]\n"
@@ -503,7 +501,7 @@ class MarketingAgent:
         try:
             segments = json.loads(text)
             if isinstance(segments, list) and len(segments) > 0:
-                return segments[:6]  # cap at 6 segments (~1 min)
+                return segments[:3]  # cap at 3 segments (~30 sec)
         except json.JSONDecodeError:
             logger.warning("Failed to parse segment JSON, building fallback prompts")
 
@@ -517,32 +515,15 @@ class MarketingAgent:
         screens = ", ".join(screenshot_names) if screenshot_names else "a modern dashboard"
         return [
             {"section": "hook", "sora_prompt": (
-                "Close-up of a person frustrated at a cluttered old-style desktop app, "
-                "messy interface with pop-ups, dim office lighting, handheld camera shake, "
-                "warm tungsten light, cinematic documentary style"
-            )},
-            {"section": "intro", "sora_prompt": (
                 f"A floating holographic display showing {screens} in a futuristic glass office, "
                 "app logo materializes with particle effects, camera orbiting slowly around the display, "
                 "soft neon cyan and pink accent lighting, cinematic photorealistic style"
             )},
-            {"section": "feature-1", "sora_prompt": (
+            {"section": "features", "sora_prompt": (
                 f"Close-up of a high-resolution monitor displaying {screens}, "
                 "cursor clicking through the interface with responsive animations, "
                 "shallow depth of field, camera slowly pulling back, "
                 "neon purple underglow lighting, crisp tech product demo style"
-            )},
-            {"section": "feature-2", "sora_prompt": (
-                "Hands typing on a mechanical keyboard, the application responding instantly on screen, "
-                "real-time data updating with smooth transitions, "
-                "close-up macro lens, warm desk lamp lighting with cool monitor glow, "
-                "authentic tech lifestyle style"
-            )},
-            {"section": "design", "sora_prompt": (
-                "Extreme close-up beauty shots of the UI components, buttons with hover states, "
-                "smooth dropdown animations, elegant typography, dark theme with gradient accents, "
-                "camera racking focus between elements, soft rim lighting, "
-                "luxury product photography style"
             )},
             {"section": "cta", "sora_prompt": (
                 "Final wide shot of the application on multiple devices, laptop tablet phone, "
