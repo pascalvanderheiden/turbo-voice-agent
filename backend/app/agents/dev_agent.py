@@ -205,11 +205,13 @@ class DevAgent:
 
     async def run_pipeline(self, task_id: str, user_id: str = "default-user") -> None:
         """Run the pipeline based on task mode."""
+        logger.info("Pipeline starting: task=%s, user=%s", task_id, user_id)
         service = self._service.with_user(user_id)
         spec_service = self._spec_service.with_user(user_id) if self._spec_service else None
         try:
             task = await service.get_by_id(task_id)
             if not task:
+                logger.error("Pipeline aborted: task %s not found", task_id)
                 return
 
             if task.mode == "sequence" and len(task.iterations) > 1:
@@ -232,8 +234,11 @@ class DevAgent:
                         await spec_service.set_dev_task_id(task.spec_id, task_id, "developed")
 
         except Exception as e:
-            logger.exception("Pipeline failed for task %s", task_id)
-            await service.set_status(task_id, "failed")
+            logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
+            try:
+                await service.set_status(task_id, "failed")
+            except Exception:
+                logger.exception("Failed to set error status on task %s after pipeline failure", task_id)
 
     async def _run_mock_pipeline(self, task_id: str, user_id: str = "default-user") -> None:
         """Mock mode: single iteration, full spec → one app."""

@@ -37,6 +37,7 @@ class UserProfileService:
                 "email": email,
                 "locale": "en",
                 "avatarUrl": None,
+                "profilePhotoUrl": None,
                 "lastLoginAt": now,
             }
             await self._container.upsert_item(profile)
@@ -57,4 +58,16 @@ class UserProfileService:
             await self._container.upsert_item(profile)
             return profile
         except Exception:
+            return None
+
+    async def update_profile_photo_url(self, user_id: str, photo_url: str) -> dict[str, Any] | None:
+        """Update the user's profile photo URL."""
+        try:
+            profile = await self._container.read_item(item=user_id, partition_key=user_id)
+            profile["profilePhotoUrl"] = photo_url
+            await self._container.upsert_item(profile)
+            logger.info("Updated profile photo for user %s", user_id)
+            return profile
+        except Exception:
+            logger.exception("Failed to update profile photo for user %s", user_id)
             return None

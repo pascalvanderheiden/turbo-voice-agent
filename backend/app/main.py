@@ -42,7 +42,9 @@ from app.services.user_profile_service import UserProfileService
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+from app.logging_config import setup_logging
+
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -170,6 +172,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Request logging middleware (innermost — runs after auth sets user_id)
+from app.middleware.logging_middleware import RequestLoggingMiddleware
+app.add_middleware(RequestLoggingMiddleware)
+
 # Auth middleware (before CORS)
 app.add_middleware(EntraAuthMiddleware)
 
@@ -221,7 +227,33 @@ async def install_cert():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Health check with dependency status."""
+    checks = {"cosmos": "unknown", "blob": "unknown"}
+    overall = "healthy"
+
+    # Check Cosmos DB
+    try:
+        client = await get_cosmos_client()
+        db = client.get_database_client(os.environ.get("COSMOS_DATABASE", "turbovoice"))
+        await db.read()
+        checks["cosmos"] = "healthy"
+    except Exception:
+        checks["cosmos"] = "degraded"
+        overall = "degraded"
+
+    # Check Blob Storage
+    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+    if storage_account:
+        checks["blob"] = "configured"
+    else:
+        checks["blob"] = "not_configured"
+
+    status_code = 200 if overall == "healthy" else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": overall, "checks": checks, "version": "0.4.0"},
+    )
 
 
 @app.get("/api/agents/status")
@@ -330,12 +362,14 @@ _skills_service: SkillsService | None = None
 async def list_installed_skills(request: Request):
     """List installed skills with rich metadata via SkillsService."""
     user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Listing skills for user=%s", user_id)
     svc = _skills_service or SkillsService()
     if hasattr(svc, "with_user"):
         svc = svc.with_user(user_id)
     # Prefer Cosmos DB listing (user-scoped) over filesystem
     if hasattr(svc, "list_from_cosmos"):
         skills = await svc.list_from_cosmos()
+        logger.info("Listed %d skills from Cosmos for user=%s", len(skills), user_id)
         return {"skills": skills}
     return {"skills": svc.list_installed()}
 
@@ -362,10 +396,12 @@ class SkillLocalInstallRequest(BaseModel):
 async def install_marketplace_skill(body: SkillInstallRequest, request: Request):
     """Install a skill from skills.sh marketplace via npx."""
     user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Installing skill %s/%s for user=%s", body.repo, body.skillName, user_id)
     svc = _skills_service or SkillsService()
     if hasattr(svc, "with_user"):
         svc = svc.with_user(user_id)
     result = await svc.install_from_marketplace(body.repo, body.skillName)
+    logger.info("Skill install result: %s (user=%s)", result.get("status", "unknown"), user_id)
     return result
 
 
@@ -386,6 +422,7 @@ async def install_local_skill(body: SkillLocalInstallRequest, request: Request):
 async def upload_local_skill(request: Request, name: str = Form(...), files: list[UploadFile] = File(...)):
     """Install a skill from uploaded files (browser folder picker)."""
     user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Uploading local skill '%s' (%d files) for user=%s", name, len(files), user_id)
     svc = _skills_service or SkillsService()
     if hasattr(svc, "with_user"):
         svc = svc.with_user(user_id)
@@ -407,6 +444,7 @@ async def upload_local_skill(request: Request, name: str = Form(...), files: lis
 async def delete_skill(name: str, request: Request):
     """Uninstall a skill by name."""
     user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Deleting skill '%s' for user=%s", name, user_id)
     svc = _skills_service or SkillsService()
     if hasattr(svc, "with_user"):
         svc = svc.with_user(user_id)

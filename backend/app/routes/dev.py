@@ -107,21 +107,27 @@ async def create_dev_task(data: DevTaskCreate, request: Request):
 @router.delete("/{task_id}", status_code=204)
 async def delete_dev_task(task_id: str, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Deleting dev task %s (user=%s)", task_id, user_id)
     service = _get_service().with_user(user_id)
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
     # Clear bidirectional link on the spec (and any child feature specs)
     if task.spec_id and _spec_service:
-        spec_svc = _spec_service.with_user(user_id)
-        await spec_svc.set_dev_task_id(task.spec_id, None, "optimized")
-        features = await spec_svc.get_features_for_foundation(task.spec_id)
-        for feature in features:
-            if feature.dev_task_id == task_id:
-                await spec_svc.set_dev_task_id(feature.id, None, "optimized")
+        try:
+            spec_svc = _spec_service.with_user(user_id)
+            await spec_svc.set_dev_task_id(task.spec_id, None, "optimized")
+            features = await spec_svc.get_features_for_foundation(task.spec_id)
+            for feature in features:
+                if feature.dev_task_id == task_id:
+                    await spec_svc.set_dev_task_id(feature.id, None, "optimized")
+        except Exception:
+            logger.exception("Failed to clear spec links for task %s", task_id)
+            # Continue with deletion even if spec link cleanup fails
     deleted = await service.delete(task_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Dev task not found")
+    logger.info("Dev task %s deleted successfully", task_id)
 
 
 class TriggerRequest(BaseModel):
@@ -140,9 +146,30 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
         raise HTTPException(status_code=400, detail="Task already running or completed")
 
     await service.set_status(task_id, "running")
+    logger.info("Triggering pipeline for task %s (mode=%s, user=%s)", task_id, task.mode, user_id)
 
     if _pipeline_fn:
-        asyncio.create_task(_pipeline_fn(task_id, user_id=user_id))
+        async def _safe_pipeline(tid: str, uid: str):
+            """Wrapper to ensure pipeline errors are caught and logged."""
+            try:
+                logger.info("Pipeline background task starting for %s", tid)
+                await _pipeline_fn(tid, user_id=uid)
+                logger.info("Pipeline background task completed for %s", tid)
+            except Exception:
+                logger.exception("Pipeline background task FAILED for %s", tid)
+                try:
+                    await _get_service().with_user(uid).set_status(tid, "failed")
+                except Exception:
+                    logger.exception("Failed to set error status on task %s", tid)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_safe_pipeline(task_id, user_id))
+            logger.info("Pipeline task scheduled on event loop for %s", task_id)
+        except RuntimeError:
+            logger.exception("No running event loop — cannot schedule pipeline for %s", task_id)
+            await service.set_status(task_id, "failed")
+            raise HTTPException(status_code=500, detail="Failed to start pipeline — no event loop")
     else:
         logger.warning("No pipeline function configured — marking task completed")
         await service.set_status(task_id, "completed")

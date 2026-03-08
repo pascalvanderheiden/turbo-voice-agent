@@ -393,6 +393,7 @@ export interface UserProfile {
   email: string;
   locale: string;
   avatarUrl: string | null;
+  profilePhotoUrl: string | null;
   lastLoginAt?: string;
 }
 
@@ -400,4 +401,19 @@ export const profileApi = {
   get: () => fetchApi<UserProfile>("/api/me"),
   updateLocale: (locale: string) =>
     fetchApi<UserProfile>("/api/me", { method: "PATCH", body: JSON.stringify({ locale }) }),
+};
+
+export const userApi = {
+  getProfile: (): Promise<UserProfile> => fetchApi<UserProfile>("/api/me"),
+  uploadPhoto: async (file: File): Promise<{ success: boolean; photoUrl: string }> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await authFetch(`${API_BASE}/api/me/photo`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json();
+  },
+  getPhotoUrl: (): string => `${API_BASE}/api/me/photo`,
 };

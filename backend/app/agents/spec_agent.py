@@ -249,7 +249,7 @@ class SpecAgent:
 
         foundation = await service.create(
             SpecCreate(
-                title=f"{title} — Foundation",
+                title=title,
                 content=foundation_content,
                 type="foundation",
                 ideaId=idea_id,

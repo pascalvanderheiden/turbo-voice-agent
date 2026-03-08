@@ -479,17 +479,20 @@ function IdeaSpecSection({
           <IconFileCode size={14} /> {converting ? t("specs.converting") : t("specs.convertToSpec")}
         </button>
       </div>
-      {linkedSpecs.length > 0 && (
+      {linkedSpecs.filter((s) => s.type === "foundation").length > 0 && (
         <div className="space-y-2">
-          {linkedSpecs.map((s) => (
+          {linkedSpecs.filter((s) => s.type === "foundation").map((s) => (
             <a
               key={s.id}
-              href="/specs"
+              href={`/specs/${s.id}`}
               className="block p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] hover:border-[var(--color-brand-pink)]/30 text-sm"
             >
               <div className="font-medium">{s.title}</div>
               <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                {s.type === "foundation" ? t("specs.typeFoundation") : t("specs.typeFeature")} · {s.status === "optimized" ? t("specs.statusOptimized") : s.status === "in-development" ? "In Development" : s.status === "developed" ? "Developed" : t("specs.statusDraft")}
+                {t("specs.typeFoundation")} · {s.status === "optimized" ? t("specs.statusOptimized") : s.status === "in-development" ? "In Development" : s.status === "developed" ? "Developed" : t("specs.statusDraft")}
+                {linkedSpecs.filter((f) => f.parentId === s.id).length > 0 && (
+                  <span> · {linkedSpecs.filter((f) => f.parentId === s.id).length} feature{linkedSpecs.filter((f) => f.parentId === s.id).length !== 1 ? "s" : ""}</span>
+                )}
               </div>
             </a>
           ))}

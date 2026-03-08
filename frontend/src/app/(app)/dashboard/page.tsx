@@ -1,6 +1,6 @@
 "use client";
 
-import { IconNote, IconMicrophone, IconBolt, IconBulb, IconSearch, IconFileCode, IconCode } from "@tabler/icons-react";
+import { IconNote, IconMicrophone, IconBolt, IconBulb, IconSearch, IconFileCode, IconCode, IconVideo } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 
 export default function DashboardPage() {
@@ -12,6 +12,7 @@ export default function DashboardPage() {
     { icon: IconSearch, label: t("dashboard.researchLabel"), desc: t("dashboard.researchDesc"), href: "/research", color: "var(--color-brand-cyan)" },
     { icon: IconFileCode, label: t("dashboard.specsLabel"), desc: t("dashboard.specsDesc"), href: "/specs", color: "var(--color-brand-pink)" },
     { icon: IconCode, label: t("dashboard.devLabel"), desc: t("dashboard.devDesc"), href: "/development", color: "var(--color-brand-pink)" },
+    { icon: IconVideo, label: t("dashboard.marketingLabel"), desc: t("dashboard.marketingDesc"), href: "/marketing", color: "var(--color-brand-purple)" },
     { icon: IconMicrophone, label: t("dashboard.voiceLabel"), desc: t("dashboard.voiceDesc"), href: "/voice", color: "var(--color-brand-pink)" },
     { icon: IconBolt, label: t("dashboard.agentLabel"), desc: t("dashboard.agentDesc"), href: "/agents", color: "var(--color-brand-purple)" },
   ];
