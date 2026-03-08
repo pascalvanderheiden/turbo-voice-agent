@@ -473,6 +473,7 @@ class MarketingAgent:
                         "model": deployment,
                         "prompt": prompt,
                         "size": "1280x720",
+                        "n_seconds": 10,
                     }
 
                     # Attach reference image: profile photo for hook/cta, screenshot for features
