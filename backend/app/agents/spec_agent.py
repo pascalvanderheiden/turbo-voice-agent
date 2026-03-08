@@ -313,14 +313,16 @@ class SpecAgent:
         )
         return response.choices[0].message.content or spec.content
 
-    async def handle_function_call(self, function_name: str, arguments: str) -> str:
+    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         try:
             args = json.loads(arguments) if arguments else {}
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid arguments"})
 
+        service = self._service.with_user(user_id) if hasattr(self._service, 'with_user') else self._service
+
         if function_name == "create_spec":
-            spec = await self._service.create(
+            spec = await service.create(
                 SpecCreate(
                     title=args["title"],
                     content=args.get("content", ""),
@@ -334,7 +336,7 @@ class SpecAgent:
             return json.dumps({"error": "Failed to create spec"})
 
         elif function_name == "get_specs":
-            specs = await self._service.list()
+            specs = await service.list()
             return json.dumps({
                 "specs": [
                     {"id": s.id, "title": s.title, "type": s.type, "status": s.status}
@@ -345,7 +347,7 @@ class SpecAgent:
             })
 
         elif function_name == "get_spec":
-            spec = await self._service.get_by_id(args["spec_id"])
+            spec = await service.get_by_id(args["spec_id"])
             if spec:
                 return json.dumps({
                     "spec": {
@@ -364,13 +366,13 @@ class SpecAgent:
                 title=args.get("title"),
                 content=args.get("content"),
             )
-            spec = await self._service.update(args["spec_id"], update)
+            spec = await service.update(args["spec_id"], update)
             if spec:
                 return json.dumps({"success": True, "spec": {"id": spec.id, "title": spec.title}})
             return json.dumps({"error": "Spec not found"})
 
         elif function_name == "delete_spec":
-            deleted = await self._service.delete(args["spec_id"])
+            deleted = await service.delete(args["spec_id"])
             return json.dumps({"success": deleted})
 
         elif function_name == "generate_spec":
@@ -378,10 +380,13 @@ class SpecAgent:
             title = args.get("title", "")
             description = args.get("description", "")
 
-            # If idea_id provided, try to load from brainstorm service
-            if idea_id and not title and self._brainstorm_service:
+            brainstorm_svc = self._brainstorm_service
+            if brainstorm_svc and hasattr(brainstorm_svc, 'with_user'):
+                brainstorm_svc = brainstorm_svc.with_user(user_id)
+
+            if idea_id and not title and brainstorm_svc:
                 try:
-                    idea = await self._brainstorm_service.get_by_id(idea_id)
+                    idea = await brainstorm_svc.get_by_id(idea_id)
                     if idea:
                         title = idea.title
                         description = idea.description or ""
@@ -394,19 +399,19 @@ class SpecAgent:
                 return json.dumps({"error": "Please provide a title or idea_id"})
 
             try:
-                created = await self.generate_from_idea(title, description, idea_id)
+                created = await self.generate_from_idea(title, description, idea_id, user_id=user_id)
                 return json.dumps({"success": True, "specs": created})
             except Exception:
                 logger.exception("Failed to generate specs")
                 return json.dumps({"error": "Spec generation failed"})
 
         elif function_name == "optimize_spec":
-            spec = await self._service.get_by_id(args["spec_id"])
+            spec = await service.get_by_id(args["spec_id"])
             if not spec:
                 return json.dumps({"error": "Spec not found"})
             try:
                 optimized = await self.optimize(spec)
-                await self._service.set_optimized(spec.id, optimized)
+                await service.set_optimized(spec.id, optimized)
                 return json.dumps({"success": True, "spec": {"id": spec.id, "title": spec.title, "status": "optimized"}})
             except Exception:
                 logger.exception("Failed to optimize spec %s", spec.id)

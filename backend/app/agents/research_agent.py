@@ -98,7 +98,7 @@ class ResearchAgent:
             logger.exception("Background research %s failed", entry_id)
             await self._service.set_failed(entry_id, str(e))
 
-    async def handle_function_call(self, function_name: str, arguments: str) -> str:
+    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         try:
             args = json.loads(arguments) if arguments else {}
         except json.JSONDecodeError:

@@ -193,7 +193,7 @@ async def voice_websocket(ws: WebSocket):
                 """Run a slow function call in the background."""
                 try:
                     result = await handle_voice_function_call(
-                        supervisor, fn_name, call_id, arguments
+                        supervisor, fn_name, call_id, arguments, user_id=user_id
                     )
                     output = result.get("output", "")
                     agent = result.get("agent", "Agent")
@@ -381,7 +381,7 @@ async def voice_websocket(ws: WebSocket):
                                 })
 
                                 result = await handle_voice_function_call(
-                                    _supervisor, fn_name, call_id, arguments
+                                    _supervisor, fn_name, call_id, arguments, user_id=user_id
                                 )
                                 logger.info("Function %s result: %s", fn_name, result["output"][:100])
 

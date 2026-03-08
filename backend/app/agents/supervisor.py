@@ -56,7 +56,7 @@ class SupervisorAgent:
             tools.extend(agent.tool_definitions)
         return tools
 
-    async def handle_function_call(self, function_name: str, arguments: str) -> tuple[str, str]:
+    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> tuple[str, str]:
         """Route a function call to the appropriate agent.
 
         Returns (result_json, agent_name).
@@ -88,37 +88,37 @@ class SupervisorAgent:
 
         if function_name in notes_functions:
             logger.info("Routing '%s' to Notes Agent", function_name)
-            result = await self._notes_agent.handle_function_call(function_name, arguments)
+            result = await self._notes_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Notes Agent"
 
         if function_name in brainstorm_functions and self._brainstorm_agent:
             logger.info("Routing '%s' to Brainstorm Agent", function_name)
-            result = await self._brainstorm_agent.handle_function_call(function_name, arguments)
+            result = await self._brainstorm_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Brainstorm Agent"
 
         if function_name in research_functions and self._research_agent:
             logger.info("Routing '%s' to Research Agent", function_name)
-            result = await self._research_agent.handle_function_call(function_name, arguments)
+            result = await self._research_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Research Agent"
 
         if function_name in spec_functions and self._spec_agent:
             logger.info("Routing '%s' to Spec Agent", function_name)
-            result = await self._spec_agent.handle_function_call(function_name, arguments)
+            result = await self._spec_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Spec Agent"
 
         if function_name in dev_functions and self._dev_agent:
             logger.info("Routing '%s' to Turbo Dev Agent", function_name)
-            result = await self._dev_agent.handle_function_call(function_name, arguments)
+            result = await self._dev_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Turbo Dev Agent"
 
         if function_name in skills_functions and self._skills_agent:
             logger.info("Routing '%s' to Skills Agent", function_name)
-            result = await self._skills_agent.handle_function_call(function_name, arguments)
+            result = await self._skills_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Skills Agent"
 
         if function_name in marketing_functions and self._marketing_agent:
             logger.info("Routing '%s' to Marketing Agent", function_name)
-            result = await self._marketing_agent.handle_function_call(function_name, arguments)
+            result = await self._marketing_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Marketing Agent"
 
         logger.warning("Unknown function: %s", function_name)

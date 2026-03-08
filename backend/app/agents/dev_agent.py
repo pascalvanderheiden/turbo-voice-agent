@@ -106,7 +106,7 @@ class DevAgent:
             },
         ]
 
-    async def handle_function_call(self, function_name: str, arguments: str) -> str:
+    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         """Execute a function call and return the result as a string."""
         try:
             args = json.loads(arguments) if arguments else {}

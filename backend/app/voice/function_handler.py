@@ -12,6 +12,7 @@ async def handle_voice_function_call(
     function_name: str,
     call_id: str,
     arguments: str,
+    user_id: str = "default-user",
 ) -> dict:
     """Handle a function call from Voice Live by routing through the supervisor.
 
@@ -20,7 +21,7 @@ async def handle_voice_function_call(
     logger.info("Voice function call: %s (call_id=%s)", function_name, call_id)
 
     try:
-        result, agent_name = await supervisor.handle_function_call(function_name, arguments)
+        result, agent_name = await supervisor.handle_function_call(function_name, arguments, user_id=user_id)
         return {
             "type": "function_call_output",
             "call_id": call_id,

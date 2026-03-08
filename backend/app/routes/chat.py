@@ -117,7 +117,7 @@ async def chat(req: ChatRequest, request: Request):
                 fn_args = tc.function.arguments
                 logger.info("Chat tool call: %s(%s)", fn_name, fn_args[:100])
                 try:
-                    result, agent_name = await _supervisor.handle_function_call(fn_name, fn_args)
+                    result, agent_name = await _supervisor.handle_function_call(fn_name, fn_args, user_id=user_id)
                     try:
                         parsed_result = json.loads(result)
                         if isinstance(parsed_result, dict):

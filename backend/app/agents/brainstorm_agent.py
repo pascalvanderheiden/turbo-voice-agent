@@ -180,14 +180,16 @@ class BrainstormAgent:
 
         return response.choices[0].message.content or "Refinement failed."
 
-    async def handle_function_call(self, function_name: str, arguments: str) -> str:
+    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         try:
             args = json.loads(arguments) if arguments else {}
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid arguments"})
 
+        service = self._service.with_user(user_id) if hasattr(self._service, 'with_user') else self._service
+
         if function_name == "create_idea":
-            idea = await self._service.create(
+            idea = await service.create(
                 IdeaCreate(title=args["title"], description=args.get("description", ""))
             )
             if idea:
@@ -195,7 +197,7 @@ class BrainstormAgent:
             return json.dumps({"error": "Failed to create idea"})
 
         elif function_name == "get_ideas":
-            ideas = await self._service.list()
+            ideas = await service.list()
             return json.dumps({
                 "ideas": [
                     {"id": i.id, "title": i.title, "status": i.status, "description": i.description[:100]}
@@ -204,7 +206,7 @@ class BrainstormAgent:
             })
 
         elif function_name == "get_idea":
-            idea = await self._service.get_by_id(args["idea_id"])
+            idea = await service.get_by_id(args["idea_id"])
             if idea:
                 return json.dumps({
                     "idea": {
@@ -220,22 +222,22 @@ class BrainstormAgent:
                 title=args.get("title"),
                 description=args.get("description"),
             )
-            idea = await self._service.update(args["idea_id"], update)
+            idea = await service.update(args["idea_id"], update)
             if idea:
                 return json.dumps({"success": True, "idea": {"id": idea.id, "title": idea.title}})
             return json.dumps({"error": "Idea not found"})
 
         elif function_name == "delete_idea":
-            deleted = await self._service.delete(args["idea_id"])
+            deleted = await service.delete(args["idea_id"])
             return json.dumps({"success": deleted})
 
         elif function_name == "refine_idea":
-            idea = await self._service.get_by_id(args["idea_id"])
+            idea = await service.get_by_id(args["idea_id"])
             if not idea:
                 return json.dumps({"error": "Idea not found"})
             try:
                 draft = await self.refine(idea)
-                await self._service.set_refined(idea.id, draft)
+                await service.set_refined(idea.id, draft)
                 return json.dumps({"success": True, "idea": {"id": idea.id, "title": idea.title, "status": "refined"}})
             except Exception:
                 logger.exception("Failed to refine idea %s", idea.id)
