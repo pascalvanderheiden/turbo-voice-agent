@@ -40,6 +40,7 @@ class MarketingService:
             specId=doc.get("specId"),
             status=doc.get("status", "pending"),
             videoPath=doc.get("videoPath"),
+            videoUrl=doc.get("videoUrl"),
             scriptContent=doc.get("scriptContent"),
             durationSeconds=doc.get("durationSeconds"),
             error=doc.get("error"),
