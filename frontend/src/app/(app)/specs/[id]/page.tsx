@@ -124,7 +124,7 @@ export default function SpecDetailPage() {
 
       {/* Foundation header */}
       <div>
-        <h1 className="text-2xl font-semibold gradient-brand-text">{foundation.title}</h1>
+        <h1 className="text-2xl font-semibold gradient-brand-text">{foundation.title.replace(/ — Foundation$/, "")}</h1>
         <div className="flex items-center gap-2 mt-1">
           <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-[var(--color-brand-pink)]/15 text-[var(--color-brand-pink)]">
             {t("specs.typeFoundation")}

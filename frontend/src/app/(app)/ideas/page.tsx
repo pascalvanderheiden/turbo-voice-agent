@@ -487,7 +487,7 @@ function IdeaSpecSection({
               href={`/specs/${s.id}`}
               className="block p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] hover:border-[var(--color-brand-pink)]/30 text-sm"
             >
-              <div className="font-medium">{s.title}</div>
+              <div className="font-medium">{s.title.replace(/ — Foundation$/, "")}</div>
               <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
                 {t("specs.typeFoundation")} · {s.status === "optimized" ? t("specs.statusOptimized") : s.status === "in-development" ? "In Development" : s.status === "developed" ? "Developed" : t("specs.statusDraft")}
                 {linkedSpecs.filter((f) => f.parentId === s.id).length > 0 && (

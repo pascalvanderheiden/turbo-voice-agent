@@ -75,7 +75,7 @@ export default function SpecsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <IconFileCode size={18} className="text-[var(--color-brand-pink)] flex-shrink-0" />
-                    <h3 className="font-medium text-sm truncate">{foundation.title}</h3>
+                    <h3 className="font-medium text-sm truncate">{foundation.title.replace(/ — Foundation$/, "")}</h3>
                     <span className={`inline-block px-2 py-0.5 text-xs rounded-full flex-shrink-0 ${
                       foundation.status === "optimized"
                         ? "bg-green-500/15 text-green-400"
