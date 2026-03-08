@@ -88,18 +88,29 @@ async def get_profile_photo(request: Request):
             profile = await svc.get_profile(user_id)
             if profile and profile.get("profilePhotoUrl"):
                 photo_url = profile["profilePhotoUrl"]
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(
-                            photo_url,
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        ) as resp:
-                            if resp.status == 200:
-                                photo_data = await resp.read()
-                                content_type = resp.headers.get("Content-Type", "image/jpeg")
-                                return Response(content=photo_data, media_type=content_type)
-                except Exception:
-                    logger.warning("Failed to fetch custom profile photo for user %s", user_id)
+                # Extract blob path from URL and fetch via authenticated SDK
+                storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+                if storage_account and f"{storage_account}.blob.core.windows.net/uploads/" in photo_url:
+                    try:
+                        from azure.identity.aio import DefaultAzureCredential
+                        from azure.storage.blob.aio import BlobServiceClient
+
+                        blob_path = photo_url.split(f"/uploads/", 1)[1]
+                        credential = DefaultAzureCredential()
+                        blob_service = BlobServiceClient(
+                            account_url=f"https://{storage_account}.blob.core.windows.net",
+                            credential=credential,
+                        )
+                        async with blob_service:
+                            blob_client = blob_service.get_container_client("uploads").get_blob_client(blob_path)
+                            download = await blob_client.download_blob()
+                            photo_data = await download.readall()
+                            props = await blob_client.get_blob_properties()
+                            content_type = props.content_settings.content_type or "image/jpeg"
+                        await credential.close()
+                        return Response(content=photo_data, media_type=content_type)
+                    except Exception:
+                        logger.warning("Failed to fetch custom profile photo from Blob for user %s", user_id)
 
     # Fallback to Microsoft Graph photo
     auth_header = request.headers.get("Authorization", "")

@@ -254,10 +254,12 @@ class DevAgent:
         try:
             plan = await self._call_codex(
                 f"Create a brief implementation plan for a Next.js 15 app called '{task.title}'.\n"
-                f"{'Spec:\n' + spec_content[:2000] if spec_content else 'Simple dark-themed dashboard.'}\n"
+                f"{'Spec:\n' + spec_content[:6000] if spec_content else 'Simple dark-themed dashboard.'}\n"
                 f"{skill_context}\n"
-                f"List: pages, components, mock data. Keep it under 500 words.\n",
-                max_tokens=2000,
+                f"IMPORTANT: This is a mock/prototype of the COMPLETE app. Include ALL features listed "
+                f"in the spec above. Each feature should have its own section or page in the UI.\n"
+                f"List: pages, components, mock data for each feature. Keep it under 800 words.\n",
+                max_tokens=3000,
             )
             await service.set_iteration_stage_status(task_id, 0, "plan", "completed", output=plan)
         except Exception as e:
@@ -502,11 +504,13 @@ class DevAgent:
             f"The project uses Tailwind CSS v4 (already configured via @import 'tailwindcss' in globals.css).\n"
             f"The layout already has: <body className=\"bg-[#0F0F1A] text-white antialiased min-h-screen\">\n\n"
             f"Generate 2-4 reusable React components for this app.\n"
+            f"IMPORTANT: This is a mock/prototype of the COMPLETE app. You MUST include components "
+            f"that cover ALL features described in the spec. Each feature should be represented.\n"
             f"Each component MUST use 'use client' directive and Tailwind utility classes ONLY.\n"
             f"Use vibrant colors, gradients, shadows, rounded corners, hover/transition effects.\n"
             f"Do NOT use any external component libraries. Do NOT use inline styles or CSS modules.\n"
             f"Include realistic mock data inside each component.\n\n"
-            f"{'Specification:\n' + spec_content[:3000] if spec_content else ''}\n\n"
+            f"{'Specification:\n' + spec_content[:6000] if spec_content else ''}\n\n"
             f"{'Implementation plan:\n' + plan[:1000] if plan else ''}\n\n"
             f"{skill_context}\n\n"
             f"Output format — for each component use this exact delimiter:\n"
@@ -543,7 +547,8 @@ class DevAgent:
             )
         page_prompt += (
             f"Include mock/sample data to make the page look populated and alive.\n"
-            f"{'Specification:\n' + spec_content[:2000] if spec_content else ''}\n"
+            f"IMPORTANT: The page must show ALL features from the spec — this is a complete app prototype.\n"
+            f"{'Specification:\n' + spec_content[:4000] if spec_content else ''}\n"
             f"{skill_context}\n\n"
             f"Export default function Page().\n"
             f"Output ONLY the TSX code, no markdown fences.\n"
