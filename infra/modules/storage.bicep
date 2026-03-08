@@ -46,6 +46,14 @@ resource skillsContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
   }
 }
 
+resource uploadsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobServices
+  name: 'uploads'
+  properties: {
+    publicAccess: 'Blob'
+  }
+}
+
 output name string = storageAccount.name
 output id string = storageAccount.id
 output key string = storageAccount.listKeys().keys[0].value

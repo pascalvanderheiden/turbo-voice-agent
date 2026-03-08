@@ -17,6 +17,7 @@ export function SiteHeader() {
   const [mounted, setMounted] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string } | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
@@ -31,6 +32,14 @@ export function SiteHeader() {
         setUserInfo({
           name: accounts[0].name || "",
           email: accounts[0].username || "",
+        });
+        // Fetch profile photo URL from backend profile
+        import("@/lib/api").then(({ userApi }) => {
+          userApi.getProfile().then((profile) => {
+            if (profile?.profilePhotoUrl) {
+              setPhotoUrl(profile.profilePhotoUrl);
+            }
+          }).catch(() => { /* profile not available */ });
         });
       }
     });
@@ -76,7 +85,7 @@ export function SiteHeader() {
       <div className="flex items-center gap-2">
         {/* Language selector / User menu */}
         {userInfo ? (
-          <UserMenu displayName={userInfo.name} email={userInfo.email} />
+          <UserMenu displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
         ) : (
           <button
             onClick={() => setLocale(locale === "en" ? "nl" : "en")}

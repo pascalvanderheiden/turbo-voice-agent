@@ -337,14 +337,12 @@ function SearchDialog({
             <IconWorldWww size={16} /> {t("research.webSearch")}
           </button>
           <button
-            onClick={() => setMode("deep_research")}
-            className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm border transition-colors ${
-              mode === "deep_research"
-                ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10 text-[var(--color-brand-purple)]"
-                : "border-[var(--color-border-dark)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"
-            }`}
+            disabled
+            title="Deep research is temporarily unavailable (quota limit)"
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm border transition-colors border-[var(--color-border-dark)] text-[var(--color-text-muted)] opacity-50 cursor-not-allowed"
           >
             <IconBrain size={16} /> {t("research.deepResearch")}
+            <span className="text-[10px] opacity-70">(unavailable)</span>
           </button>
         </div>
 

@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -458,20 +458,19 @@ async def delete_skill(name: str, request: Request):
 
 
 @app.get("/api/specs/{spec_id}/dev-task")
-async def get_spec_dev_task(spec_id: str):
+async def get_spec_dev_task(spec_id: str, request: Request):
     """Get the dev task linked to a spec."""
-    from app.services.memory_spec_service import InMemorySpecService
-    # Access spec service from dev routes' shared state
+    user_id = getattr(request.state, "user_id", "default-user")
     spec_svc = specs._spec_service
     if not spec_svc:
         return {"devTask": None}
-    spec = await spec_svc.get_by_id(spec_id)
+    spec = await spec_svc.with_user(user_id).get_by_id(spec_id)
     if not spec or not spec.dev_task_id:
         return {"devTask": None}
     dev_svc = dev._dev_service
     if not dev_svc:
         return {"devTask": None}
-    task = await dev_svc.get_by_id(spec.dev_task_id)
+    task = await dev_svc.with_user(user_id).get_by_id(spec.dev_task_id)
     if not task:
         return {"devTask": None}
     return {"devTask": {"id": task.id, "title": task.title, "mode": task.mode, "status": task.status}}

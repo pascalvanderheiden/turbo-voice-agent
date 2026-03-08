@@ -12,10 +12,13 @@
 - [x] 2.1 Investigate and fix pipeline stages not being triggered after task creation in production
 - [x] 2.2 Add detailed logging around background task spawning and execution
 - [x] 2.3 Fix dev task deletion endpoint error
-- [ ] 2.4 Verify fix in deployed environment with end-to-end test
+- [x] 2.4 Make create endpoint resilient — wrap iteration population and skill attachment in try/except
+- [x] 2.5 Fix frontend to separate create and trigger errors (create can succeed while trigger fails)
+- [x] 2.6 Pass mode parameter during create to backend
+- [ ] 2.7 Verify fix in deployed environment with end-to-end test
 
 ## 3. Skills Storage Fix
-- [x] 3.1 Fix userId resolution — ensure authenticated user ID is used instead of "default-user"
+- [x] 3.1 Fix userId resolution — add missing `Request` import in main.py (root cause of default-user)
 - [x] 3.2 Fix skill file storage to use Azure Blob Storage in production
 - [ ] 3.3 Verify skills appear correctly in Cosmos DB with proper userId
 - [ ] 3.4 Verify skill files are accessible on Blob Storage
@@ -30,7 +33,7 @@
 - [x] 5.2 Remove individual feature spec links from ideas view (foundation spec already links to its features)
 
 ## 6. Spec Title Display Fix
-- [x] 6.1 Update spec list to show only the spec name (without "- Foundation" or "- Feature" suffix)
+- [x] 6.1 Update spec generation to not append "— Foundation" suffix to title
 - [x] 6.2 Keep type indicator (Foundation/Feature badge) visible only in the spec detail view
 
 ## 7. User Profile Picture
@@ -38,4 +41,20 @@
 - [x] 7.2 Store profile pictures on Azure Blob Storage
 - [x] 7.3 Add photo upload UI to User Profile page (crop/preview)
 - [x] 7.4 Display profile photo in header dropdown (replacing initials when available)
-- [x] 7.5 Make profile photo available to marketing-service for video personalization
+- [x] 7.5 Fix site-header to fetch profilePhotoUrl from backend and pass to UserMenu
+- [x] 7.6 Add `uploads` container with blob-level public access in storage.bicep
+
+## 8. Infrastructure & Network Fixes
+- [x] 8.1 Add `uploads` blob container to storage.bicep with blob-level public access
+- [x] 8.2 Add deployer principal ID parameter to main.bicep for RBAC assignments
+- [x] 8.3 Add Cosmos DB Data Contributor RBAC for deployer identity
+- [x] 8.4 Add Storage Blob Data Contributor RBAC for deployer identity
+- [ ] 8.5 Set DEPLOYER_PRINCIPAL_ID env var and run `azd up` to apply infra changes
+
+## 9. Deep Research Disable
+- [x] 9.1 Disable deep research button in UI with "unavailable" indicator
+- [x] 9.2 Keep web search mode as default and only available option
+
+## 10. Spec Features Loading Fix
+- [x] 10.1 Add polling to spec detail page for features not yet generated
+- [x] 10.2 Fix get_spec_dev_task endpoint to use user-scoped services

@@ -50,6 +50,22 @@ export default function SpecDetailPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Poll for features if none loaded yet (they may be generating in background)
+  useEffect(() => {
+    if (loading || features.length > 0) return;
+    const interval = setInterval(async () => {
+      try {
+        const allSpecs = await specsApi.list();
+        const newFeatures = allSpecs.filter((s) => s.parentId === id);
+        if (newFeatures.length > 0) {
+          setFeatures(newFeatures);
+          clearInterval(interval);
+        }
+      } catch { /* ignore polling errors */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [loading, features.length, id]);
+
   const handleOptimize = async (specId: string) => {
     setOptimizing(specId);
     try {
@@ -312,9 +328,13 @@ export default function SpecDetailPage() {
           onClose={() => setShowDevDialog(false)}
           onSubmit={async (mode) => {
             try {
-              const task = await devApi.create({ title: `Dev: ${foundation.title}`, specId: id });
-              await devApi.trigger(task.id, mode);
-              toast.success("Development task created & pipeline started");
+              const task = await devApi.create({ title: `Dev: ${foundation.title}`, specId: id, mode });
+              try {
+                await devApi.trigger(task.id, mode);
+                toast.success("Development task created & pipeline started");
+              } catch {
+                toast.warning("Task created but pipeline failed to start. Try triggering manually.");
+              }
               setShowDevDialog(false);
               router.push(`/development/${task.id}`);
             } catch {

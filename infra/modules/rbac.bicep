@@ -22,6 +22,9 @@ param aiWestUsName string
 @description('AI Foundry Central US account name')
 param aiCentralUsName string
 
+@description('Principal ID of the deployer user for data access (optional)')
+param deployerPrincipalId string = ''
+
 // Built-in role definition IDs
 var cosmosDataContributor = '00000000-0000-0000-0000-000000000002' // Cosmos DB Built-in Data Contributor
 var cognitiveServicesOpenAIUser = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
@@ -155,5 +158,31 @@ resource acrFrontendRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     principalId: frontendPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPull)
     principalType: 'ServicePrincipal'
+  }
+}
+
+// ──────────────────────────────────────────────
+// Deployer — Cosmos DB Data Contributor (for debugging/admin access)
+// ──────────────────────────────────────────────
+resource deployerCosmosRbac 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = if (!empty(deployerPrincipalId)) {
+  parent: cosmosAccount
+  name: guid(cosmosAccount.id, deployerPrincipalId, cosmosDataContributor)
+  properties: {
+    principalId: deployerPrincipalId
+    roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/${cosmosDataContributor}'
+    scope: cosmosAccount.id
+  }
+}
+
+// ──────────────────────────────────────────────
+// Deployer — Storage Blob Data Contributor (for debugging/admin access)
+// ──────────────────────────────────────────────
+resource deployerStorageBlobRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
+  name: guid(storageAccount.id, deployerPrincipalId, storageBlobDataContributor)
+  scope: storageAccount
+  properties: {
+    principalId: deployerPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalType: 'User'
   }
 }

@@ -9,6 +9,7 @@ interface UserMenuProps {
   displayName: string;
   email: string;
   photoUrl?: string | null;
+  onPhotoChange?: (url: string) => void;
 }
 
 function getInitials(name: string): string {
@@ -20,7 +21,7 @@ function getInitials(name: string): string {
     .slice(0, 2);
 }
 
-export function UserMenu({ displayName, email, photoUrl }: UserMenuProps) {
+export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMenuProps) {
   const { locale, setLocale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -39,6 +40,7 @@ export function UserMenu({ displayName, email, photoUrl }: UserMenuProps) {
     try {
       const result = await userApi.uploadPhoto(file);
       setCurrentPhotoUrl(result.photoUrl);
+      onPhotoChange?.(result.photoUrl);
     } catch (err) {
       console.error("Photo upload failed:", err);
     } finally {

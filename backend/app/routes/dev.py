@@ -79,26 +79,30 @@ async def create_dev_task(data: DevTaskCreate, request: Request):
     svc = _get_service().with_user(user_id)
     task = await svc.create(data)
     # If linked to a spec, populate iterations and set bidirectional link
-    if data.spec_id and _spec_service and _dev_agent:
-        await _dev_agent._populate_iterations_from_spec(task.id, data.spec_id, data.mode, user_id=user_id)
-        await _spec_service.with_user(user_id).set_dev_task_id(data.spec_id, task.id, "in-development")
-    elif data.spec_id and _spec_service:
-        await _spec_service.with_user(user_id).set_dev_task_id(data.spec_id, task.id, "in-development")
+    if data.spec_id and _spec_service:
+        try:
+            if _dev_agent:
+                await _dev_agent._populate_iterations_from_spec(task.id, data.spec_id, data.mode, user_id=user_id)
+            await _spec_service.with_user(user_id).set_dev_task_id(data.spec_id, task.id, "in-development")
+        except Exception:
+            logger.exception("Failed to populate iterations / link spec for task %s", task.id)
     # Auto-attach skills if none were explicitly provided
     if not data.skill_ids and _skills_service:
-        content = data.title
-        if data.spec_id and _spec_service:
-            spec = await _spec_service.with_user(user_id).get_by_id(data.spec_id)
-            if spec:
-                content = f"{spec.title} {spec.content} {data.title}"
-        suggested = _skills_service.suggest_skills_for_content(content)
-        # Fallback: include all installed skills if no keyword match
-        if not suggested:
-            all_skills = _skills_service.list_installed()
-            suggested = [s["name"] for s in all_skills[:3]]
-        if suggested:
-            task = await svc.set_skill_ids(task.id, suggested)
-            logger.info("Auto-attached skills %s to task %s", suggested, task.id)
+        try:
+            content = data.title
+            if data.spec_id and _spec_service:
+                spec = await _spec_service.with_user(user_id).get_by_id(data.spec_id)
+                if spec:
+                    content = f"{spec.title} {spec.content} {data.title}"
+            suggested = _skills_service.suggest_skills_for_content(content)
+            if not suggested:
+                all_skills = _skills_service.list_installed()
+                suggested = [s["name"] for s in all_skills[:3]]
+            if suggested:
+                task = await svc.set_skill_ids(task.id, suggested)
+                logger.info("Auto-attached skills %s to task %s", suggested, task.id)
+        except Exception:
+            logger.exception("Failed to auto-attach skills for task %s", task.id)
     # Re-read task to include iterations populated above
     task = await svc.get_by_id(task.id)
     return task

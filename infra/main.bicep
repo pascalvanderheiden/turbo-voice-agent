@@ -21,6 +21,9 @@ param entraClientId string = ''
 @description('Custom domain name for the frontend (e.g. voice.turboagent.nl)')
 param customDomainName string = ''
 
+@description('Principal ID of the deployer user for RBAC assignments (Cosmos + Storage data access)')
+param deployerPrincipalId string = ''
+
 // ──────────────────────────────────────────────
 // Resource Group
 // ──────────────────────────────────────────────
@@ -169,6 +172,7 @@ module rbac 'modules/rbac.bicep' = {
     aiEastUs2Name: aiEastUs2.outputs.name
     aiWestUsName: aiWestUs.outputs.name
     aiCentralUsName: aiCentralUs.outputs.name
+    deployerPrincipalId: deployerPrincipalId
   }
 }
 

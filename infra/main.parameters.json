@@ -7,6 +7,7 @@
     "cosmosDbThroughput": { "value": 400 },
     "entraTenantId": { "value": "${ENTRA_TENANT_ID}" },
     "entraClientId": { "value": "${ENTRA_CLIENT_ID}" },
-    "customDomainName": { "value": "${CUSTOM_DOMAIN_NAME}" }
+    "customDomainName": { "value": "${CUSTOM_DOMAIN_NAME}" },
+    "deployerPrincipalId": { "value": "${DEPLOYER_PRINCIPAL_ID}" }
   }
 }
