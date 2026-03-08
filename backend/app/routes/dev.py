@@ -154,11 +154,17 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
 
     if _pipeline_fn:
         async def _safe_pipeline(tid: str, uid: str):
-            """Wrapper to ensure pipeline errors are caught and logged."""
+            """Wrapper to ensure pipeline errors are caught and status is finalized."""
             try:
                 logger.info("Pipeline background task starting for %s", tid)
                 await _pipeline_fn(tid, user_id=uid)
                 logger.info("Pipeline background task completed for %s", tid)
+                # Ensure status is finalized — pipeline may have already set it
+                svc = _get_service().with_user(uid)
+                final_task = await svc.get_by_id(tid)
+                if final_task and final_task.status == "running":
+                    logger.warning("Pipeline returned but task %s still 'running', setting to 'completed'", tid)
+                    await svc.set_status(tid, "completed")
             except Exception:
                 logger.exception("Pipeline background task FAILED for %s", tid)
                 try:

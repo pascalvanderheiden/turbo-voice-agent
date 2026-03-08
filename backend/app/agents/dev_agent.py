@@ -229,9 +229,24 @@ class DevAgent:
                 )
                 if all_done:
                     await service.set_status(task_id, "completed")
+                    logger.info("Pipeline COMPLETED for task %s (all stages done)", task_id)
                     # Update linked spec status
                     if task.spec_id and spec_service:
                         await spec_service.set_dev_task_id(task.spec_id, task_id, "developed")
+                else:
+                    # If pipeline function returned without exception, mark completed anyway
+                    # (some stages may have been individually set to completed already)
+                    failed_stages = [
+                        f"{s.name}={s.status}"
+                        for it in task.iterations
+                        for s in it.stages
+                        if s.status != "completed"
+                    ]
+                    if not any(s.status == "failed" for it in task.iterations for s in it.stages):
+                        await service.set_status(task_id, "completed")
+                        logger.info("Pipeline COMPLETED for task %s (non-failed stages: %s)", task_id, failed_stages)
+                    else:
+                        logger.warning("Pipeline finished with non-completed stages for %s: %s", task_id, failed_stages)
 
         except Exception as e:
             logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
