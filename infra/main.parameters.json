@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus2" },
+    "resourceGroupName": { "value": "rg-turbo-voice-agent" },
+    "cosmosDbThroughput": { "value": 400 },
+    "entraTenantId": { "value": "${ENTRA_TENANT_ID}" },
+    "entraClientId": { "value": "${ENTRA_CLIENT_ID}" },
+    "customDomainName": { "value": "${CUSTOM_DOMAIN_NAME}" }
+  }
+}

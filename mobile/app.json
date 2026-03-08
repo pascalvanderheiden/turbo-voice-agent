@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Turbo Voice Agent",
+    "slug": "turbo-voice-agent",
+    "version": "0.1.0",
+    "scheme": "turbovoice",
+    "newArchEnabled": true,
+    "platforms": [
+      "ios"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.turboagent.voiceagent",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Turbo Voice Agent needs microphone access for voice conversations"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

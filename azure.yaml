@@ -1,0 +1,41 @@
+name: turbo-voice-agent
+metadata:
+  template: turbo-voice-agent
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+services:
+  backend:
+    host: containerapp
+    project: ./backend
+    language: python
+    docker:
+      path: ./Dockerfile
+      context: .
+      remoteBuild: true
+
+  frontend:
+    host: containerapp
+    project: ./frontend
+    language: js
+    docker:
+      path: ./Dockerfile
+      context: .
+      remoteBuild: true
+
+hooks:
+  preprovision:
+    shell: sh
+    run: bash infra/scripts/setup-entra-app.sh
+
+  postprovision:
+    shell: sh
+    run: |
+      echo "Provisioning complete."
+      echo "Backend URL: ${BACKEND_URL}"
+      echo "Frontend URL: ${FRONTEND_URL}"
+      # Re-run Entra setup to add the Frontend URL as a redirect URI
+      FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh

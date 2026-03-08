@@ -1,0 +1,72 @@
+"""Development Task Pydantic models."""
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class DevArtifact(BaseModel):
+    """An artifact produced during pipeline execution."""
+
+    name: str
+    type: str  # screenshot | archive
+    data: str | None = None  # base64 for screenshots, path for archives
+    iteration_index: int | None = Field(None, alias="iterationIndex")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class DevStage(BaseModel):
+    """A single pipeline stage."""
+
+    name: str  # plan | build | run | test
+    status: str = "pending"  # pending | running | completed | failed
+    output: str | None = None
+    error: str | None = None
+    started_at: str | None = Field(None, alias="startedAt")
+    completed_at: str | None = Field(None, alias="completedAt")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class DevIteration(BaseModel):
+    """A single development iteration (foundation or feature)."""
+
+    iteration_index: int = Field(alias="iterationIndex")
+    label: str  # e.g. "Foundation: Dark Cyberpunk" or "Feature: Combat System"
+    spec_part_id: str | None = Field(None, alias="specPartId")
+    stages: list[DevStage] = Field(default_factory=list)
+    workspace_path: str | None = Field(None, alias="workspacePath")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class DevTaskCreate(BaseModel):
+    """Request body for creating a development task."""
+
+    title: str = Field(..., min_length=1)
+    spec_id: str | None = Field(None, alias="specId")
+    mode: str = "mock"  # mock | sequence
+    skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class DevTask(BaseModel):
+    """API response model for a development task."""
+
+    id: str
+    title: str
+    spec_id: str | None = Field(None, alias="specId")
+    mode: str = "mock"  # mock | sequence
+    status: str = "pending"  # pending | running | completed | failed
+    skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
+    current_iteration: int = Field(0, alias="currentIteration")
+    iterations: list[DevIteration] = Field(default_factory=list)
+    # Legacy flat stages for backward compat (populated from iterations[0] for mock)
+    stages: list[DevStage] = Field(default_factory=list)
+    artifacts: list[DevArtifact] = Field(default_factory=list)
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}

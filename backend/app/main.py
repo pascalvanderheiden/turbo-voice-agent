@@ -1,0 +1,439 @@
+"""FastAPI application entrypoint."""
+
+import logging
+import os
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from app.agents.brainstorm_agent import BrainstormAgent
+from app.agents.dev_agent import DevAgent
+from app.agents.marketing_agent import MarketingAgent
+from app.agents.notes_agent import NotesAgent
+from app.agents.research_agent import ResearchAgent
+from app.agents.skills_agent import SkillsAgent
+from app.agents.spec_agent import SpecAgent
+from app.agents.supervisor import SupervisorAgent
+from app.db.cosmos import close_cosmos_client, get_cosmos_client
+from app.db.init import ensure_database_and_containers
+from app.routes import chat, dev, ideas, marketing, notes, research, specs, upload, voice_ws
+from app.services.memory_brainstorm_service import InMemoryBrainstormService
+from app.services.memory_marketing_service import InMemoryMarketingService
+from app.services.memory_research_service import InMemoryResearchService
+from app.services.memory_spec_service import InMemorySpecService
+from app.services.dev_service import InMemoryDevService
+from app.services.notes_service import NotesService
+from app.services.brainstorm_service import BrainstormService
+from app.services.research_service import ResearchService
+from app.services.spec_service import SpecService
+from app.services.cosmos_dev_service import DevService
+from app.services.cosmos_marketing_service import MarketingService
+from app.services.cosmos_skills_service import CosmosSkillsService
+from app.services.blob_skills_storage import BlobSkillsStorage
+from app.services.research_client import run_deep_research, run_web_search
+from app.middleware.auth_middleware import EntraAuthMiddleware
+from app.routes.user import router as user_router
+from app.services.skills_service import SkillsService
+from app.services.user_profile_service import UserProfileService
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: init Cosmos DB and agents. Shutdown: close client."""
+    logger.info("Starting Turbo Voice Agent backend...")
+
+    # Initialize Cosmos DB
+    notes_service = None
+    brainstorm_service = None
+    research_service = None
+    spec_service = None
+    dev_service = None
+    marketing_service = None
+    blob_skills = None
+    try:
+        client = await get_cosmos_client()
+        await ensure_database_and_containers(client)
+        notes_service = NotesService(client)
+        brainstorm_service = BrainstormService(client)
+        research_service = ResearchService(client)
+        spec_service = SpecService(client)
+        dev_service = DevService(client)
+        marketing_service = MarketingService(client)
+        logger.info("Cosmos DB connected — using persistent storage.")
+    except Exception:
+        logger.warning("Cosmos DB unavailable — using in-memory storage.")
+        client = None
+
+    # Initialize Blob-backed skills service when storage account is configured
+    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+    if client and storage_account:
+        try:
+            blob_skills = BlobSkillsStorage(storage_account)
+            skills_service = CosmosSkillsService(client, blob_skills)
+            await skills_service.sync_from_blob()
+            logger.info("Cosmos + Blob skills service initialized.")
+        except Exception:
+            logger.exception("Failed to init Blob skills — falling back to filesystem.")
+            blob_skills = None
+            skills_service = SkillsService()
+    else:
+        skills_service = SkillsService()
+        logger.info("Filesystem skills service initialized.")
+
+    # User profile service
+    app.state.user_profile_service = None
+    if client:
+        try:
+            db = client.get_database_client(os.environ.get("COSMOS_DATABASE", "turbovoice"))
+            profiles_container = db.get_container_client("profiles")
+            app.state.user_profile_service = UserProfileService(profiles_container)
+            logger.info("User profile service initialized")
+        except Exception as e:
+            logger.warning("Failed to init user profile service: %s", e)
+
+    # Fallback to in-memory if Cosmos isn't available
+    if notes_service is None:
+        from app.services.memory_notes_service import InMemoryNotesService
+
+        notes_service = InMemoryNotesService()
+        logger.info("In-memory notes service initialized.")
+
+    if brainstorm_service is None:
+        brainstorm_service = InMemoryBrainstormService()
+        logger.info("In-memory brainstorm service initialized.")
+
+    if research_service is None:
+        research_service = InMemoryResearchService()
+        logger.info("In-memory research service initialized.")
+
+    if spec_service is None:
+        spec_service = InMemorySpecService()
+        logger.info("In-memory spec service initialized.")
+
+    if dev_service is None:
+        dev_service = InMemoryDevService()
+        logger.info("In-memory dev service initialized.")
+
+    if marketing_service is None:
+        marketing_service = InMemoryMarketingService()
+        logger.info("In-memory marketing service initialized.")
+
+    # Initialize agents
+    notes_agent = NotesAgent(notes_service)
+    brainstorm_agent = BrainstormAgent(brainstorm_service)
+    research_agent = ResearchAgent(research_service)
+    spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
+    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)
+    skills_agent = SkillsAgent(skills_service)
+    marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service)
+    supervisor = SupervisorAgent(notes_agent, brainstorm_agent, research_agent, spec_agent, dev_agent, skills_agent, marketing_agent=marketing_agent)
+
+    notes.set_notes_service(notes_service)
+    ideas.set_brainstorm_service(brainstorm_service, refine_fn=brainstorm_agent.refine)
+    ideas.set_idea_research_service(research_service)
+    research.set_research_service(research_service, run_web_search, run_deep_research)
+    specs.set_spec_service(
+        spec_service,
+        optimize_fn=spec_agent.optimize,
+        generate_fn=spec_agent.generate_from_idea,
+        brainstorm_service=brainstorm_service,
+    )
+    voice_ws.set_supervisor(supervisor)
+    chat.set_supervisor(supervisor)
+    dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, spec_service=spec_service, dev_agent=dev_agent)
+    marketing.set_marketing_service(marketing_service, agent=marketing_agent)
+    global _skills_service
+    _skills_service = skills_service
+    logger.info("Services and agents initialized.")
+
+    yield
+
+    # Shutdown
+    if blob_skills:
+        await blob_skills.close()
+    await close_cosmos_client()
+    logger.info("Backend shut down.")
+
+
+app = FastAPI(
+    title="Turbo Voice Agent",
+    version="0.4.0",
+    lifespan=lifespan,
+)
+
+# Auth middleware (before CORS)
+app.add_middleware(EntraAuthMiddleware)
+
+# CORS for authenticated requests
+_allowed_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:8081"
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _allowed_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Static file serving for uploads
+app.mount("/uploads", StaticFiles(directory=str(upload.UPLOAD_DIR)), name="uploads")
+
+# Static file serving for mobile assets
+from pathlib import Path
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+# Register routes
+app.include_router(notes.router)
+app.include_router(ideas.router)
+app.include_router(research.router)
+app.include_router(specs.router)
+app.include_router(dev.router)
+app.include_router(marketing.router)
+app.include_router(upload.router)
+app.include_router(voice_ws.router)
+app.include_router(chat.router)
+app.include_router(user_router)
+
+
+@app.get("/install-cert")
+async def install_cert():
+    """Serve the self-signed cert as DER for iOS trust installation."""
+    from fastapi.responses import FileResponse
+    cert_path = Path(__file__).parent / "static" / "turbo-voice.der"
+    if cert_path.exists():
+        return FileResponse(cert_path, media_type="application/x-x509-ca-cert", filename="turbo-voice.cer")
+    return {"error": "cert not found"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/agents/status")
+async def agent_status():
+    """Return agent topology and live usage stats."""
+    return {
+        "agents": [
+            {
+                "id": "voice",
+                "name": "Voice Live",
+                "type": "gateway",
+                "model": "gpt-realtime",
+                "transcriptionModel": "gpt-4o-transcribe",
+                "status": "online",
+            },
+            {
+                "id": "chat",
+                "name": "Chat",
+                "type": "gateway",
+                "model": "gpt-5.2",
+                "status": "online",
+            },
+            {
+                "id": "supervisor",
+                "name": "Supervisor",
+                "type": "orchestrator",
+                "status": "online",
+            },
+            {
+                "id": "notes",
+                "name": "Notes Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_note", "get_notes", "get_note", "update_note", "delete_note"],
+            },
+            {
+                "id": "brainstorm",
+                "name": "Brainstorm Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_idea", "get_ideas", "get_idea", "update_idea", "delete_idea", "refine_idea"],
+            },
+            {
+                "id": "research",
+                "name": "Research Agent",
+                "type": "specialist",
+                "model": "gpt-4.1 / o3-deep-research",
+                "status": "online",
+                "tools": ["web_search", "deep_research", "get_research_list", "get_research", "delete_research"],
+            },
+            {
+                "id": "spec",
+                "name": "Spec Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_spec", "get_specs", "get_spec", "update_spec", "delete_spec", "generate_spec", "optimize_spec"],
+            },
+            {
+                "id": "dev",
+                "name": "Turbo Dev Agent",
+                "type": "specialist",
+                "model": "gpt-5.3-codex (Copilot SDK BYOK)",
+                "status": "online",
+                "tools": ["create_dev_task", "get_dev_tasks", "get_dev_task", "delete_dev_task", "trigger_dev_pipeline"],
+                "mcpServers": ["playwright"],
+            },
+            {
+                "id": "skills",
+                "name": "Skills Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["install_skill", "uninstall_skill", "search_skills", "list_skills"],
+            },
+            {
+                "id": "marketing",
+                "name": "Marketing Agent",
+                "type": "specialist",
+                "model": "sora-2 (Azure AI Foundry, East US 2)",
+                "scriptModel": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_marketing_video", "get_marketing_videos", "get_marketing_video", "delete_marketing_video", "trigger_video_generation"],
+            },
+        ],
+        "edges": [
+            {"from": "voice", "to": "supervisor"},
+            {"from": "chat", "to": "supervisor"},
+            {"from": "supervisor", "to": "notes"},
+            {"from": "supervisor", "to": "brainstorm"},
+            {"from": "supervisor", "to": "research"},
+            {"from": "supervisor", "to": "spec"},
+            {"from": "supervisor", "to": "dev"},
+            {"from": "supervisor", "to": "skills"},
+            {"from": "supervisor", "to": "marketing"},
+        ],
+    }
+
+
+_skills_service: SkillsService | None = None
+
+
+@app.get("/api/agents/skills")
+async def list_installed_skills(request: Request):
+    """List installed skills with rich metadata via SkillsService."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _skills_service or SkillsService()
+    if hasattr(svc, "with_user"):
+        svc = svc.with_user(user_id)
+    # Prefer Cosmos DB listing (user-scoped) over filesystem
+    if hasattr(svc, "list_from_cosmos"):
+        skills = await svc.list_from_cosmos()
+        return {"skills": skills}
+    return {"skills": svc.list_installed()}
+
+
+@app.get("/api/agents/skills/search")
+async def search_marketplace_skills(q: str = ""):
+    """Proxy to `npx skills find` — avoids CORS issues with skills.sh."""
+    svc = _skills_service or SkillsService()
+    results = await svc.search_marketplace(q)
+    return {"results": results}
+
+
+class SkillInstallRequest(BaseModel):
+    repo: str
+    skillName: str
+
+
+class SkillLocalInstallRequest(BaseModel):
+    sourcePath: str
+    name: str
+
+
+@app.post("/api/agents/skills/install")
+async def install_marketplace_skill(body: SkillInstallRequest, request: Request):
+    """Install a skill from skills.sh marketplace via npx."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _skills_service or SkillsService()
+    if hasattr(svc, "with_user"):
+        svc = svc.with_user(user_id)
+    result = await svc.install_from_marketplace(body.repo, body.skillName)
+    return result
+
+
+@app.post("/api/agents/skills/install-local")
+async def install_local_skill(body: SkillLocalInstallRequest, request: Request):
+    """Install a skill from a local directory path."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _skills_service or SkillsService()
+    if hasattr(svc, "with_user"):
+        svc = svc.with_user(user_id)
+    result = svc.install_from_local(body.sourcePath, body.name)
+    if isinstance(svc, CosmosSkillsService) and result.get("status") == "installed":
+        await svc.persist_skill(body.name)
+    return result
+
+
+@app.post("/api/agents/skills/upload-local")
+async def upload_local_skill(request: Request, name: str = Form(...), files: list[UploadFile] = File(...)):
+    """Install a skill from uploaded files (browser folder picker)."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _skills_service or SkillsService()
+    if hasattr(svc, "with_user"):
+        svc = svc.with_user(user_id)
+    file_map: dict[str, bytes] = {}
+    for f in files:
+        rel_path = f.filename or "unknown"
+        parts = rel_path.replace("\\", "/").split("/")
+        if len(parts) > 1:
+            rel_path = "/".join(parts[1:])
+        content = await f.read()
+        file_map[rel_path] = content
+    result = svc.install_from_upload(name, file_map)
+    if isinstance(svc, CosmosSkillsService) and result.get("status") == "installed":
+        await svc.persist_skill(name)
+    return result
+
+
+@app.delete("/api/agents/skills/{name}")
+async def delete_skill(name: str, request: Request):
+    """Uninstall a skill by name."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _skills_service or SkillsService()
+    if hasattr(svc, "with_user"):
+        svc = svc.with_user(user_id)
+    result = svc.uninstall(name)
+    if not result.get("success"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=result.get("error", "Skill not found"))
+    if isinstance(svc, CosmosSkillsService):
+        await svc.remove_skill_data(name)
+    return result
+
+
+@app.get("/api/specs/{spec_id}/dev-task")
+async def get_spec_dev_task(spec_id: str):
+    """Get the dev task linked to a spec."""
+    from app.services.memory_spec_service import InMemorySpecService
+    # Access spec service from dev routes' shared state
+    spec_svc = specs._spec_service
+    if not spec_svc:
+        return {"devTask": None}
+    spec = await spec_svc.get_by_id(spec_id)
+    if not spec or not spec.dev_task_id:
+        return {"devTask": None}
+    dev_svc = dev._dev_service
+    if not dev_svc:
+        return {"devTask": None}
+    task = await dev_svc.get_by_id(spec.dev_task_id)
+    if not task:
+        return {"devTask": None}
+    return {"devTask": {"id": task.id, "title": task.title, "mode": task.mode, "status": task.status}}

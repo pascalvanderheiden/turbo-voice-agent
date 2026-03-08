@@ -1,0 +1,60 @@
+"""Cosmos DB-backed user profile service."""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any
+
+from azure.cosmos.aio import ContainerProxy
+
+logger = logging.getLogger(__name__)
+
+
+class UserProfileService:
+    """Manage user profiles in Cosmos DB."""
+
+    def __init__(self, container: ContainerProxy):
+        self._container = container
+
+    async def upsert_on_login(self, user_id: str, display_name: str, email: str) -> dict[str, Any]:
+        """Create or update profile on login. Returns the profile."""
+        now = datetime.utcnow().isoformat()
+        # Try to get existing profile
+        try:
+            existing = await self._container.read_item(item=user_id, partition_key=user_id)
+            # Update last login and basic info
+            existing["displayName"] = display_name
+            existing["email"] = email
+            existing["lastLoginAt"] = now
+            await self._container.upsert_item(existing)
+            return existing
+        except Exception:
+            # Create new profile
+            profile = {
+                "id": user_id,
+                "userId": user_id,
+                "displayName": display_name,
+                "email": email,
+                "locale": "en",
+                "avatarUrl": None,
+                "lastLoginAt": now,
+            }
+            await self._container.upsert_item(profile)
+            return profile
+
+    async def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Get user profile by ID."""
+        try:
+            return await self._container.read_item(item=user_id, partition_key=user_id)
+        except Exception:
+            return None
+
+    async def update_locale(self, user_id: str, locale: str) -> dict[str, Any] | None:
+        """Update the user's locale preference."""
+        try:
+            profile = await self._container.read_item(item=user_id, partition_key=user_id)
+            profile["locale"] = locale
+            await self._container.upsert_item(profile)
+            return profile
+        except Exception:
+            return None
