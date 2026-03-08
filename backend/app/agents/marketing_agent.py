@@ -135,6 +135,10 @@ class MarketingAgent:
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid arguments"})
 
+        # Scope services to the authenticated user
+        service = self._service.with_user(user_id) if user_id else self._service
+        dev_svc = self._dev_service.with_user(user_id) if user_id and self._dev_service and hasattr(self._dev_service, 'with_user') else self._dev_service
+
         if function_name == "create_marketing_video":
             from app.models.marketing import MarketingVideoCreate
             title = args.get("title", "Promo Video")
@@ -143,20 +147,20 @@ class MarketingAgent:
                 return json.dumps({"error": "dev_task_id is required"})
 
             # Verify dev task exists
-            if self._dev_service:
-                task = await self._dev_service.get_by_id(dev_task_id)
+            if dev_svc:
+                task = await dev_svc.get_by_id(dev_task_id)
                 if not task:
                     return json.dumps({"error": f"Dev task {dev_task_id} not found"})
 
-            video = await self._service.create(MarketingVideoCreate(
+            video = await service.create(MarketingVideoCreate(
                 title=title, devTaskId=dev_task_id,
             ))
 
             # Set specId from dev task if available
-            if self._dev_service:
-                task = await self._dev_service.get_by_id(dev_task_id)
+            if dev_svc:
+                task = await dev_svc.get_by_id(dev_task_id)
                 if task and task.spec_id:
-                    await self._service.set_status(video.id, "pending", spec_id=task.spec_id)
+                    await service.set_status(video.id, "pending", spec_id=task.spec_id)
 
             return json.dumps({
                 "success": True,
@@ -164,7 +168,7 @@ class MarketingAgent:
             })
 
         elif function_name == "get_marketing_videos":
-            videos = await self._service.list()
+            videos = await service.list()
             return json.dumps({
                 "videos": [
                     {"id": v.id, "title": v.title, "status": v.status, "devTaskId": v.dev_task_id}
@@ -173,7 +177,7 @@ class MarketingAgent:
             })
 
         elif function_name == "get_marketing_video":
-            video = await self._service.get_by_id(args.get("video_id", ""))
+            video = await service.get_by_id(args.get("video_id", ""))
             if not video:
                 return json.dumps({"error": "Video not found"})
             return json.dumps({
@@ -186,47 +190,52 @@ class MarketingAgent:
             })
 
         elif function_name == "delete_marketing_video":
-            ok = await self._service.delete(args.get("video_id", ""))
+            ok = await service.delete(args.get("video_id", ""))
             return json.dumps({"success": ok})
 
         elif function_name == "trigger_video_generation":
             video_id = args.get("video_id", "")
-            video = await self._service.get_by_id(video_id)
+            video = await service.get_by_id(video_id)
             if not video:
                 return json.dumps({"error": "Video not found"})
             if video.status in ("generating", "scripting", "composing"):
                 return json.dumps({"error": "Video generation already in progress"})
-            asyncio.create_task(self.run_pipeline(video_id))
+            asyncio.create_task(self.run_pipeline(video_id, user_id=user_id))
             return json.dumps({"success": True, "message": "Video generation started"})
 
         return json.dumps({"error": f"Unknown function: {function_name}"})
 
     # ── Pipeline ──────────────────────────────────────────────────────
 
-    async def run_pipeline(self, video_id: str) -> None:
+    async def run_pipeline(self, video_id: str, user_id: str = "") -> None:
         """Full pipeline: gather → script → generate → store."""
+        # Scope services to the correct user so Cosmos partition keys match
+        service = self._service.with_user(user_id) if user_id else self._service
+        dev_svc = self._dev_service.with_user(user_id) if user_id and self._dev_service and hasattr(self._dev_service, 'with_user') else self._dev_service
+        spec_svc = self._spec_service.with_user(user_id) if user_id and self._spec_service and hasattr(self._spec_service, 'with_user') else self._spec_service
         try:
             # Gather materials
-            video = await self._service.get_by_id(video_id)
+            video = await service.get_by_id(video_id)
             if not video:
+                logger.error("Marketing pipeline: video %s not found (user_id=%s)", video_id, user_id)
                 return
 
-            screenshots, spec_content = await self._gather_materials(video)
+            screenshots, spec_content = await self._gather_materials_scoped(video, dev_svc, spec_svc)
             if not screenshots:
-                await self._service.set_status(video_id, "failed", error="No screenshots found in linked dev task")
+                await service.set_status(video_id, "failed", error="No screenshots found in linked dev task")
                 return
 
             # Clear previous error on new run
-            await self._service.set_status(video_id, "scripting", error=None)
+            await service.set_status(video_id, "scripting", error=None)
             script = await self._generate_script(video.title, spec_content, screenshots)
-            await self._service.set_status(video_id, "scripting", script_content=script)
+            await service.set_status(video_id, "scripting", script_content=script)
 
             # Generate video (multi-segment + ffmpeg stitch)
-            await self._service.set_status(video_id, "generating")
+            await service.set_status(video_id, "generating")
             video_path, duration = await self._generate_video(video_id, script, screenshots)
 
             # Complete
-            await self._service.set_status(
+            await service.set_status(
                 video_id, "completed",
                 video_path=str(video_path),
                 duration_seconds=duration,
@@ -236,15 +245,22 @@ class MarketingAgent:
 
         except Exception as e:
             logger.exception("Marketing pipeline failed for %s", video_id)
-            await self._service.set_status(video_id, "failed", error=str(e))
+            try:
+                await service.set_status(video_id, "failed", error=str(e))
+            except Exception:
+                logger.exception("Failed to set error status for video %s", video_id)
 
     async def _gather_materials(self, video: MarketingVideo) -> tuple[list[tuple[str, bytes]], str]:
-        """Gather screenshots from dev task and spec content."""
+        """Gather screenshots from dev task and spec content (unscoped)."""
+        return await self._gather_materials_scoped(video, self._dev_service, self._spec_service)
+
+    async def _gather_materials_scoped(self, video: MarketingVideo, dev_svc, spec_svc) -> tuple[list[tuple[str, bytes]], str]:
+        """Gather screenshots from dev task and spec content using scoped services."""
         screenshots: list[tuple[str, bytes]] = []
         spec_content = ""
 
-        if video.dev_task_id and self._dev_service:
-            task = await self._dev_service.get_by_id(video.dev_task_id)
+        if video.dev_task_id and dev_svc:
+            task = await dev_svc.get_by_id(video.dev_task_id)
             if task:
                 for artifact in task.artifacts:
                     if artifact.type == "screenshot" and artifact.data:
@@ -254,15 +270,19 @@ class MarketingAgent:
                         except Exception:
                             pass
                 # Get spec content if available
-                if task.spec_id and self._spec_service:
-                    spec = await self._spec_service.get_by_id(task.spec_id)
+                if task.spec_id and spec_svc:
+                    spec = await spec_svc.get_by_id(task.spec_id)
                     if spec:
                         spec_content = f"# {spec.title}\n\n{spec.content}"
-                        # Also get feature specs
-                        features = await self._spec_service.get_features_for_foundation(task.spec_id)
+                        features = await spec_svc.get_features_for_foundation(task.spec_id)
                         for f in features:
                             spec_content += f"\n\n## Feature: {f.title}\n\n{f.content}"
+            else:
+                logger.warning("Dev task %s not found for video %s", video.dev_task_id, video.id)
+        else:
+            logger.warning("No dev_task_id or dev_service for video %s", video.id)
 
+        logger.info("Gathered %d screenshots for video %s", len(screenshots), video.id)
         return screenshots, spec_content
 
     async def _generate_script(self, title: str, spec_content: str, screenshots: list[tuple[str, bytes]]) -> str:

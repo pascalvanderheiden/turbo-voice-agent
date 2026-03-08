@@ -50,7 +50,7 @@ async def create_video(data: MarketingVideoCreate, request: Request):
     video = await _get_service().with_user(user_id).create(data)
     # Auto-trigger the generation pipeline
     if _marketing_agent is not None:
-        asyncio.create_task(_marketing_agent.run_pipeline(video.id))
+        asyncio.create_task(_marketing_agent.run_pipeline(video.id, user_id=user_id))
         logger.info("Auto-triggered pipeline for new marketing video %s", video.id)
     return video
 
@@ -75,7 +75,7 @@ async def trigger_video(video_id: str, request: Request):
         raise HTTPException(status_code=503, detail="Marketing agent unavailable")
     # Reset to pending first so pipeline starts clean
     await service.set_status(video_id, "pending", error=None)
-    asyncio.create_task(_marketing_agent.run_pipeline(video_id))
+    asyncio.create_task(_marketing_agent.run_pipeline(video_id, user_id=user_id))
     return {"success": True, "message": "Video generation started"}
 
 
