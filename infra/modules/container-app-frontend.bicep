@@ -16,6 +16,9 @@ param backendFqdn string
 @description('Custom domain name (e.g. voice.turboagent.nl). Empty = no custom domain.')
 param customDomainName string = ''
 
+@description('Existing managed certificate name to reuse. If empty, a new certificate is created.')
+param existingCertName string = ''
+
 @description('Entra ID tenant ID')
 param entraTenantId string = ''
 
@@ -28,7 +31,7 @@ resource managedEnv 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
 }
 
 // Managed TLS certificate for custom domain (requires DNS CNAME + TXT records to be in place)
-resource managedCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (customDomainName != '') {
+resource managedCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (customDomainName != '' && existingCertName == '') {
   parent: managedEnv
   name: 'cert-${replace(customDomainName, '.', '-')}'
   location: location
@@ -37,6 +40,14 @@ resource managedCert 'Microsoft.App/managedEnvironments/managedCertificates@2024
     domainControlValidation: 'CNAME'
   }
 }
+
+// Reference an existing managed certificate when one already exists
+resource existingCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' existing = if (customDomainName != '' && existingCertName != '') {
+  parent: managedEnv
+  name: existingCertName
+}
+
+var certId = customDomainName != '' ? (existingCertName != '' ? existingCert.id : managedCert.id) : ''
 
 resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
@@ -58,7 +69,7 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
         customDomains: customDomainName != '' ? [
           {
             name: customDomainName
-            certificateId: managedCert.id
+            certificateId: certId
             bindingType: 'SniEnabled'
           }
         ] : []
