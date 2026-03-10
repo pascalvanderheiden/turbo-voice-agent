@@ -3,24 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconMicrophone, IconSun, IconMoon, IconLanguage, IconBell } from "@tabler/icons-react";
+import { IconMicrophone, IconBell } from "@tabler/icons-react";
 import { UserMenu } from "./user-menu";
-import { useTheme } from "next-themes";
-import { useI18n, type Locale } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
 
 export function SiteHeader() {
   const pathname = usePathname();
-  const { theme, setTheme } = useTheme();
-  const { locale, setLocale, t } = useI18n();
+  const { locale, t } = useI18n();
   const { notifications, unreadCount, markAllRead, clearAll } = useNotifications();
-  const [mounted, setMounted] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string } | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
@@ -81,18 +76,9 @@ export function SiteHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-2">
-        {/* Language selector / User menu */}
-        {userInfo ? (
+        {/* User menu */}
+        {userInfo && (
           <UserMenu displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
-        ) : (
-          <button
-            onClick={() => setLocale(locale === "en" ? "nl" : "en")}
-            className="flex items-center gap-1.5 px-2.5 h-9 rounded-full text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-            title={locale === "en" ? "Switch to Dutch" : "Schakel naar Engels"}
-          >
-            <IconLanguage size={16} stroke={1.5} />
-            <span className="uppercase">{locale}</span>
-          </button>
         )}
 
         {/* Notification bell */}
@@ -154,17 +140,6 @@ export function SiteHeader() {
         >
           <IconMicrophone size={18} stroke={1.5} />
         </Link>
-        <button
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          className="flex items-center justify-center w-9 h-9 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-          title={t("theme.toggle")}
-        >
-          {mounted ? (
-            theme === "dark" ? <IconSun size={18} /> : <IconMoon size={18} />
-          ) : (
-            <IconSun size={18} />
-          )}
-        </button>
       </div>
     </header>
   );

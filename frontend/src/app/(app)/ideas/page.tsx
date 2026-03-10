@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { ideasApi, researchApi, specsApi, type Idea, type Research, type Spec } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { ImageUpload } from "@/components/ui/image-upload";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { MobileBottomSheet } from "@/components/ui/mobile-bottom-sheet";
 
 export default function IdeasPage() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -15,10 +17,12 @@ export default function IdeasPage() {
   const [deleteIdea, setDeleteIdea] = useState<Idea | null>(null);
   const [viewIdea, setViewIdea] = useState<Idea | null>(null);
   const [refining, setRefining] = useState<string | null>(null);
+  const [streamingDraft, setStreamingDraft] = useState<string | null>(null);
   const [linkedResearch, setLinkedResearch] = useState<Research[]>([]);
   const [linkedSpecs, setLinkedSpecs] = useState<Spec[]>([]);
   const [converting, setConverting] = useState(false);
   const { t } = useI18n();
+  const isMobile = useIsMobile();
 
   const loadIdeas = useCallback(async () => {
     try {
@@ -38,8 +42,13 @@ export default function IdeasPage() {
 
   const handleRefine = async (id: string) => {
     setRefining(id);
+    setStreamingDraft("");
     try {
-      const result = await ideasApi.refine(id);
+      const fullDraft = await ideasApi.refineStream(id, (partial) => {
+        setStreamingDraft(partial);
+      });
+      // Update with final result from backend
+      const result = await ideasApi.get(id);
       toast.success(t("ideas.refined"));
       setIdeas((prev) => prev.map((i) => (i.id === id ? result : i)));
       setViewIdea(result);
@@ -47,11 +56,55 @@ export default function IdeasPage() {
       toast.error(t("ideas.failed"));
     } finally {
       setRefining(null);
+      setStreamingDraft(null);
     }
   };
 
-  // Detail view for refined idea
-  if (viewIdea) {
+  // Mobile detail bottom sheet
+  const ideaDetailContent = viewIdea && (
+    <div className="space-y-4">
+      <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${
+        viewIdea.status === "refined" ? "bg-green-500/15 text-green-400" : "bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]"
+      }`}>{viewIdea.status === "refined" ? t("ideas.statusRefined") : t("ideas.statusDraft")}</span>
+      {viewIdea.description && <p className="text-sm whitespace-pre-wrap">{viewIdea.description}</p>}
+      {viewIdea.refinedDraft && (
+        <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
+          <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2">{t("ideas.refinedDraft")}</h3>
+          <div className="text-sm whitespace-pre-wrap">{viewIdea.refinedDraft}</div>
+        </div>
+      )}
+      {!viewIdea.refinedDraft && refining === viewIdea.id && streamingDraft && (
+        <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
+          <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2 flex items-center gap-2">
+            {t("ideas.refinedDraft")}
+            <span className="inline-block w-2 h-4 bg-[var(--color-brand-pink)] animate-pulse rounded-sm" />
+          </h3>
+          <div className="text-sm whitespace-pre-wrap">{streamingDraft}</div>
+        </div>
+      )}
+      {!viewIdea.refinedDraft && (
+        <button onClick={() => handleRefine(viewIdea.id)} disabled={refining === viewIdea.id}
+          className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
+          <IconSparkles size={16} /> {refining === viewIdea.id ? t("ideas.refining") : t("ideas.refine")}
+        </button>
+      )}
+      <IdeaResearchSection ideaId={viewIdea.id} ideaTitle={viewIdea.title} ideaDescription={viewIdea.description} linkedResearch={linkedResearch} setLinkedResearch={setLinkedResearch} t={t} />
+      <IdeaSpecSection ideaId={viewIdea.id} ideaTitle={viewIdea.title} linkedSpecs={linkedSpecs} setLinkedSpecs={setLinkedSpecs} converting={converting} setConverting={setConverting} t={t} />
+      <div className="flex gap-2">
+        <button onClick={() => { setEditIdea(viewIdea); setViewIdea(null); }}
+          className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-[var(--color-brand-cyan)] text-white text-sm font-medium hover:opacity-90 transition-opacity min-h-[44px]">
+          <IconPencil size={16} /> {t("ideas.edit")}
+        </button>
+        <button onClick={() => setDeleteIdea(viewIdea)}
+          className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors min-h-[44px]">
+          <IconTrash size={16} /> {t("ideas.delete")}
+        </button>
+      </div>
+    </div>
+  );
+
+  // Detail view for refined idea (desktop)
+  if (!isMobile && viewIdea) {
     return (
       <div className="space-y-6">
         <button
@@ -83,6 +136,18 @@ export default function IdeasPage() {
             <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2">{t("ideas.refinedDraft")}</h3>
             <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap">
               {viewIdea.refinedDraft}
+            </div>
+          </div>
+        )}
+
+        {!viewIdea.refinedDraft && refining === viewIdea.id && streamingDraft && (
+          <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
+            <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2 flex items-center gap-2">
+              {t("ideas.refinedDraft")}
+              <span className="inline-block w-2 h-4 bg-[var(--color-brand-pink)] animate-pulse rounded-sm" />
+            </h3>
+            <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap">
+              {streamingDraft}
             </div>
           </div>
         )}
@@ -124,11 +189,19 @@ export default function IdeasPage() {
 
   return (
     <div className="space-y-6">
+      {/* Mobile detail bottom sheet */}
+      {isMobile && viewIdea && (
+        <MobileBottomSheet open={!!viewIdea} onClose={() => setViewIdea(null)} title={viewIdea.title}>
+          {ideaDetailContent}
+        </MobileBottomSheet>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold gradient-brand-text">{t("ideas.title")}</h1>
           <p className="text-[var(--color-text-secondary)] text-sm mt-1">{t("ideas.subtitle")}</p>
         </div>
+        {!isMobile && (
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
@@ -136,6 +209,7 @@ export default function IdeasPage() {
           <IconPlus size={16} />
           {t("ideas.create")}
         </button>
+        )}
       </div>
 
       {loading ? (
@@ -148,6 +222,25 @@ export default function IdeasPage() {
           <p className="text-xs mt-1">{t("ideas.emptyHint")}</p>
         </div>
       ) : (
+        isMobile ? (
+          <div className="space-y-2">
+            {ideas.map((idea) => (
+              <button
+                key={idea.id}
+                onClick={() => setViewIdea(idea)}
+                className="w-full text-left p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] min-h-[44px] active:bg-[var(--color-bg-tertiary)] transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <p className="font-medium text-sm flex-1">{idea.title}</p>
+                  <span className={`px-2 py-0.5 text-[10px] rounded-full flex-shrink-0 ${idea.status === "refined" ? "bg-green-500/15 text-green-400" : "bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]"}`}>
+                    {idea.status === "refined" ? t("ideas.statusRefined") : t("ideas.statusDraft")}
+                  </span>
+                </div>
+                {idea.description && <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{idea.description}</p>}
+              </button>
+            ))}
+          </div>
+        ) : (
         <div className="border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -213,10 +306,23 @@ export default function IdeasPage() {
             </tbody>
           </table>
         </div>
+        )
       )}
 
       {/* Create Dialog */}
       {showCreate && (
+        isMobile ? (
+          <MobileBottomSheet open={showCreate} onClose={() => setShowCreate(false)} title={t("ideas.createDialog")}>
+            <IdeaForm
+              onSubmit={async (title, description, images) => {
+                await ideasApi.create({ title, description, images });
+                toast.success(t("ideas.created"));
+                setShowCreate(false);
+                loadIdeas();
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <IdeaDialog
           onClose={() => setShowCreate(false)}
           onSubmit={async (title, description, images) => {
@@ -226,10 +332,26 @@ export default function IdeasPage() {
             loadIdeas();
           }}
         />
+        )
       )}
 
       {/* Edit Dialog */}
       {editIdea && (
+        isMobile ? (
+          <MobileBottomSheet open={!!editIdea} onClose={() => setEditIdea(null)} title={t("ideas.editDialog")}>
+            <IdeaForm
+              initialTitle={editIdea.title}
+              initialDescription={editIdea.description}
+              initialImages={editIdea.images}
+              onSubmit={async (title, description, images) => {
+                await ideasApi.update(editIdea.id, { title, description, images });
+                toast.success(t("ideas.updated"));
+                setEditIdea(null);
+                loadIdeas();
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <IdeaDialog
           initialTitle={editIdea.title}
           initialDescription={editIdea.description}
@@ -242,6 +364,7 @@ export default function IdeasPage() {
             loadIdeas();
           }}
         />
+        )
       )}
 
       {/* Delete Dialog */}
@@ -274,6 +397,57 @@ export default function IdeasPage() {
           </div>
         </div>
       )}
+
+      {/* Mobile FAB */}
+      {isMobile && !showCreate && !editIdea && !viewIdea && (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="fixed bottom-20 right-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-[var(--color-brand-pink)] text-white shadow-lg shadow-[var(--color-brand-pink)]/25 hover:opacity-90 transition-opacity"
+          title={t("ideas.create")}
+        >
+          <IconPlus size={24} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function IdeaForm({
+  initialTitle = "",
+  initialDescription = "",
+  initialImages = [],
+  onSubmit,
+}: {
+  initialTitle?: string;
+  initialDescription?: string;
+  initialImages?: string[];
+  onSubmit: (title: string, description: string, images: string[]) => Promise<void>;
+}) {
+  const [title, setTitle] = useState(initialTitle);
+  const [description, setDescription] = useState(initialDescription);
+  const [images, setImages] = useState<string[]>(initialImages);
+  const [submitting, setSubmitting] = useState(false);
+  const { t } = useI18n();
+
+  const handleSubmit = async () => {
+    if (!title.trim()) return;
+    setSubmitting(true);
+    try { await onSubmit(title, description, images); }
+    catch { toast.error(t("ideas.failed")); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <input type="text" placeholder={t("ideas.titlePlaceholder")} value={title} onChange={(e) => setTitle(e.target.value)}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors min-h-[44px]" />
+      <textarea placeholder={t("ideas.descriptionPlaceholder")} value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none" />
+      <ImageUpload images={images} onChange={setImages} />
+      <button onClick={handleSubmit} disabled={submitting || !title.trim()}
+        className="w-full px-4 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
+        {submitting ? t("ideas.saving") : t("ideas.save")}
+      </button>
     </div>
   );
 }

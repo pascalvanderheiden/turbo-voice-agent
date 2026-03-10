@@ -133,6 +133,31 @@ export const ideasApi = {
     fetchApi<void>(`/api/ideas/${id}`, { method: "DELETE" }),
   refine: (id: string) =>
     fetchApi<Idea>(`/api/ideas/${id}/refine`, { method: "POST" }),
+  refineStream: async (id: string, onChunk: (text: string) => void): Promise<string> => {
+    const resp = await authFetch(`${API_BASE}/api/ideas/${id}/refine/stream`, { method: "POST" });
+    if (!resp.ok) throw new Error(`Refine stream failed: ${resp.status}`);
+    const reader = resp.body?.getReader();
+    if (!reader) throw new Error("No response body");
+    const decoder = new TextDecoder();
+    let full = "";
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") break;
+          full += data;
+          onChunk(full);
+        }
+      }
+    }
+    return full;
+  },
 };
 
 export const researchApi = {
@@ -408,6 +433,8 @@ export const profileApi = {
   get: () => fetchApi<UserProfile>("/api/me"),
   updateLocale: (locale: string) =>
     fetchApi<UserProfile>("/api/me", { method: "PATCH", body: JSON.stringify({ locale }) }),
+  updateProfile: (data: Record<string, unknown>) =>
+    fetchApi<UserProfile>("/api/me", { method: "PATCH", body: JSON.stringify(data) }),
 };
 
 export const userApi = {

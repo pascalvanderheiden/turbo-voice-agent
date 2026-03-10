@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { devApi, specsApi, skillsApi, type DevTask, type Spec, type InstalledSkill } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const STAGE_META: Record<string, { icon: typeof IconClipboardList; label: string; color: string }> = {
   plan:  { icon: IconClipboardList, label: "Plan",  color: "var(--color-brand-purple)" },
@@ -104,6 +105,7 @@ export default function DevelopmentPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTask, setDeleteTask] = useState<DevTask | null>(null);
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadTasks = useCallback(async () => {
@@ -196,7 +198,7 @@ export default function DevelopmentPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white hover:opacity-90 transition-opacity"
+          className="hidden md:flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white hover:opacity-90 transition-opacity"
         >
           <IconPlus size={16} /> {t("dev.newTask")}
         </button>
@@ -304,6 +306,17 @@ export default function DevelopmentPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Mobile FAB */}
+      {isMobile && !showCreate && (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="fixed bottom-20 right-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white shadow-lg shadow-[var(--color-brand-pink)]/25 hover:opacity-90 transition-opacity"
+          title={t("dev.newTask")}
+        >
+          <IconPlus size={24} />
+        </button>
       )}
     </div>
   );

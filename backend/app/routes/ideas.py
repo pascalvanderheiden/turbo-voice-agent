@@ -1,6 +1,7 @@
 """Brainstorm REST API routes."""
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.models.idea import Idea, IdeaCreate, IdeaUpdate
 
@@ -9,12 +10,14 @@ router = APIRouter(prefix="/api/ideas", tags=["ideas"])
 # Injected at startup
 _brainstorm_service = None
 _refine_fn = None
+_refine_stream_fn = None
 
 
-def set_brainstorm_service(service, refine_fn=None) -> None:
-    global _brainstorm_service, _refine_fn
+def set_brainstorm_service(service, refine_fn=None, refine_stream_fn=None) -> None:
+    global _brainstorm_service, _refine_fn, _refine_stream_fn
     _brainstorm_service = service
     _refine_fn = refine_fn
+    _refine_stream_fn = refine_stream_fn
 
 
 def _get_service():
@@ -81,6 +84,45 @@ async def refine_idea(idea_id: str, request: Request):
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to store refined draft")
     return result
+
+
+@router.post("/{idea_id}/refine/stream")
+async def refine_idea_stream(idea_id: str, request: Request):
+    """Stream-refine an idea — returns SSE text/event-stream with partial tokens."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+    idea = await service.get_by_id(idea_id)
+    if idea is None:
+        raise HTTPException(status_code=404, detail="Idea not found")
+
+    stream_fn = _refine_stream_fn or _refine_fn
+    if stream_fn is None:
+        raise HTTPException(status_code=503, detail="Refine not available")
+
+    if _refine_stream_fn is None:
+        # Fallback: non-streaming refine, send as single chunk
+        draft = await _refine_fn(idea)
+        await service.set_refined(idea_id, draft)
+
+        async def _single():
+            yield f"data: {draft}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_single(), media_type="text/event-stream")
+
+    # Streaming refine
+    collected: list[str] = []
+
+    async def _generate():
+        async for chunk in _refine_stream_fn(idea):
+            collected.append(chunk)
+            yield f"data: {chunk}\n\n"
+        # Persist the full draft
+        full = "".join(collected)
+        await service.set_refined(idea_id, full)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
 
 
 # Research linked to idea — injected from main.py

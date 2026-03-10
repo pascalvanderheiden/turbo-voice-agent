@@ -356,7 +356,7 @@ export default function AgentsPage() {
 
       {/* Skills Marketplace */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="text-sm font-medium text-[var(--color-text-muted)]">Skills Marketplace</h2>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{skills.length} installed</p>
@@ -364,18 +364,18 @@ export default function AgentsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowLocalDialog(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] transition-colors shrink-0"
             >
               <IconFolderPlus size={13} /> Add Local
             </button>
-            <div className="relative">
+            <div className="relative flex-1 min-w-0">
               <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
               <input
                 type="text"
                 placeholder="Search skills.sh..."
                 value={skillSearch}
                 onChange={(e) => setSkillSearch(e.target.value)}
-                className="pl-8 pr-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors w-48"
+                className="pl-8 pr-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors w-full sm:w-48"
               />
               {searchLoading && <IconLoader2 size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-[var(--color-text-muted)]" />}
             </div>

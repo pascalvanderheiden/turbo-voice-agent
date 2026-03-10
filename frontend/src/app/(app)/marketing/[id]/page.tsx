@@ -86,8 +86,8 @@ export default function MarketingDetailPage() {
         <Link href="/marketing" className="p-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] transition-colors">
           <IconArrowLeft size={18} className="text-[var(--color-text-muted)]" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-xl font-bold text-white">{video.title}</h1>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold text-white truncate">{video.title}</h1>
           <div className="flex items-center gap-3 mt-1 text-xs text-[var(--color-text-muted)]">
             {video.devTaskId && (
               <Link href={`/development/${video.devTaskId}`} className="flex items-center gap-1 hover:text-[var(--color-brand-cyan)]">
@@ -102,37 +102,39 @@ export default function MarketingDetailPage() {
             <span>{new Date(video.createdAt).toLocaleString()}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {video.status !== "completed" && (
-            <button
-              onClick={handleTrigger}
-              className="px-4 py-2 rounded-lg bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2"
-            >
-              <IconPlayerPlay size={14} />
-              {video.status === "failed" ? "Retry" :
-               ["scripting", "generating", "composing"].includes(video.status) ? "Restart" :
-               "Generate Video"}
-            </button>
-          )}
+        <button
+          onClick={handleDelete}
+          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+        >
+          <IconTrash size={16} />
+        </button>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-2 flex-wrap">
+        {video.status !== "completed" && (
           <button
-            onClick={handleDelete}
-            className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            onClick={handleTrigger}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
           >
-            <IconTrash size={16} />
+            <IconPlayerPlay size={14} />
+            {video.status === "failed" ? "Retry" :
+             ["scripting", "generating", "composing"].includes(video.status) ? "Restart" :
+             "Generate Video"}
           </button>
-        </div>
+        )}
       </div>
 
       {/* Status Timeline */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4">Generation Pipeline</h2>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2">
           {statusSteps.map((step, i) => {
             const isDone = currentStepIdx > i;
             const isCurrent = currentStepIdx === i;
             const isFailed = video.status === "failed" && i === Math.max(0, currentStepIdx);
             return (
-              <div key={step.key} className="flex items-center gap-2 flex-1">
+              <div key={step.key} className="flex items-center gap-2 sm:flex-1">
                 <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium flex-1 ${
                   isFailed ? "bg-red-500/10 text-red-400 border border-red-500/30" :
                   isDone ? "bg-green-500/10 text-green-400" :
@@ -140,14 +142,14 @@ export default function MarketingDetailPage() {
                   "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"
                 }`}>
                   {isCurrent && isInProgress ? (
-                    <IconLoader2 size={14} className="animate-spin" />
+                    <IconLoader2 size={14} className="animate-spin shrink-0" />
                   ) : (
-                    <step.icon size={14} />
+                    <step.icon size={14} className="shrink-0" />
                   )}
-                  {step.label}
+                  <span className="truncate">{step.label}</span>
                 </div>
                 {i < statusSteps.length - 1 && (
-                  <div className={`w-6 h-0.5 ${isDone ? "bg-green-500/50" : "bg-[var(--color-border-dark)]"}`} />
+                  <div className={`hidden sm:block w-6 h-0.5 ${isDone ? "bg-green-500/50" : "bg-[var(--color-border-dark)]"}`} />
                 )}
               </div>
             );

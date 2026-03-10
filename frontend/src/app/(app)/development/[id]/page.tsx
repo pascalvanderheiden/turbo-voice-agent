@@ -203,10 +203,10 @@ export default function DevTaskDetailPage() {
         <button onClick={() => router.push("/development")} className="p-2 rounded-[var(--radius-md)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
           <IconArrowLeft size={18} />
         </button>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold">{task.title}</h1>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+            <h1 className="text-xl font-semibold truncate">{task.title}</h1>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 ${
               task.mode === "sequence" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
             }`}>
               {task.mode === "sequence" ? "Sequence" : "Mock"}
@@ -224,18 +224,20 @@ export default function DevTaskDetailPage() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          {(task.status === "pending" || task.status === "failed") && (
-            <button onClick={handleTrigger} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white hover:opacity-90 transition-opacity">
-              <IconPlayerPlay size={16} /> {t("dev.runPipeline")}
-            </button>
-          )}
-          {hasArchive && (
-            <a href={devApi.downloadUrl(task.id)} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors">
-              <IconDownload size={16} /> {t("dev.download")}
-            </a>
-          )}
-        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-2 flex-wrap">
+        {(task.status === "pending" || task.status === "failed") && (
+          <button onClick={handleTrigger} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white hover:opacity-90 transition-opacity">
+            <IconPlayerPlay size={16} /> {t("dev.runPipeline")}
+          </button>
+        )}
+        {hasArchive && (
+          <a href={devApi.downloadUrl(task.id)} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors">
+            <IconDownload size={16} /> {t("dev.download")}
+          </a>
+        )}
       </div>
 
       {/* Iteration tabs for sequence mode */}

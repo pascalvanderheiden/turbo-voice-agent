@@ -180,6 +180,39 @@ class BrainstormAgent:
 
         return response.choices[0].message.content or "Refinement failed."
 
+    async def refine_stream(self, idea):
+        """Stream-refine an idea, yielding text chunks as they arrive."""
+        client = self._get_openai()
+        deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
+
+        content_parts: list[dict] = [
+            {"type": "text", "text": f"**Idea: {idea.title}**\n\n{idea.description}"}
+        ]
+        upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
+        for img_url in (idea.images or []):
+            filename = img_url.split("/")[-1]
+            img_path = upload_dir / filename
+            if img_path.exists():
+                data = base64.b64encode(img_path.read_bytes()).decode()
+                ext = filename.rsplit(".", 1)[-1].lower()
+                mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+                content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
+
+        stream = await client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": REFINE_SYSTEM_PROMPT},
+                {"role": "user", "content": content_parts},
+            ],
+            max_completion_tokens=2000,
+            temperature=0.7,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
     async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         try:
             args = json.loads(arguments) if arguments else {}

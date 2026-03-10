@@ -473,7 +473,7 @@ class MarketingAgent:
                         "model": deployment,
                         "prompt": prompt,
                         "size": "1280x720",
-                        "n_seconds": 10,
+                        "seconds": 10,
                     }
 
                     # Attach reference image: profile photo for hook/cta, screenshot for features
@@ -496,8 +496,8 @@ class MarketingAgent:
                             mime = "image/jpeg"
                         elif input_image[:4] == b'\x89PNG':
                             mime = "image/png"
-                        payload["image"] = {
-                            "url": f"data:{mime};base64,{img_b64}"
+                        payload["image_reference"] = {
+                            "image_url": f"data:{mime};base64,{img_b64}"
                         }
 
                     # Create video

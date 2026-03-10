@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconChevronDown, IconLanguage, IconLogout, IconCamera } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronUp, IconLanguage, IconLogout, IconCamera, IconSun, IconMoon } from "@tabler/icons-react";
 import { useI18n, type Locale } from "@/lib/i18n";
-import { userApi } from "@/lib/api";
+import { useTheme } from "next-themes";
+import { userApi, profileApi } from "@/lib/api";
 
 interface UserMenuProps {
   displayName: string;
@@ -23,11 +24,14 @@ function getInitials(name: string): string {
 
 export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMenuProps) {
   const { locale, setLocale, t } = useI18n();
+  const { theme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState(photoUrl);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     setCurrentPhotoUrl(photoUrl);
@@ -38,12 +42,13 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
     if (!file) return;
     setUploading(true);
     try {
-      await userApi.uploadPhoto(file);
+      const result = await userApi.uploadPhoto(file);
       // Re-fetch photo via authenticated proxy to get a displayable object URL
       const objectUrl = await userApi.getPhotoObjectUrl();
-      if (objectUrl) {
-        setCurrentPhotoUrl(objectUrl);
-        onPhotoChange?.(objectUrl);
+      const url = objectUrl || result.photoUrl;
+      if (url) {
+        setCurrentPhotoUrl(url);
+        onPhotoChange?.(url);
       }
     } catch (err) {
       console.error("Photo upload failed:", err);
@@ -53,15 +58,11 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
     }
   };
 
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    if (open) document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+  const handleToggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    profileApi.updateProfile({ theme: next }).catch(() => {});
+  };
 
   const handleLogout = () => {
     const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
@@ -74,10 +75,11 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
   };
 
   return (
-    <div className="relative" ref={menuRef}>
+    <div className="w-full">
+      {/* Profile trigger — expand/collapse inline */}
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-2 h-9 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+        className="flex items-center gap-2 w-full px-2 h-9 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
       >
         {currentPhotoUrl ? (
           <img
@@ -90,20 +92,34 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
             {getInitials(displayName || email)}
           </div>
         )}
-        <span className="text-xs font-medium hidden sm:inline max-w-[120px] truncate">
+        <span className="text-xs font-medium max-w-[120px] truncate">
           {displayName || email}
         </span>
-        <IconChevronDown size={14} stroke={1.5} />
+        {open ? <IconChevronUp size={14} stroke={1.5} className="ml-auto" /> : <IconChevronDown size={14} stroke={1.5} className="ml-auto" />}
       </button>
 
+      {/* Inline expandable panel — pushes content down */}
       {open && (
-        <div className="absolute right-0 top-11 w-64 rounded-2xl border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] shadow-xl overflow-hidden z-50" style={{ backdropFilter: "blur(20px)" }}>
-          {/* Profile info */}
-          <div className="px-4 py-3 border-b border-[var(--color-border-dark)]">
-            <p className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate">
-              {displayName}
-            </p>
-            <p className="text-[12px] text-[var(--color-text-muted)] truncate">{email}</p>
+        <div className="mt-1 rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] overflow-hidden">
+          {/* Profile info + photo preview */}
+          <div className="px-4 py-3 border-b border-[var(--color-border-dark)] flex items-center gap-3">
+            {currentPhotoUrl ? (
+              <img
+                src={currentPhotoUrl}
+                alt={displayName}
+                className="w-10 h-10 rounded-full object-cover shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-[var(--color-brand-pink)]/20 text-[var(--color-brand-pink)] flex items-center justify-center text-sm font-bold shrink-0">
+                {getInitials(displayName || email)}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate">
+                {displayName}
+              </p>
+              <p className="text-[12px] text-[var(--color-text-muted)] truncate">{email}</p>
+            </div>
           </div>
 
           {/* Change photo */}
@@ -122,6 +138,17 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
             >
               <IconCamera size={16} stroke={1.5} />
               <span>{uploading ? "Uploading…" : "Change Photo"}</span>
+            </button>
+          </div>
+
+          {/* Theme toggle */}
+          <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+            <button
+              onClick={handleToggleTheme}
+              className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors"
+            >
+              {mounted && (theme === "dark" ? <IconSun size={16} stroke={1.5} /> : <IconMoon size={16} stroke={1.5} />)}
+              <span>{t("theme.toggle")}</span>
             </button>
           </div>
 

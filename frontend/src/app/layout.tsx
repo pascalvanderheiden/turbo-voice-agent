@@ -11,7 +11,13 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Turbo Voice Agent",
   description: "Real-time conversational AI voice agent",
-  icons: { icon: "/favicon.png" },
+  icons: { icon: "/favicon.png", apple: "/apple-touch-icon.png" },
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Turbo Agent",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
