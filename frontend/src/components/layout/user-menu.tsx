@@ -30,8 +30,21 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState(photoUrl);
   const [mounted, setMounted] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
 
   useEffect(() => {
     setCurrentPhotoUrl(photoUrl);
@@ -75,7 +88,7 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
   };
 
   return (
-    <div className="w-full">
+    <div ref={menuRef} className="relative w-full">
       {/* Profile trigger — expand/collapse inline */}
       <button
         onClick={() => setOpen(!open)}
@@ -98,9 +111,9 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
         {open ? <IconChevronUp size={14} stroke={1.5} className="ml-auto" /> : <IconChevronDown size={14} stroke={1.5} className="ml-auto" />}
       </button>
 
-      {/* Inline expandable panel — pushes content down */}
+      {/* Dropdown panel — positioned absolutely to avoid pushing layout */}
       {open && (
-        <div className="mt-1 rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] overflow-hidden">
+        <div className="absolute right-0 top-11 w-64 rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] overflow-hidden z-50 shadow-xl">
           {/* Profile info + photo preview */}
           <div className="px-4 py-3 border-b border-[var(--color-border-dark)] flex items-center gap-3">
             {currentPhotoUrl ? (
