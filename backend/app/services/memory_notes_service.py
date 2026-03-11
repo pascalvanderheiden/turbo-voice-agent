@@ -25,10 +25,6 @@ class InMemoryNotesService(JsonPersistenceMixin):
         self._store: dict[str, dict] = {}
         self._load_from_disk()
 
-    def with_user(self, user_id: str):
-        """No-op: in-memory service does not scope by user."""
-        return self
-
     def _doc_to_model(self, doc: dict) -> Note:
         return Note(
             id=doc["id"],
@@ -58,7 +54,7 @@ class InMemoryNotesService(JsonPersistenceMixin):
         return self._doc_to_model(doc)
 
     async def list(self) -> list[Note]:
-        docs = sorted(self._store.values(), key=lambda d: d["updatedAt"], reverse=True)
+        docs = sorted(self._user_items(), key=lambda d: d["updatedAt"], reverse=True)
         return [self._doc_to_model(d) for d in docs]
 
     async def get_by_id(self, note_id: str) -> Note | None:

@@ -23,10 +23,6 @@ class InMemoryMarketingService(JsonPersistenceMixin):
         self._store: dict[str, dict] = {}
         self._load_from_disk()
 
-    def with_user(self, user_id: str):
-        """No-op: in-memory service does not scope by user."""
-        return self
-
     def _doc_to_model(self, doc: dict) -> MarketingVideo:
         return MarketingVideo(
             id=doc["id"],
@@ -48,6 +44,7 @@ class InMemoryMarketingService(JsonPersistenceMixin):
         vid = str(uuid.uuid4())
         doc = {
             "id": vid,
+            "userId": self._user_id or "default-user",
             "title": data.title,
             "devTaskId": data.dev_task_id,
             "specId": None,
@@ -65,7 +62,7 @@ class InMemoryMarketingService(JsonPersistenceMixin):
         return self._doc_to_model(doc)
 
     async def list(self) -> list[MarketingVideo]:
-        docs = sorted(self._store.values(), key=lambda d: d["createdAt"], reverse=True)
+        docs = sorted(self._user_items(), key=lambda d: d["createdAt"], reverse=True)
         return [self._doc_to_model(d) for d in docs]
 
     async def get_by_id(self, vid: str) -> MarketingVideo | None:

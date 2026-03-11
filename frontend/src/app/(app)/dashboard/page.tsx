@@ -58,7 +58,7 @@ export default function DashboardPage() {
                 style={{ backgroundColor: `${card.color}15`, color: card.color }}
               >
                 <card.icon size={22} stroke={1.5} />
-                {count != null && count > 0 && (
+                {count != null && (
                   <span
                     className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white rounded-full"
                     style={{ backgroundColor: card.color }}

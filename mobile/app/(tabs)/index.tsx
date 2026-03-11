@@ -118,7 +118,7 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.cardTitle}>{card.title}</Text>
             <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
-            {card.count > 0 && (
+            {card.count != null && (
               <View style={[styles.badge, { backgroundColor: card.color }]}>
                 <Text style={styles.badgeText}>{card.count}</Text>
               </View>

@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Dashboard Summary Cards
 The dashboard SHALL display summary cards for Notes, Ideas, Research, Specs, and Marketing. Each card SHALL show the count of items and link to the respective list page. The Marketing card SHALL use the IconVideo (Tabler) icon and link to `/marketing`, displaying the total count of marketing videos from `GET /api/marketing`.
@@ -9,7 +9,9 @@ The dashboard SHALL display summary cards for Notes, Ideas, Research, Specs, and
 - **AND** each card SHALL show the current count of items
 - **AND** the Marketing card SHALL link to `/marketing`
 
-### Requirement: Ideas Management
+## MODIFIED Requirements
+
+### Requirement: Brainstorm Ideas Management UI
 The Ideas list SHALL display each idea with its title, status, image count, and date. When an idea has linked specs, the list SHALL show a link to the foundational spec only (not individual feature specs), since the foundational spec already contains links to its child feature specs. Clicking the foundational spec link SHALL navigate to the spec detail view.
 
 #### Scenario: Idea with linked specs shows only foundational spec link

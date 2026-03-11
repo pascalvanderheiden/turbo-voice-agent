@@ -22,10 +22,6 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
         self._store: dict[str, dict] = {}
         self._load_from_disk()
 
-    def with_user(self, user_id: str):
-        """No-op: in-memory service does not scope by user."""
-        return self
-
     def _doc_to_model(self, doc: dict) -> Idea:
         return Idea(
             id=doc["id"],
@@ -43,6 +39,7 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
         idea_id = str(uuid.uuid4())
         doc = {
             "id": idea_id,
+            "userId": self._user_id or "default-user",
             "title": data.title,
             "description": data.description,
             "images": data.images,
@@ -57,7 +54,7 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
         return self._doc_to_model(doc)
 
     async def list(self) -> list[Idea]:
-        docs = sorted(self._store.values(), key=lambda d: d["updatedAt"], reverse=True)
+        docs = sorted(self._user_items(), key=lambda d: d["updatedAt"], reverse=True)
         return [self._doc_to_model(d) for d in docs]
 
     async def get_by_id(self, idea_id: str) -> Idea | None:

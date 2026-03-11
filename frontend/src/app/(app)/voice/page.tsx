@@ -6,6 +6,7 @@ import { useVoice } from "@/lib/voice-provider";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
 import { IconMicrophone, IconPlayerStop, IconEye, IconEyeOff } from "@tabler/icons-react";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const ACTION_LABELS: Record<string, Record<string, string>> = {
   en: {
@@ -77,6 +78,7 @@ export default function VoicePage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showTranscript, setShowTranscript] = useState(true);
   const lastActivityCountRef = useRef(0);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -137,9 +139,13 @@ export default function VoicePage() {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-full -mt-14 space-y-6">
-      {/* Voice Orb */}
-      <VoiceOrb state={orbState} audioLevel={audioLevel} />
+    <div className={`flex flex-col items-center justify-center h-full space-y-6 ${
+      isMobile ? "-mt-4 pb-4" : "-mt-14"
+    }`}>
+      {/* Voice Orb — larger on mobile */}
+      <div className={isMobile ? "scale-[1.4]" : ""}>
+        <VoiceOrb state={orbState} audioLevel={audioLevel} />
+      </div>
 
       {/* Status + Button */}
       <div className="text-center space-y-3">
@@ -192,7 +198,9 @@ export default function VoicePage() {
       {showTranscript && transcript.length > 0 && (
         <div
           ref={scrollRef}
-          className="w-full max-w-lg space-y-3 max-h-60 overflow-y-auto px-4"
+          className={`w-full max-w-lg space-y-3 overflow-y-auto px-4 ${
+            isMobile ? "max-h-40" : "max-h-60"
+          }`}
         >
           {transcript.map((entry, i) => (
             <div

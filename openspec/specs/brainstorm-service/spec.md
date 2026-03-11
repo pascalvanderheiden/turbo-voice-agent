@@ -44,17 +44,18 @@ The system SHALL expose RESTful endpoints for brainstorm idea operations.
 - **THEN** the API SHALL trigger GPT-5.2 refinement and return the updated idea with `refinedDraft` populated
 
 ### Requirement: Image Upload API
-The system SHALL expose an upload endpoint for images used by both ideas and notes.
+The brainstorm-service SHALL store uploaded images on Azure Blob Storage in production environments. The `/api/upload` endpoint SHALL use Azure Blob Storage with the authenticated user's context for file storage. Skill files (SKILL.md and referenced files) SHALL also be stored on Azure Blob Storage in production, associated with the authenticated user's ID.
 
-#### Scenario: Upload an image
-- **WHEN** a POST multipart request is made to `/api/upload` with an image file
-- **THEN** the API SHALL validate the file type (png, jpg, jpeg, gif, webp) and size (max 10MB)
-- **AND** store the file with a UUID filename in the uploads directory
-- **AND** return the accessible URL
+#### Scenario: Upload image in production
+- **WHEN** a user uploads an image via `/api/upload` in an Azure deployment
+- **THEN** the image SHALL be stored in Azure Blob Storage
+- **AND** the returned URL SHALL point to the Blob Storage location
 
-#### Scenario: Serve uploaded images
-- **WHEN** a GET request is made to `/uploads/{filename}`
-- **THEN** the server SHALL serve the static file
+#### Scenario: Skill files stored in production
+- **WHEN** a skill is installed in an Azure deployment
+- **THEN** skill files (SKILL.md, reference files) SHALL be stored in Azure Blob Storage
+- **AND** the skill record in Cosmos DB SHALL reference the Blob Storage paths
+- **AND** the skill SHALL be associated with the authenticated user's ID (not "default-user")
 
 ### Requirement: Brainstorm Agent
 The brainstorm agent SHALL be a specialist agent in the agent team that handles all brainstorm-related tasks.

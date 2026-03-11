@@ -35,21 +35,16 @@ The web application SHALL authenticate users via Microsoft Entra ID using MSAL.j
 - **THEN** MSAL SHALL silently acquire a new token without interrupting the user
 
 ### Requirement: User Profile Menu
-The site header SHALL display a user profile menu in the top-right position showing the user's profile photo, display name, language selector, and logout action.
+The User Profile menu SHALL display the user's profile photo (if uploaded), display name, email, and language selector. The menu SHALL include options for uploading or changing a profile picture. When no profile picture is uploaded, the menu SHALL display the user's initials as a fallback avatar.
 
-#### Scenario: Profile menu with photo
-- **WHEN** the authenticated user has a profile photo in Entra ID
-- **THEN** the header SHALL display their circular profile photo that opens a dropdown on click
-- **AND** the dropdown SHALL show: display name, email, language selector (en/nl), and a logout button
+#### Scenario: User with profile picture
+- **WHEN** a user has uploaded a profile picture
+- **THEN** the header dropdown SHALL display the profile photo instead of initials
+- **AND** the photo SHALL be loaded from `GET /api/me/photo`
 
-#### Scenario: Profile menu without photo
-- **WHEN** the authenticated user has no profile photo
-- **THEN** the header SHALL display a circular avatar with the user's initials
-
-#### Scenario: Logout
-- **WHEN** the user clicks logout in the profile menu
-- **THEN** MSAL SHALL clear the session and redirect to the Entra ID logout endpoint
-- **AND** the user SHALL be redirected back to the login page
+#### Scenario: User without profile picture
+- **WHEN** a user has not uploaded a profile picture
+- **THEN** the header dropdown SHALL display the user's initials as avatar
 
 ### Requirement: User Language Preference
 The user's language preference SHALL be stored in their backend profile and synchronized across devices.
@@ -128,26 +123,17 @@ The web frontend SHALL provide a quick-access voice activation button in the sit
 - **AND** clicking it SHALL navigate to or activate the voice mode
 
 ### Requirement: Brainstorm Ideas Management UI
-The web frontend SHALL provide a complete brainstorm ideas management interface with list, create, edit, delete, and refine capabilities.
+The Ideas list SHALL display each idea with its title, status, image count, and date. When an idea has linked specs, the list SHALL show a link to the foundational spec only (not individual feature specs), since the foundational spec already contains links to its child feature specs. Clicking the foundational spec link SHALL navigate to the spec detail view.
 
-#### Scenario: Ideas list view
-- **WHEN** the user navigates to the Ideas page
-- **THEN** a data table SHALL display all ideas with columns: title, status (draft/refined), image count, updated date
-- **AND** each row SHALL have action buttons for edit, delete, and refine
+#### Scenario: Idea with linked specs shows only foundational spec link
+- **WHEN** an idea has been converted to specs (foundation + features)
+- **THEN** the Ideas list SHALL display a single link to the foundational spec
+- **AND** SHALL NOT display individual links to feature specs
+- **AND** clicking the link SHALL navigate to the foundational spec detail view
 
-#### Scenario: Create idea with images
-- **WHEN** the user clicks "New Idea"
-- **THEN** a dialog SHALL appear with fields for title, description, and an image upload area (drag & drop, click to browse, camera on mobile)
-- **AND** on submit, the idea SHALL be created via the REST API
-
-#### Scenario: Refine idea
-- **WHEN** the user clicks "Refine" on an idea
-- **THEN** the system SHALL call `POST /api/ideas/{id}/refine` and display the refined draft in a detail view
-- **AND** a loading state SHALL be shown during GPT-5.2 processing
-
-#### Scenario: View refined draft
-- **WHEN** the user opens a refined idea
-- **THEN** the detail view SHALL render the refined draft as formatted markdown alongside the original description and images
+#### Scenario: Idea without linked specs
+- **WHEN** an idea has not been converted to specs
+- **THEN** no spec links SHALL be displayed for that idea
 
 ### Requirement: Image Upload Component
 The web frontend SHALL provide a reusable image upload component used by both notes and ideas.
@@ -201,23 +187,18 @@ The idea detail view SHALL display linked research entries and allow triggering 
 - **THEN** the research dialog SHALL open with the idea's title pre-filled as the query and the ideaId pre-linked
 
 ### Requirement: Specs Management UI
-The web app SHALL provide a Specs page with full CRUD operations, an "Optimize with AI" button for draft specs, and a detail view showing structured markdown content. Specs SHALL be grouped by type: foundation spec shown prominently at the top, feature specs listed below.
+The Specs list SHALL display each spec with its title only (without the type suffix such as "- Foundation" or "- Feature"). The spec type SHALL be indicated via a badge or tag only in the spec detail view. Foundation specs SHALL be displayed at the top of the list, followed by feature specs grouped under their parent.
 
-#### Scenario: View spec list
-- **WHEN** the user navigates to /specs
-- **THEN** the foundation spec (if any) is shown at the top, followed by feature specs, each with title, status badge (draft/optimized), source idea link, and timestamps
+#### Scenario: Spec list shows clean titles without type suffix
+- **WHEN** a user views the Specs list
+- **THEN** each spec SHALL display only its title (e.g., "My App" not "My App - Foundation")
+- **AND** foundation specs SHALL appear at the top of the list
 
-#### Scenario: Create spec manually
-- **WHEN** the user clicks "New Spec" and selects type (foundation/feature), fills in title and content
-- **THEN** the spec is created with status "draft"
-
-#### Scenario: Generate specs from idea
-- **WHEN** the user clicks "Convert to spec" on an idea detail view
-- **THEN** the system generates a foundation spec plus a minimal set of feature specs from the idea content using GPT-5.2 and navigates to the specs page
-
-#### Scenario: Optimize draft spec
-- **WHEN** the user clicks "Optimize with AI" on a draft spec
-- **THEN** the spec content is refined by GPT-5.2 and the status changes to "optimized"
+#### Scenario: Spec detail shows type indicator
+- **WHEN** a user clicks on a spec to view its details
+- **THEN** the detail view SHALL show a Foundation or Feature badge/indicator
+- **AND** feature specs SHALL display their linked parent foundation spec
+- **AND** the foundation spec detail SHALL list its child feature specs
 
 ### Requirement: Development Page
 The web application SHALL provide a Development page for managing development tasks with pipeline tracking. Tasks SHALL display their mode (Mock/Sequence), iteration progress, linked spec information, and selected skills. The detail page SHALL display iterations with their individual stage pipelines and plan output.
@@ -356,4 +337,29 @@ The dev task detail page SHALL show linked marketing videos.
 #### Scenario: Dev task with marketing videos
 - **WHEN** a dev task has one or more linked marketing videos
 - **THEN** the detail page SHALL display a "Marketing Videos" section with cards linking to each video's detail page
+
+### Requirement: Profile Picture Upload
+The web application SHALL provide a profile picture upload interface in the User Profile page. Users SHALL be able to upload, preview, and crop their profile photo. The uploaded photo SHALL be stored via the backend and displayed throughout the application (header, marketing videos). Supported formats SHALL be PNG, JPG, JPEG, and WEBP with a maximum file size of 5MB.
+
+#### Scenario: Upload profile picture
+- **WHEN** a user navigates to the User Profile page and uploads a photo
+- **THEN** the application SHALL display a preview of the selected image
+- **AND** submit the photo to `POST /api/me/photo`
+- **AND** update the header avatar immediately upon successful upload
+
+#### Scenario: Profile picture used in marketing
+- **WHEN** a marketing video is generated for a user who has a profile picture
+- **THEN** the profile picture SHALL be available to the marketing-service as a personalization asset
+
+#### Scenario: Invalid profile picture upload
+- **WHEN** a user attempts to upload a file that exceeds 5MB or is not a supported format
+- **THEN** the application SHALL display a validation error without submitting to the backend
+
+### Requirement: Marketing Sidebar Navigation
+The sidebar navigation SHALL include a "Marketing" entry with the IconVideo (Tabler) icon, positioned between "Development" and "Skills" (or the next navigation item). Clicking it SHALL navigate to `/marketing`.
+
+#### Scenario: Marketing navigation item visible
+- **WHEN** a user views the sidebar navigation
+- **THEN** a "Marketing" entry SHALL be visible with the IconVideo icon
+- **AND** clicking it SHALL navigate to `/marketing`
 

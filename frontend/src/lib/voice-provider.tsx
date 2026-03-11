@@ -57,11 +57,44 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const agentTranscriptRef = useRef("");
   const intentionalDisconnectRef = useRef(false);
   const connectionStateRef = useRef<ConnectionState>("disconnected");
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const updateConnectionState = useCallback((state: ConnectionState) => {
     connectionStateRef.current = state;
     setConnectionState(state);
   }, []);
+
+  // Screen Wake Lock — keeps screen on during voice sessions
+  const acquireWakeLock = useCallback(async () => {
+    if (!("wakeLock" in navigator)) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+      wakeLockRef.current.addEventListener("release", () => { wakeLockRef.current = null; });
+    } catch { /* wake lock not available or denied */ }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    wakeLockRef.current?.release();
+    wakeLockRef.current = null;
+  }, []);
+
+  // Visibility change — resume AudioContext & re-acquire wake lock when returning to the app
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === "visible") {
+        // Resume suspended AudioContext (browsers suspend on tab hide / lock screen)
+        if (audioContextRef.current?.state === "suspended") {
+          try { await audioContextRef.current.resume(); } catch { /* ignore */ }
+        }
+        // Re-acquire wake lock (released by OS when page goes hidden)
+        if (connectionStateRef.current === "connected") {
+          acquireWakeLock();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [acquireWakeLock]);
 
   const playAudioQueue = useCallback((ctx: AudioContext) => {
     if (isPlayingRef.current) return;
@@ -96,6 +129,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const cleanupResources = useCallback(() => {
     intentionalDisconnectRef.current = true;
+    releaseWakeLock();
     try { processorRef.current?.disconnect(); } catch {}
     try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     try { audioContextRef.current?.close(); } catch {}
@@ -114,7 +148,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setIsListening(false);
     setIsAgentSpeaking(false);
     setAudioLevel(0);
-  }, [updateConnectionState]);
+  }, [updateConnectionState, releaseWakeLock]);
 
   const connect = useCallback(async (locale?: Locale) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -155,6 +189,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         switch (msg.type) {
           case "session.ready":
             updateConnectionState("connected");
+            acquireWakeLock();
             processor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               let sum = 0;
@@ -265,7 +300,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     } catch {
       updateConnectionState("error");
     }
-  }, [playAudioQueue, updateConnectionState, cleanupResources]);
+  }, [playAudioQueue, updateConnectionState, cleanupResources, acquireWakeLock]);
 
   const disconnect = useCallback(() => {
     cleanupResources();

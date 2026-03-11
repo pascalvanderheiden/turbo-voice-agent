@@ -22,10 +22,6 @@ class InMemorySpecService(JsonPersistenceMixin):
         self._store: dict[str, dict] = {}
         self._load_from_disk()
 
-    def with_user(self, user_id: str):
-        """No-op: in-memory service does not scope by user."""
-        return self
-
     def _doc_to_model(self, doc: dict) -> Spec:
         return Spec(
             id=doc["id"],
@@ -45,6 +41,7 @@ class InMemorySpecService(JsonPersistenceMixin):
         spec_id = str(uuid.uuid4())
         doc = {
             "id": spec_id,
+            "userId": self._user_id or "default-user",
             "title": data.title,
             "content": data.content,
             "type": data.type,
@@ -61,7 +58,7 @@ class InMemorySpecService(JsonPersistenceMixin):
 
     async def list(self) -> list[Spec]:
         docs = sorted(
-            self._store.values(),
+            self._user_items(),
             key=lambda d: (0 if d.get("type") == "foundation" else 1, d["updatedAt"]),
         )
         # foundation first, then features by updatedAt

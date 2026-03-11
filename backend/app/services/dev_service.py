@@ -38,10 +38,6 @@ class InMemoryDevService(JsonPersistenceMixin):
         self._store: dict[str, dict] = {}
         self._load_from_disk()
 
-    def with_user(self, user_id: str):
-        """No-op: in-memory service does not scope by user."""
-        return self
-
     def _doc_to_model(self, doc: dict) -> DevTask:
         iterations = [
             DevIteration(
@@ -81,6 +77,7 @@ class InMemoryDevService(JsonPersistenceMixin):
         iterations = [_default_iteration(0, data.title)]
         doc = {
             "id": task_id,
+            "userId": self._user_id or "default-user",
             "title": data.title,
             "specId": data.spec_id,
             "mode": data.mode,
@@ -109,7 +106,7 @@ class InMemoryDevService(JsonPersistenceMixin):
         return self._doc_to_model(doc)
 
     async def list(self) -> list[DevTask]:
-        docs = sorted(self._store.values(), key=lambda d: d["createdAt"], reverse=True)
+        docs = sorted(self._user_items(), key=lambda d: d["createdAt"], reverse=True)
         return [self._doc_to_model(d) for d in docs]
 
     async def get_by_id(self, task_id: str) -> DevTask | None:

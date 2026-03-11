@@ -12,12 +12,15 @@ import { useI18n } from "@/lib/i18n";
 import { specsApi, type Spec, type SpecCreate } from "@/lib/api";
 import { toast } from "sonner";
 import Link from "next/link";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { MobileBottomSheet } from "@/components/ui/mobile-bottom-sheet";
 
 export default function SpecsPage() {
   const [specs, setSpecs] = useState<Spec[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const { t } = useI18n();
+  const isMobile = useIsMobile();
 
   const loadData = useCallback(async () => {
     try {
@@ -43,6 +46,7 @@ export default function SpecsPage() {
           <h1 className="text-2xl font-semibold gradient-brand-text">{t("specs.title")}</h1>
           <p className="text-[var(--color-text-secondary)] text-sm mt-1">{t("specs.subtitle")}</p>
         </div>
+        {!isMobile && (
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
@@ -50,6 +54,7 @@ export default function SpecsPage() {
           <IconPlus size={16} />
           {t("specs.create")}
         </button>
+        )}
       </div>
 
       {loading ? (
@@ -153,6 +158,24 @@ export default function SpecsPage() {
 
       {/* Create Dialog */}
       {showCreate && (
+        isMobile ? (
+          <MobileBottomSheet open={showCreate} onClose={() => setShowCreate(false)} title={t("specs.createDialog")}>
+            <SpecForm
+              onSubmit={async (title, content, optimize) => {
+                const created = await specsApi.create({ title, content, type: "foundation" });
+                if (optimize) {
+                  toast.info(t("specs.optimizing"));
+                  await specsApi.optimize(created.id);
+                  toast.success(t("specs.optimized"));
+                } else {
+                  toast.success(t("specs.created"));
+                }
+                setShowCreate(false);
+                loadData();
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <CreateSpecDialog
           onClose={() => setShowCreate(false)}
           onSubmit={async (title, content, optimize) => {
@@ -168,7 +191,55 @@ export default function SpecsPage() {
             loadData();
           }}
         />
+        )
       )}
+
+      {/* Mobile FAB */}
+      {isMobile && !showCreate && (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="fixed bottom-20 right-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-[var(--color-brand-pink)] text-white shadow-lg shadow-[var(--color-brand-pink)]/25 hover:opacity-90 transition-opacity"
+          title={t("specs.create")}
+        >
+          <IconPlus size={24} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SpecForm({
+  onSubmit,
+}: {
+  onSubmit: (title: string, content: string, optimize: boolean) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [optimize, setOptimize] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const { t } = useI18n();
+
+  const handleSubmit = async () => {
+    if (!title.trim()) return;
+    setSubmitting(true);
+    try { await onSubmit(title, content, optimize); } catch { toast.error(t("specs.failed")); } finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <input type="text" placeholder={t("specs.titlePlaceholder")} value={title} onChange={(e) => setTitle(e.target.value)}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors min-h-[44px]" />
+      <textarea placeholder={t("specs.contentPlaceholder")} value={content} onChange={(e) => setContent(e.target.value)} rows={6}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none font-mono" />
+      <label className="flex items-center gap-2 cursor-pointer min-h-[44px]">
+        <input type="checkbox" checked={optimize} onChange={(e) => setOptimize(e.target.checked)} className="accent-[var(--color-brand-purple)]" />
+        <IconSparkles size={14} className="text-[var(--color-brand-purple)]" />
+        <span className="text-sm text-[var(--color-text-secondary)]">{t("specs.optimize")}</span>
+      </label>
+      <button onClick={handleSubmit} disabled={submitting || !title.trim()}
+        className="w-full px-4 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
+        {submitting ? t("specs.saving") : t("specs.save")}
+      </button>
     </div>
   );
 }

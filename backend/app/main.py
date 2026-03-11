@@ -71,8 +71,8 @@ async def lifespan(app: FastAPI):
         dev_service = DevService(client)
         marketing_service = MarketingService(client)
         logger.info("Cosmos DB connected — using persistent storage.")
-    except Exception:
-        logger.warning("Cosmos DB unavailable — using in-memory storage.")
+    except Exception as exc:
+        logger.warning("Cosmos DB unavailable — using in-memory storage. Error: %s", exc)
         client = None
 
     # Initialize Blob-backed skills service when storage account is configured

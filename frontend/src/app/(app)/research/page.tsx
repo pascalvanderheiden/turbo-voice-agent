@@ -5,6 +5,8 @@ import { IconPlus, IconTrash, IconArrowLeft, IconSearch, IconWorldWww, IconBrain
 import { toast } from "sonner";
 import { researchApi, ideasApi, type Research, type Idea } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { MobileBottomSheet } from "@/components/ui/mobile-bottom-sheet";
 
 export default function ResearchPage() {
   const [entries, setEntries] = useState<Research[]>([]);
@@ -15,6 +17,7 @@ export default function ResearchPage() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [searching, setSearching] = useState(false);
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadEntries = useCallback(async () => {
@@ -67,8 +70,8 @@ export default function ResearchPage() {
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [hasPending, t]);
 
-  // Detail view
-  if (viewEntry) {
+  // Detail view (desktop only — mobile uses bottom sheet)
+  if (!isMobile && viewEntry) {
     const isPending = viewEntry.status === "pending";
     return (
       <div className="space-y-6">
@@ -153,11 +156,52 @@ export default function ResearchPage() {
 
   return (
     <div className="space-y-6">
+      {/* Mobile detail bottom sheet */}
+      {isMobile && viewEntry && (
+        <MobileBottomSheet open={!!viewEntry} onClose={() => setViewEntry(null)} title={viewEntry.title}>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
+                viewEntry.mode === "deep_research"
+                  ? "bg-[var(--color-brand-purple)]/10 text-[var(--color-brand-purple)]"
+                  : "bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)]"
+              }`}>
+                {viewEntry.mode === "deep_research" ? <IconBrain size={12} /> : <IconWorldWww size={12} />}
+                {viewEntry.mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch")}
+              </span>
+              <StatusBadge status={viewEntry.status} t={t} />
+            </div>
+            {viewEntry.status === "pending" && (
+              <div className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-yellow-500/5 border border-yellow-500/20">
+                <IconLoader2 size={16} className="animate-spin text-yellow-500" />
+                <p className="text-sm text-yellow-500">{viewEntry.mode === "deep_research" ? t("research.researching") : t("research.searching")}</p>
+              </div>
+            )}
+            {viewEntry.result && <div className="text-sm whitespace-pre-wrap text-[var(--color-text-secondary)]">{viewEntry.result}</div>}
+            {viewEntry.error && <div className="text-sm text-red-500 bg-red-500/10 rounded-[var(--radius-md)] p-3">{viewEntry.error}</div>}
+            {viewEntry.citations.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">{t("research.citations")} ({viewEntry.citations.length})</h3>
+                {viewEntry.citations.map((c, i) => (
+                  <a key={i} href={c.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-[var(--color-brand-cyan)] hover:underline">
+                    <IconExternalLink size={14} /> {c.title || c.url}
+                  </a>
+                ))}
+              </div>
+            )}
+            <button onClick={() => { setDeleteEntry(viewEntry); }} className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] text-sm bg-red-600 text-white hover:bg-red-700 transition-colors min-h-[44px]">
+              <IconTrash size={14} /> {t("research.delete")}
+            </button>
+          </div>
+        </MobileBottomSheet>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold gradient-brand-text">{t("research.title")}</h1>
           <p className="text-[var(--color-text-secondary)] text-sm mt-1">{t("research.subtitle")}</p>
         </div>
+        {!isMobile && (
         <button
           onClick={async () => {
             setShowSearch(true);
@@ -167,6 +211,7 @@ export default function ResearchPage() {
         >
           <IconPlus size={16} /> {t("research.newSearch")}
         </button>
+        )}
       </div>
 
       {loading ? (
@@ -178,6 +223,30 @@ export default function ResearchPage() {
           <p className="text-sm mt-1">{t("research.emptyHint")}</p>
         </div>
       ) : (
+        isMobile ? (
+          <div className="space-y-2">
+            {entries.map((entry) => (
+              <button
+                key={entry.id}
+                onClick={() => setViewEntry(entry)}
+                className="w-full text-left p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] min-h-[44px] active:bg-[var(--color-bg-tertiary)] transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  {entry.status === "pending" && <IconLoader2 size={14} className="animate-spin text-yellow-500 flex-shrink-0" />}
+                  <p className="font-medium text-sm flex-1 line-clamp-1">{entry.title}</p>
+                  <StatusBadge status={entry.status} t={t} />
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="inline-flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
+                    {entry.mode === "deep_research" ? <IconBrain size={10} /> : <IconWorldWww size={10} />}
+                    {entry.mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch")}
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-muted)]">{new Date(entry.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -216,6 +285,7 @@ export default function ResearchPage() {
                     <button
                       onClick={(e) => { e.stopPropagation(); setDeleteEntry(entry); }}
                       className="p-1.5 rounded hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-500"
+                      title={t("research.delete")}
                     >
                       <IconTrash size={16} />
                     </button>
@@ -225,10 +295,32 @@ export default function ResearchPage() {
             </tbody>
           </table>
         </div>
+        )
       )}
 
       {/* New Search Dialog */}
       {showSearch && (
+        isMobile ? (
+          <MobileBottomSheet open={showSearch} onClose={() => setShowSearch(false)} title={t("research.newSearch")}>
+            <MobileSearchForm
+              ideas={ideas}
+              t={t}
+              searching={searching}
+              onSearch={async (query, mode, ideaId) => {
+                setSearching(true);
+                try {
+                  const fn = mode === "deep_research" ? researchApi.deepResearch : researchApi.webSearch;
+                  const result = await fn(query, ideaId);
+                  toast.success(t("research.started"));
+                  setShowSearch(false);
+                  setEntries((prev) => [result, ...prev]);
+                  setViewEntry(result);
+                } catch { toast.error(t("research.failed")); }
+                finally { setSearching(false); }
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <SearchDialog
           ideas={ideas}
           t={t}
@@ -250,6 +342,7 @@ export default function ResearchPage() {
           }}
           onClose={() => setShowSearch(false)}
         />
+        )
       )}
 
       {/* Delete Dialog */}
@@ -281,6 +374,69 @@ export default function ResearchPage() {
           </div>
         </DialogOverlay>
       )}
+
+      {/* Mobile FAB */}
+      {isMobile && !showSearch && !viewEntry && (
+        <button
+          onClick={async () => {
+            setShowSearch(true);
+            try { setIdeas(await ideasApi.list()); } catch { /* ignore */ }
+          }}
+          className="fixed bottom-20 right-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white shadow-lg hover:opacity-90 transition-opacity"
+          title={t("research.newSearch")}
+        >
+          <IconPlus size={24} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MobileSearchForm({
+  ideas,
+  t,
+  searching,
+  onSearch,
+}: {
+  ideas: Idea[];
+  t: (k: string) => string;
+  searching: boolean;
+  onSearch: (query: string, mode: "web_search" | "deep_research", ideaId?: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"web_search" | "deep_research">("web_search");
+  const [ideaId, setIdeaId] = useState<string>("");
+
+  return (
+    <div className="space-y-4">
+      <textarea value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("research.queryPlaceholder")} rows={3}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-sm resize-none focus:outline-none focus:border-[var(--color-brand-pink)]" />
+      <div className="flex gap-2">
+        <button onClick={() => setMode("web_search")}
+          className={`flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-[var(--radius-md)] text-sm border transition-colors min-h-[44px] ${
+            mode === "web_search" ? "border-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)]" : "border-[var(--color-border-dark)] text-[var(--color-text-secondary)]"
+          }`}>
+          <IconWorldWww size={16} /> {t("research.webSearch")}
+        </button>
+        <button disabled title="Deep research is temporarily unavailable"
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-[var(--radius-md)] text-sm border border-[var(--color-border-dark)] text-[var(--color-text-muted)] opacity-50 cursor-not-allowed min-h-[44px]">
+          <IconBrain size={16} /> {t("research.deepResearch")}
+        </button>
+      </div>
+      {ideas.length > 0 && (
+        <div>
+          <label className="text-xs text-[var(--color-text-muted)] mb-1 block">{t("research.linkIdea")}</label>
+          <select value={ideaId} onChange={(e) => setIdeaId(e.target.value)} title={t("research.linkIdea")}
+            className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-sm focus:outline-none min-h-[44px]">
+            <option value="">{t("research.noIdea")}</option>
+            {ideas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}
+          </select>
+        </div>
+      )}
+      <button disabled={!query.trim() || searching} onClick={() => onSearch(query, mode, ideaId || undefined)}
+        className="w-full px-4 py-3 rounded-[var(--radius-md)] text-sm bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white font-medium hover:opacity-90 disabled:opacity-50 min-h-[44px]">
+        {searching ? (mode === "deep_research" ? t("research.researching") : t("research.searching")) : (mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch"))}
+      </button>
     </div>
   );
 }
@@ -353,6 +509,7 @@ function SearchDialog({
             <select
               value={ideaId}
               onChange={(e) => setIdeaId(e.target.value)}
+              title={t("research.linkIdea")}
               className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-sm focus:outline-none"
             >
               <option value="">{t("research.noIdea")}</option>

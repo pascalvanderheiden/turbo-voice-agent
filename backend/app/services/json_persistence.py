@@ -1,5 +1,8 @@
 """JSON file persistence for local dev — survives backend restarts."""
 
+from __future__ import annotations
+
+import copy
 import json
 import logging
 from pathlib import Path
@@ -14,6 +17,7 @@ class JsonPersistenceMixin:
 
     _store: dict[str, dict]
     _json_file: str = "data.json"
+    _user_id: str | None = None
 
     def _data_path(self) -> Path:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,3 +39,23 @@ class JsonPersistenceMixin:
             path.write_text(json.dumps(self._store, default=str, indent=2))
         except Exception:
             logger.warning("Failed to save %s", self._json_file)
+
+    def _user_items(self) -> list[dict]:
+        """Return store items filtered by the current user_id (if set).
+
+        Includes legacy items with userId='default-user' or missing userId
+        so that pre-existing local-dev data keeps working after the scoping
+        change.
+        """
+        if not self._user_id:
+            return list(self._store.values())
+        return [
+            d for d in self._store.values()
+            if d.get("userId") in (self._user_id, "default-user", None)
+        ]
+
+    def with_user(self, user_id: str):
+        """Return a shallow copy of this service scoped to *user_id*."""
+        scoped = copy.copy(self)
+        scoped._user_id = user_id
+        return scoped

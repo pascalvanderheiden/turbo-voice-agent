@@ -18,48 +18,35 @@ The system SHALL store development tasks with title, specId, status, mode, itera
 - **AND** the spec SHALL be marked with a reference to the dev task for bidirectional linking
 
 ### Requirement: Development Task CRUD Operations
-The system SHALL provide REST endpoints for managing development tasks.
+The dev-service SHALL provide REST endpoints for creating, reading, listing, and deleting dev tasks. The `DELETE /api/dev/{id}` endpoint SHALL gracefully handle deletion of tasks in any status (pending, running, completed, failed) and SHALL clean up associated artifacts. Deletion errors SHALL be logged with the task ID and error details.
 
-#### Scenario: List all development tasks
-- **WHEN** `GET /api/dev` is called
-- **THEN** the system SHALL return all dev tasks ordered by creation date descending
+#### Scenario: Delete a running dev task
+- **WHEN** a user sends `DELETE /api/dev/{id}` for a task with status "running"
+- **THEN** the service SHALL cancel any in-progress pipeline stages
+- **AND** remove the task record and associated artifacts
+- **AND** return HTTP 200 with confirmation
 
-#### Scenario: Get single development task
-- **WHEN** `GET /api/dev/{id}` is called with a valid ID
-- **THEN** the system SHALL return the full dev task including all stages, artifacts, and logs
+#### Scenario: Delete a completed dev task
+- **WHEN** a user sends `DELETE /api/dev/{id}` for a completed task
+- **THEN** the service SHALL remove the task record and associated artifacts (screenshots, code archives)
+- **AND** return HTTP 200 with confirmation
 
-#### Scenario: Delete development task
-- **WHEN** `DELETE /api/dev/{id}` is called
-- **THEN** the system SHALL remove the task and any associated artifact files from disk
+#### Scenario: Delete a non-existent dev task
+- **WHEN** a user sends `DELETE /api/dev/{id}` for an ID that does not exist
+- **THEN** the service SHALL return HTTP 404 with a descriptive error message
 
 ### Requirement: Development Pipeline Execution
-The system SHALL support two pipeline modes: **mock** and **sequence**. Each mode executes as a background task with stage-by-stage status updates.
+The dev-service SHALL execute pipeline stages (Plan → Build → Run → Test) as background tasks immediately after a dev task is created. The service SHALL log each stage transition with structured JSON including taskId, stage name, status, duration, and any error details. The service SHALL ensure background task execution is reliable in containerized environments (Azure Container Apps) by verifying the async event loop is active before spawning tasks.
 
-#### Scenario: Mock mode pipeline
-- **WHEN** a pipeline is triggered with mode "mock"
-- **THEN** the system SHALL create a single iteration containing all four stages (Plan → Build → Run → Test)
-- **AND** the Plan stage SHALL receive the complete spec content (foundation + all features concatenated)
-- **AND** the Build stage SHALL generate a GUI-only mock application representing the end-state vision
-- **AND** the system SHALL use the GitHub Copilot SDK with BYOK provider config for code generation
+#### Scenario: Pipeline stages kick off after task creation
+- **WHEN** a dev task is created via `POST /api/dev`
+- **THEN** the pipeline stages SHALL begin executing in the background within 1 second
+- **AND** each stage transition SHALL be logged with a correlation ID
 
-#### Scenario: Sequence mode pipeline
-- **WHEN** a pipeline is triggered with mode "sequence"
-- **THEN** the system SHALL create N iterations: iteration 0 for the foundation spec, iterations 1..N for each feature spec
-- **AND** each iteration SHALL have its own Plan → Build → Run → Test stages
-- **AND** the Plan stage for each iteration SHALL include context from all previously completed iterations
-- **AND** the Build stage for the foundation iteration SHALL generate the base application
-- **AND** the Build stage for feature iterations SHALL add functionality to the existing workspace from the previous iteration
-
-#### Scenario: Plan stage output
-- **WHEN** the Plan stage completes for any iteration
-- **THEN** the plan output SHALL be stored as structured content (not just raw text)
-- **AND** the plan SHALL reference the spec part (foundation or feature) being developed
-
-#### Scenario: Pipeline failure in sequence mode
-- **WHEN** an iteration fails in sequence mode
-- **THEN** the pipeline SHALL stop at that iteration
-- **AND** previous completed iterations SHALL remain intact
-- **AND** the task status SHALL be set to "failed" with the current iteration index recorded
+#### Scenario: Pipeline execution in production container environment
+- **WHEN** a dev task is created in an Azure Container Apps deployment
+- **THEN** the background task SHALL execute reliably regardless of container scaling events
+- **AND** if the background task fails to spawn, the task status SHALL be set to "failed" with a descriptive error
 
 ### Requirement: Development Task Artifacts
 The system SHALL store and serve artifacts produced during pipeline execution.

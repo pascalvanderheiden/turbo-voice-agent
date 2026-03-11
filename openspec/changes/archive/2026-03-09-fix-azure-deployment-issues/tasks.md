@@ -15,13 +15,13 @@
 - [x] 2.4 Make create endpoint resilient — wrap iteration population and skill attachment in try/except
 - [x] 2.5 Fix frontend to separate create and trigger errors (create can succeed while trigger fails)
 - [x] 2.6 Pass mode parameter during create to backend
-- [ ] 2.7 Verify fix in deployed environment with end-to-end test
+- [x] 2.7 Verify fix in deployed environment with end-to-end test
 
 ## 3. Skills Storage Fix
 - [x] 3.1 Fix userId resolution — add missing `Request` import in main.py (root cause of default-user)
 - [x] 3.2 Fix skill file storage to use Azure Blob Storage in production
-- [ ] 3.3 Verify skills appear correctly in Cosmos DB with proper userId
-- [ ] 3.4 Verify skill files are accessible on Blob Storage
+- [x] 3.3 Verify skills appear correctly in Cosmos DB with proper userId
+- [x] 3.4 Verify skill files are accessible on Blob Storage
 
 ## 4. Dashboard Marketing Tile
 - [x] 4.1 Add Marketing summary card to Dashboard page
@@ -49,7 +49,7 @@
 - [x] 8.2 Add deployer principal ID parameter to main.bicep for RBAC assignments
 - [x] 8.3 Add Cosmos DB Data Contributor RBAC for deployer identity
 - [x] 8.4 Add Storage Blob Data Contributor RBAC for deployer identity
-- [ ] 8.5 Set DEPLOYER_PRINCIPAL_ID env var and run `azd up` to apply infra changes
+- [x] 8.5 Set DEPLOYER_PRINCIPAL_ID env var and run `azd up` to apply infra changes
 
 ## 9. Deep Research Disable
 - [x] 9.1 Disable deep research button in UI with "unavailable" indicator

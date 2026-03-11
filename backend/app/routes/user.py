@@ -78,7 +78,7 @@ async def update_profile(request: Request):
 
 @router.get("/me/photo")
 async def get_profile_photo(request: Request):
-    """Get profile photo — check Blob Storage first, then proxy Microsoft Graph."""
+    """Get profile photo — check Blob Storage first, then local uploads, then proxy Microsoft Graph."""
     user_id, _ = _get_user(request)
 
     # Check if user has a custom uploaded photo in Blob Storage
@@ -111,6 +111,21 @@ async def get_profile_photo(request: Request):
                         return Response(content=photo_data, media_type=content_type)
                     except Exception:
                         logger.warning("Failed to fetch custom profile photo from Blob for user %s", user_id)
+
+        # Check for locally uploaded photo (local dev without Cosmos)
+        from pathlib import Path
+        upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads" / "profile-photos"
+        if upload_dir.exists():
+            user_photos = sorted(
+                upload_dir.glob(f"{user_id}_*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if user_photos:
+                photo_data = user_photos[0].read_bytes()
+                ext = user_photos[0].suffix.lower().lstrip(".")
+                ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+                return Response(content=photo_data, media_type=ct.get(ext, "image/jpeg"))
 
     # Fallback to Microsoft Graph photo
     auth_header = request.headers.get("Authorization", "")
@@ -195,22 +210,22 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
             return {"success": True, "photoUrl": photo_url}
 
         except Exception:
-            logger.exception("Failed to upload profile photo to Blob Storage")
-            return JSONResponse(status_code=500, content={"detail": "Failed to upload photo"})
-    else:
-        # Local dev: save to uploads directory
-        from pathlib import Path
-        upload_dir = Path(__file__).parent.parent.parent / "uploads" / "profile-photos"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "jpg"
-        filename = f"{user_id}_{uuid.uuid4()}.{ext}"
-        filepath = upload_dir / filename
-        filepath.write_bytes(content)
-        photo_url = f"/uploads/profile-photos/{filename}"
+            logger.exception("Failed to upload profile photo to Blob Storage — falling back to local")
+            # Fall through to local storage below
 
-        svc = request.app.state.user_profile_service
-        if svc:
-            await svc.update_profile_photo_url(user_id, photo_url)
+    # Local dev (or Blob Storage fallback): save to uploads directory
+    from pathlib import Path
+    upload_dir = Path(__file__).parent.parent.parent / "uploads" / "profile-photos"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "jpg"
+    filename = f"{user_id}_{uuid.uuid4()}.{ext}"
+    filepath = upload_dir / filename
+    filepath.write_bytes(content)
+    photo_url = f"/uploads/profile-photos/{filename}"
 
-        logger.info("Saved profile photo locally for user %s: %s", user_id, filename)
-        return {"success": True, "photoUrl": photo_url}
+    svc = request.app.state.user_profile_service
+    if svc:
+        await svc.update_profile_photo_url(user_id, photo_url)
+
+    logger.info("Saved profile photo locally for user %s: %s", user_id, filename)
+    return {"success": True, "photoUrl": photo_url}

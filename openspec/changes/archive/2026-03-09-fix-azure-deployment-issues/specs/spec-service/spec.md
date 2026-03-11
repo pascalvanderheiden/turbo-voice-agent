@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Spec Naming
 The spec-service SHALL store spec titles without type suffixes. When returning specs via the API, the title field SHALL contain only the user-provided title (e.g., "My App") without appending "- Foundation" or "- Feature". The spec type SHALL be conveyed solely through the `type` field in the spec data model. Existing specs with type suffixes in titles SHALL be normalized on read.

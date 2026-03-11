@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { notesApi, getUploadUrl, type Note } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { ImageUpload } from "@/components/ui/image-upload";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { MobileBottomSheet } from "@/components/ui/mobile-bottom-sheet";
 
 export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([]);
@@ -15,6 +17,7 @@ export default function NotesPage() {
   const [deleteNote, setDeleteNote] = useState<Note | null>(null);
   const [viewNote, setViewNote] = useState<Note | null>(null);
   const { t } = useI18n();
+  const isMobile = useIsMobile();
 
   const loadNotes = useCallback(async () => {
     try {
@@ -34,8 +37,41 @@ export default function NotesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Detail view */}
-      {viewNote ? (
+      {/* Mobile detail bottom sheet */}
+      {isMobile && viewNote && (
+        <MobileBottomSheet open={!!viewNote} onClose={() => setViewNote(null)} title={viewNote.title}>
+          <div className="space-y-4">
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {new Date(viewNote.updatedAt).toLocaleDateString()}
+            </p>
+            <p className="text-sm whitespace-pre-wrap">{viewNote.content}</p>
+            {viewNote.images && viewNote.images.length > 0 && (
+              <div className="flex flex-wrap gap-3">
+                {viewNote.images.map((url, i) => (
+                  <img key={i} src={getUploadUrl(url)} alt="" className="w-24 h-24 object-cover rounded-[var(--radius-md)] border border-[var(--color-border-dark)]" />
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setEditNote(viewNote); setViewNote(null); }}
+                className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-[var(--color-brand-cyan)] text-white text-sm font-medium hover:opacity-90 transition-opacity min-h-[44px]"
+              >
+                <IconPencil size={16} /> {t("notes.edit")}
+              </button>
+              <button
+                onClick={() => { setDeleteNote(viewNote); }}
+                className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors min-h-[44px]"
+              >
+                <IconTrash size={16} /> {t("notes.delete")}
+              </button>
+            </div>
+          </div>
+        </MobileBottomSheet>
+      )}
+
+      {/* Desktop detail view */}
+      {!isMobile && viewNote ? (
         <>
           <button
             onClick={() => setViewNote(null)}
@@ -88,6 +124,7 @@ export default function NotesPage() {
             {t("notes.subtitle")}
           </p>
         </div>
+        {!isMobile && (
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
@@ -95,6 +132,7 @@ export default function NotesPage() {
           <IconPlus size={16} />
           {t("notes.create")}
         </button>
+        )}
       </div>
 
       {/* Notes Table */}
@@ -108,6 +146,20 @@ export default function NotesPage() {
           <p className="text-xs mt-1">{t("notes.emptyHint")}</p>
         </div>
       ) : (
+        isMobile ? (
+          <div className="space-y-2">
+            {notes.map((note) => (
+              <button
+                key={note.id}
+                onClick={() => setViewNote(note)}
+                className="w-full text-left p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] min-h-[44px] active:bg-[var(--color-bg-tertiary)] transition-colors"
+              >
+                <p className="font-medium text-sm">{note.title}</p>
+                <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{note.content}</p>
+              </button>
+            ))}
+          </div>
+        ) : (
         <div className="border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -156,12 +208,25 @@ export default function NotesPage() {
             </tbody>
           </table>
         </div>
+        )
       )}
       </>
       )}
 
       {/* Create Dialog */}
       {showCreate && (
+        isMobile ? (
+          <MobileBottomSheet open={showCreate} onClose={() => setShowCreate(false)} title={t("notes.createDialog")}>
+            <NoteForm
+              onSubmit={async (title, content, images) => {
+                await notesApi.create({ title, content, images });
+                toast.success(t("notes.created"));
+                setShowCreate(false);
+                loadNotes();
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <NoteDialog
           onClose={() => setShowCreate(false)}
           onSubmit={async (title, content, images) => {
@@ -171,10 +236,26 @@ export default function NotesPage() {
             loadNotes();
           }}
         />
+        )
       )}
 
       {/* Edit Dialog */}
       {editNote && (
+        isMobile ? (
+          <MobileBottomSheet open={!!editNote} onClose={() => setEditNote(null)} title={t("notes.editDialog")}>
+            <NoteForm
+              initialTitle={editNote.title}
+              initialContent={editNote.content}
+              initialImages={editNote.images ?? []}
+              onSubmit={async (title, content, images) => {
+                await notesApi.update(editNote.id, { title, content, images });
+                toast.success(t("notes.updated"));
+                setEditNote(null);
+                loadNotes();
+              }}
+            />
+          </MobileBottomSheet>
+        ) : (
         <NoteDialog
           initialTitle={editNote.title}
           initialContent={editNote.content}
@@ -187,6 +268,7 @@ export default function NotesPage() {
             loadNotes();
           }}
         />
+        )
       )}
 
       {/* Delete Dialog */}
@@ -218,6 +300,17 @@ export default function NotesPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Mobile FAB */}
+      {isMobile && !showCreate && !editNote && !viewNote && (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="fixed bottom-20 right-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-[var(--color-brand-pink)] text-white shadow-lg shadow-[var(--color-brand-pink)]/25 hover:opacity-90 transition-opacity"
+          title={t("notes.create")}
+        >
+          <IconPlus size={24} />
+        </button>
       )}
     </div>
   );
@@ -292,6 +385,63 @@ function NoteDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function NoteForm({
+  initialTitle = "",
+  initialContent = "",
+  initialImages = [],
+  onSubmit,
+}: {
+  initialTitle?: string;
+  initialContent?: string;
+  initialImages?: string[];
+  onSubmit: (title: string, content: string, images: string[]) => Promise<void>;
+}) {
+  const [noteTitle, setNoteTitle] = useState(initialTitle);
+  const [noteContent, setNoteContent] = useState(initialContent);
+  const [images, setImages] = useState<string[]>(initialImages);
+  const [submitting, setSubmitting] = useState(false);
+  const { t } = useI18n();
+
+  const handleSubmit = async () => {
+    if (!noteTitle.trim() || !noteContent.trim()) return;
+    setSubmitting(true);
+    try {
+      await onSubmit(noteTitle, noteContent, images);
+    } catch {
+      toast.error(t("notes.failed"));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <input
+        type="text"
+        placeholder={t("notes.titlePlaceholder")}
+        value={noteTitle}
+        onChange={(e) => setNoteTitle(e.target.value)}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors min-h-[44px]"
+      />
+      <textarea
+        placeholder={t("notes.contentPlaceholder")}
+        value={noteContent}
+        onChange={(e) => setNoteContent(e.target.value)}
+        rows={6}
+        className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none"
+      />
+      <ImageUpload images={images} onChange={setImages} />
+      <button
+        onClick={handleSubmit}
+        disabled={submitting || !noteTitle.trim() || !noteContent.trim()}
+        className="w-full px-4 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]"
+      >
+        {submitting ? t("notes.saving") : t("notes.save")}
+      </button>
     </div>
   );
 }
