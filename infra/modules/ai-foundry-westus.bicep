@@ -54,7 +54,7 @@ resource o3DeepResearch 'Microsoft.CognitiveServices/accounts/deployments@2025-0
   name: 'o3-deep-research'
   sku: {
     name: 'GlobalStandard'
-    capacity: 50
+    capacity: 1500
   }
   properties: {
     model: {

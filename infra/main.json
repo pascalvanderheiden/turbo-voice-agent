@@ -703,7 +703,7 @@
               "name": "[format('{0}/{1}', parameters('name'), 'o3-deep-research')]",
               "sku": {
                 "name": "GlobalStandard",
-                "capacity": 50
+                "capacity": 1500
               },
               "properties": {
                 "model": {
