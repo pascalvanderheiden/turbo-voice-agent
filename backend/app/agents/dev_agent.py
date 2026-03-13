@@ -113,23 +113,31 @@ class DevAgent:
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid arguments"})
 
+        service = self._service.with_user(user_id)
+
         if function_name == "create_dev_task":
             from app.models.dev_task import DevTaskCreate
             mode = args.get("mode", "mock")
-            task = await self._service.create(
+            task = await service.create(
                 DevTaskCreate(title=args["title"], specId=args.get("spec_id"), mode=mode)
             )
             # If linked to a spec, populate iterations and set bidirectional link
             if args.get("spec_id") and self._spec_service:
-                await self._populate_iterations_from_spec(task.id, args["spec_id"], mode)
-                await self._spec_service.set_dev_task_id(args["spec_id"], task.id, "in-development")
+                try:
+                    await self._populate_iterations_from_spec(task.id, args["spec_id"], mode, user_id=user_id)
+                    await self._spec_service.with_user(user_id).set_dev_task_id(args["spec_id"], task.id, "in-development")
+                except Exception:
+                    logger.exception("Failed to populate iterations / link spec for task %s", task.id)
             # Auto-attach relevant skills based on title + spec content
-            await self._auto_attach_skills(task.id, args["title"], args.get("spec_id"))
-            task = await self._service.get_by_id(task.id)
+            try:
+                await self._auto_attach_skills(task.id, args["title"], args.get("spec_id"), user_id=user_id)
+            except Exception:
+                logger.exception("Failed to auto-attach skills for task %s", task.id)
+            task = await service.get_by_id(task.id)
             return json.dumps({"success": True, "task": {"id": task.id, "title": task.title, "mode": task.mode}})
 
         elif function_name == "get_dev_tasks":
-            tasks = await self._service.list()
+            tasks = await service.list()
             return json.dumps({
                 "tasks": [
                     {
@@ -142,7 +150,7 @@ class DevAgent:
             })
 
         elif function_name == "get_dev_task":
-            task = await self._service.get_by_id(args["task_id"])
+            task = await service.get_by_id(args["task_id"])
             if task:
                 return json.dumps({
                     "task": {
@@ -159,17 +167,17 @@ class DevAgent:
             return json.dumps({"error": "Dev task not found"})
 
         elif function_name == "delete_dev_task":
-            deleted = await self._service.delete(args["task_id"])
+            deleted = await service.delete(args["task_id"])
             return json.dumps({"success": deleted})
 
         elif function_name == "trigger_dev_pipeline":
-            task = await self._service.get_by_id(args["task_id"])
+            task = await service.get_by_id(args["task_id"])
             if not task:
                 return json.dumps({"error": "Dev task not found"})
             if task.status not in ("pending", "failed"):
                 return json.dumps({"error": "Task already running or completed"})
-            await self._service.set_status(args["task_id"], "running")
-            asyncio.create_task(self.run_pipeline(args["task_id"]))
+            await service.set_status(args["task_id"], "running")
+            asyncio.create_task(self.run_pipeline(args["task_id"], user_id=user_id))
             return json.dumps({"success": True, "message": f"Pipeline started (mode: {task.mode})"})
 
         return json.dumps({"error": f"Unknown function: {function_name}"})
@@ -461,13 +469,14 @@ class DevAgent:
 
     # ── Shared pipeline stages ──────────────────────────────────────
 
-    async def _auto_attach_skills(self, task_id: str, title: str, spec_id: str | None = None) -> None:
+    async def _auto_attach_skills(self, task_id: str, title: str, spec_id: str | None = None, user_id: str | None = None) -> None:
         """Auto-suggest and attach relevant skills to a task based on title + spec content."""
         if not self._skills_service:
             return
         content = title
         if spec_id and self._spec_service:
-            spec = await self._spec_service.get_by_id(spec_id)
+            spec_svc = self._spec_service.with_user(user_id) if user_id else self._spec_service
+            spec = await spec_svc.get_by_id(spec_id)
             if spec:
                 content = f"{spec.title} {spec.content} {title}"
         suggested = self._skills_service.suggest_skills_for_content(content)
