@@ -67,6 +67,8 @@ export default function MarketingDetailPage() {
   }
 
   const isInProgress = ["pending", "scripting", "generating", "composing"].includes(video.status);
+  // Use blob storage URL if available, otherwise fall back to streaming endpoint
+  const effectiveVideoUrl = video.videoUrl || (video.videoPath ? marketingApi.videoUrl(video.id) : null);
 
   const statusSteps = [
     { key: "pending", label: "Pending", icon: IconVideo },
@@ -164,12 +166,12 @@ export default function MarketingDetailPage() {
       </div>
 
       {/* Video Player */}
-      {video.status === "completed" && video.videoUrl && (
+      {video.status === "completed" && effectiveVideoUrl && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
           <video
             controls
             className="w-full aspect-video bg-black"
-            src={video.videoUrl}
+            src={effectiveVideoUrl}
           >
             Your browser does not support the video element.
           </video>
@@ -180,7 +182,7 @@ export default function MarketingDetailPage() {
               </span>
             ) : <span />}
             <a
-              href={video.videoUrl}
+              href={effectiveVideoUrl}
               download={`${video.title.replace(/\s+/g, "-").toLowerCase()}.mp4`}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors"
             >
@@ -191,8 +193,8 @@ export default function MarketingDetailPage() {
         </div>
       )}
 
-      {/* Completed but no video URL (legacy) */}
-      {video.status === "completed" && !video.videoUrl && (
+      {/* Completed but no video URL or path */}
+      {video.status === "completed" && !effectiveVideoUrl && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 text-center">
           <p className="text-sm text-[var(--color-text-muted)]">Video generated but URL unavailable. Try re-triggering generation.</p>
         </div>
