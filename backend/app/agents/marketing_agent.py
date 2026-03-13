@@ -222,6 +222,9 @@ class MarketingAgent:
                 logger.error("Marketing pipeline: video %s not found (user_id=%s)", video_id, user_id)
                 return
 
+            # Transition to scripting immediately so the UI shows progress
+            await service.set_status(video_id, "scripting", error=None)
+
             screenshots, spec_content = await self._gather_materials_scoped(video, dev_svc, spec_svc)
             if not screenshots:
                 await service.set_status(video_id, "failed", error="No screenshots found in linked dev task")
@@ -231,9 +234,6 @@ class MarketingAgent:
             profile_photo: bytes | None = None
             if user_id and self._profile_service:
                 profile_photo = await self._fetch_profile_photo(user_id)
-
-            # Clear previous error on new run
-            await service.set_status(video_id, "scripting", error=None)
             script = await self._generate_script(video.title, spec_content, screenshots, has_profile_photo=profile_photo is not None)
             await service.set_status(video_id, "scripting", script_content=script)
 
@@ -346,8 +346,8 @@ class MarketingAgent:
                     "role": "system",
                     "content": (
                         "You are a creative marketing scriptwriter for software products. "
-                        "You will create a ~30 second promotional video script broken into "
-                        "3 individual segments of ~10 seconds each.\n\n"
+                        "You will create a ~36 second promotional video script broken into "
+                        "3 individual segments of 12 seconds each.\n\n"
                         "Each segment will be generated as a separate Sora-2 video clip, "
                         "then stitched together into one final video.\n\n"
                         "IMPORTANT: Each segment will receive a reference image as input to Sora-2. "
@@ -473,7 +473,7 @@ class MarketingAgent:
                         "model": deployment,
                         "prompt": prompt,
                         "size": "1280x720",
-                        "seconds": 10,
+                        "seconds": 12,
                     }
 
                     # Attach reference image: profile photo for hook/cta, screenshot for features
@@ -489,23 +489,46 @@ class MarketingAgent:
                         logger.info("Segment %d: attaching screenshot '%s' as input image", idx, screenshots[screenshot_idx][0])
 
                     if input_image:
-                        img_b64 = base64.b64encode(input_image).decode()
                         # Detect image type
-                        mime = "image/png"
-                        if input_image[:3] == b'\xff\xd8\xff':
-                            mime = "image/jpeg"
-                        elif input_image[:4] == b'\x89PNG':
+                        mime = "image/jpeg"
+                        ext = "jpg"
+                        if input_image[:4] == b'\x89PNG':
                             mime = "image/png"
-                        payload["image_reference"] = {
-                            "image_url": f"data:{mime};base64,{img_b64}"
-                        }
+                            ext = "png"
+                        elif input_image[:4] == b'RIFF' and input_image[8:12] == b'WEBP':
+                            mime = "image/webp"
+                            ext = "webp"
+
+                        # Use multipart/form-data so input_reference is sent as a file upload
+                        form = aiohttp.FormData()
+                        form.add_field("model", payload["model"])
+                        form.add_field("prompt", payload["prompt"])
+                        form.add_field("size", payload["size"])
+                        form.add_field("seconds", str(payload["seconds"]))
+                        form.add_field(
+                            "input_reference",
+                            input_image,
+                            filename=f"reference.{ext}",
+                            content_type=mime,
+                        )
 
                     # Create video
-                    async with session.post(create_url, headers=headers, json=payload) as resp:
-                        if resp.status != 200:
-                            body = await resp.text()
-                            raise RuntimeError(f"Segment {idx} creation failed: {resp.status} - {body}")
-                        result = await resp.json()
+                    async def _create_video():
+                        if input_image:
+                            multipart_headers = {"Authorization": f"Bearer {api_key}"}
+                            async with session.post(create_url, headers=multipart_headers, data=form) as resp:
+                                if resp.status != 200:
+                                    body = await resp.text()
+                                    raise RuntimeError(f"Segment {idx} creation failed: {resp.status} - {body}")
+                                return await resp.json()
+                        else:
+                            async with session.post(create_url, headers=headers, json=payload) as resp:
+                                if resp.status != 200:
+                                    body = await resp.text()
+                                    raise RuntimeError(f"Segment {idx} creation failed: {resp.status} - {body}")
+                                return await resp.json()
+
+                    result = await _create_video()
 
                     task_id = result.get("id")
                     if not task_id:
