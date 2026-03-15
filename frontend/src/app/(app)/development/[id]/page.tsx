@@ -194,7 +194,7 @@ export default function DevTaskDetailPage() {
   const screenshots = task.artifacts.filter((a) => a.type === "screenshot" && a.name.endsWith(".png"));
   const hasArchive = task.artifacts.some((a) => a.type === "archive");
   const iterations = task.iterations.length > 0 ? task.iterations : [{ iterationIndex: 0, label: task.title, stages: task.stages, specPartId: undefined, workspacePath: undefined }];
-  const isSequence = task.mode === "sequence" && iterations.length > 1;
+  const isOpenSpec = task.mode === "openspec" && iterations.length > 1;
 
   return (
     <div className="space-y-6">
@@ -207,9 +207,9 @@ export default function DevTaskDetailPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold truncate">{task.title}</h1>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 ${
-              task.mode === "sequence" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+              task.mode === "openspec" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
             }`}>
-              {task.mode === "sequence" ? "Sequence" : "Mock"}
+              {task.mode === "openspec" ? "OpenSpec" : "Mockup"}
             </span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)]">Created {new Date(task.createdAt).toLocaleString()}</p>
@@ -240,8 +240,8 @@ export default function DevTaskDetailPage() {
         )}
       </div>
 
-      {/* Iteration tabs for sequence mode */}
-      {isSequence && (
+      {/* Iteration tabs for openspec mode */}
+      {isOpenSpec && (
         <div className="flex gap-1 overflow-x-auto pb-1">
           {iterations.map((it, i) => {
             const allDone = it.stages.every((s) => s.status === "completed");
@@ -272,7 +272,7 @@ export default function DevTaskDetailPage() {
       {/* Active iteration stages */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-6">
-          {isSequence ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
+          {isOpenSpec ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
         </h2>
         <IterationStages stages={iterations[activeIteration]?.stages || task.stages} />
       </div>
@@ -285,7 +285,7 @@ export default function DevTaskDetailPage() {
         {screenshots.length > 0 ? (
           <div className="space-y-6">
             {/* Per-iteration screenshots (when sequence mode) */}
-            {isSequence && (() => {
+            {isOpenSpec && (() => {
               const iterScreenshots = new Map<number, typeof screenshots>();
               for (const s of screenshots) {
                 const idx = s.iterationIndex ?? 0;
@@ -322,7 +322,7 @@ export default function DevTaskDetailPage() {
             })()}
 
             {/* Combined gallery (always shown) */}
-            {isSequence && screenshots.length > 0 && (
+            {isOpenSpec && screenshots.length > 0 && (
               <div>
                 <h3 className="text-xs font-medium text-[var(--color-text-secondary)] mb-3">All Screenshots</h3>
               </div>
@@ -336,7 +336,7 @@ export default function DevTaskDetailPage() {
                 >
                   <img src={`data:image/png;base64,${artifact.data}`} alt={artifact.name} className="w-full group-hover:opacity-90 transition-opacity" />
                   <div className="p-2 text-xs text-[var(--color-text-muted)] flex items-center justify-between">
-                    <span>{artifact.name}{artifact.iterationIndex != null && isSequence ? ` (${iterations[artifact.iterationIndex]?.label || `Iter ${artifact.iterationIndex}`})` : ""}</span>
+                    <span>{artifact.name}{artifact.iterationIndex != null && isOpenSpec ? ` (${iterations[artifact.iterationIndex]?.label || `Iter ${artifact.iterationIndex}`})` : ""}</span>
                     <span className="text-[10px] text-[var(--color-brand-pink)]">Click to zoom</span>
                   </div>
                 </div>

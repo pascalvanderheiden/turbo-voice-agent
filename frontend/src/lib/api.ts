@@ -21,7 +21,7 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
-async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await getAccessToken();
   const headers = new Headers(init?.headers);
   if (token) {

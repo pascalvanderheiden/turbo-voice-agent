@@ -11,6 +11,7 @@ import {
   IconVideo,
   IconBolt,
   IconMessageCircle,
+  IconPlugConnected,
 } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
@@ -22,6 +23,7 @@ const secondaryNav = [
   { href: "/marketing", labelKey: "nav.marketing", icon: IconVideo },
   { href: "/agents", labelKey: "nav.agents", icon: IconBolt },
   { href: "/chat", labelKey: "nav.chat", icon: IconMessageCircle },
+  { href: "/settings", labelKey: "nav.settings", icon: IconPlugConnected },
 ];
 
 export function MobileHeader() {

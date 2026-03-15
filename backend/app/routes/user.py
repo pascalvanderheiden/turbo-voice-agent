@@ -167,6 +167,115 @@ async def disconnect_todo(request: Request):
     return {"connected": False}
 
 
+# ── GitHub Copilot Sandbox Connection ─────────────────────────
+
+
+@router.get("/me/connections/github-sandbox")
+async def get_sandbox_connection_status(request: Request):
+    """Check whether the user has connected GitHub for the Copilot CLI sandbox."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    conn = _connection_store.get(f"sandbox:{user_id}")
+    if conn:
+        return {"connected": True, "connectedAt": conn.get("connectedAt", "")}
+
+    # Also check Cosmos profile
+    svc = request.app.state.user_profile_service
+    if svc:
+        profile = await svc.get_profile(user_id)
+        if profile and profile.get("githubSandboxToken"):
+            return {"connected": True, "connectedAt": profile.get("githubSandboxConnectedAt", "")}
+
+    return {"connected": False}
+
+
+@router.put("/me/connections/github-sandbox")
+async def set_sandbox_token(request: Request):
+    """Store a GitHub personal access token for the Copilot CLI sandbox."""
+    import datetime
+
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    body = await request.json()
+    token = body.get("token", "").strip()
+    if not token:
+        return JSONResponse(status_code=400, content={"detail": "token is required"})
+
+    # Encrypt token before storing
+    encrypted = _encrypt_sandbox_token(token)
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+
+    # Store in-memory (local dev)
+    _connection_store[f"sandbox:{user_id}"] = {
+        "token": encrypted,
+        "connectedAt": now,
+    }
+
+    # Also persist to Cosmos profile if available
+    svc = request.app.state.user_profile_service
+    if svc:
+        try:
+            await svc.update_sandbox_token(user_id, encrypted, now)
+        except Exception:
+            logger.exception("Failed to persist sandbox token to Cosmos for user %s", user_id)
+
+    logger.info("GitHub sandbox token stored for user %s", user_id)
+    return {"connected": True, "connectedAt": now}
+
+
+@router.delete("/me/connections/github-sandbox")
+async def disconnect_sandbox(request: Request):
+    """Disconnect GitHub sandbox — remove stored token."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    _connection_store.pop(f"sandbox:{user_id}", None)
+
+    svc = request.app.state.user_profile_service
+    if svc:
+        try:
+            await svc.update_sandbox_token(user_id, None, None)
+        except Exception:
+            logger.exception("Failed to clear sandbox token in Cosmos for user %s", user_id)
+
+    logger.info("GitHub sandbox disconnected for user %s", user_id)
+    return {"connected": False}
+
+
+def _encrypt_sandbox_token(token: str) -> str:
+    """Encrypt a sandbox token using SANDBOX_TOKEN_KEY env var (simple XOR for now)."""
+    key = os.environ.get("SANDBOX_TOKEN_KEY", "default-dev-key-not-for-production")
+    import base64
+    # Simple reversible encoding — production should use Fernet or Azure Key Vault
+    key_bytes = key.encode()
+    token_bytes = token.encode()
+    encrypted = bytes(t ^ key_bytes[i % len(key_bytes)] for i, t in enumerate(token_bytes))
+    return base64.b64encode(encrypted).decode()
+
+
+def _decrypt_sandbox_token(encrypted: str) -> str:
+    """Decrypt a sandbox token."""
+    key = os.environ.get("SANDBOX_TOKEN_KEY", "default-dev-key-not-for-production")
+    import base64
+    key_bytes = key.encode()
+    encrypted_bytes = base64.b64decode(encrypted.encode())
+    decrypted = bytes(e ^ key_bytes[i % len(key_bytes)] for i, e in enumerate(encrypted_bytes))
+    return decrypted.decode()
+
+
+async def get_sandbox_user_token(user_id: str) -> str | None:
+    """Retrieve the decrypted GitHub sandbox token for a user."""
+    conn = _connection_store.get(f"sandbox:{user_id}")
+    if conn and conn.get("token"):
+        return _decrypt_sandbox_token(conn["token"])
+    return None
+
+
 async def get_todo_user_token(user_id: str) -> str | None:
     """Retrieve the stored Microsoft To-Do refresh token for a user.
 

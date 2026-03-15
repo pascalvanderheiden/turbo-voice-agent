@@ -24,6 +24,8 @@ SKILLS_CONTAINER_ID = "skills"
 SKILLS_PARTITION_KEY = "/userId"
 PROFILES_CONTAINER_ID = "profiles"
 PROFILES_PARTITION_KEY = "/userId"
+SANDBOX_STATE_CONTAINER_ID = "sandbox_state"
+SANDBOX_STATE_PARTITION_KEY = "/userId"
 
 
 async def ensure_database_and_containers(client: CosmosClient) -> None:
@@ -38,6 +40,7 @@ async def ensure_database_and_containers(client: CosmosClient) -> None:
         (MARKETING_CONTAINER_ID, MARKETING_PARTITION_KEY),
         (SKILLS_CONTAINER_ID, SKILLS_PARTITION_KEY),
         (PROFILES_CONTAINER_ID, PROFILES_PARTITION_KEY),
+        (SANDBOX_STATE_CONTAINER_ID, SANDBOX_STATE_PARTITION_KEY),
     ]:
         await database.create_container_if_not_exists(
             id=cid,

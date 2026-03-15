@@ -151,7 +151,7 @@ export default function DevelopmentPage() {
 
   const handleCreate = async (title: string, specId?: string, mode?: string, skillIds?: string[]) => {
     try {
-      await devApi.create({ title, specId: specId || undefined, mode: mode || "mock", skillIds });
+      await devApi.create({ title, specId: specId || undefined, mode: mode || "mockup", skillIds });
       setShowCreate(false);
       loadTasks();
       toast.success(t("dev.created"));
@@ -237,13 +237,13 @@ export default function DevelopmentPage() {
 
                 <div className="flex items-center gap-2 mb-3">
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                    task.mode === "sequence"
+                    task.mode === "openspec"
                       ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
                       : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                   }`}>
-                    {task.mode === "sequence" ? "Sequence" : "Mock"}
+                    {task.mode === "openspec" ? "OpenSpec" : "Mockup"}
                   </span>
-                  {task.mode === "sequence" && task.iterations.length > 1 && (
+                  {task.mode === "openspec" && task.iterations.length > 1 && (
                     <span className="text-[10px] text-[var(--color-text-muted)]">
                       {task.iterations.filter(it => it.stages.every(s => s.status === "completed")).length}/{task.iterations.length} iterations
                     </span>
@@ -325,7 +325,7 @@ export default function DevelopmentPage() {
 function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: () => void; onCreate: (title: string, specId?: string, mode?: string, skillIds?: string[]) => void }) {
   const [title, setTitle] = useState("");
   const [specId, setSpecId] = useState("");
-  const [mode, setMode] = useState("mock");
+  const [mode, setMode] = useState("mockup");
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const { t } = useI18n();
@@ -384,25 +384,25 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
             <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Pipeline Mode</label>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setMode("mock")}
+                onClick={() => setMode("mockup")}
                 className={`p-3 rounded-[var(--radius-md)] border text-sm text-left transition-all ${
-                  mode === "mock"
+                  mode === "mockup"
                     ? "border-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10"
                     : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
                 }`}
               >
-                <div className="font-medium text-[var(--color-text-primary)]">Mock</div>
+                <div className="font-medium text-[var(--color-text-primary)]">Mockup</div>
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Quick GUI preview from full spec</div>
               </button>
               <button
-                onClick={() => setMode("sequence")}
+                onClick={() => setMode("openspec")}
                 className={`p-3 rounded-[var(--radius-md)] border text-sm text-left transition-all ${
-                  mode === "sequence"
+                  mode === "openspec"
                     ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10"
                     : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
                 }`}
               >
-                <div className="font-medium text-[var(--color-text-primary)]">Sequence</div>
+                <div className="font-medium text-[var(--color-text-primary)]">OpenSpec</div>
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Iterative: foundation → features</div>
               </button>
             </div>

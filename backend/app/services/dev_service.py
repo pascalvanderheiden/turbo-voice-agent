@@ -59,7 +59,7 @@ class InMemoryDevService(JsonPersistenceMixin):
             id=doc["id"],
             title=doc["title"],
             specId=doc.get("specId"),
-            mode=doc.get("mode", "mock"),
+            mode=doc.get("mode", "mockup"),
             status=doc.get("status", "pending"),
             skillIds=doc.get("skillIds", []),
             currentIteration=doc.get("currentIteration", 0),

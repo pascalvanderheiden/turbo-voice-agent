@@ -11,62 +11,58 @@ from app.services.memory_spec_service import InMemorySpecService
 
 logger = logging.getLogger(__name__)
 
-FOUNDATION_SYSTEM_PROMPT = """You are an expert software architect. Given an idea description, produce a concise foundation spec in markdown.
+FOUNDATION_SYSTEM_PROMPT = """You are an expert software architect. Given an idea description, produce a two-part spec in markdown.
 
 Structure:
-## Overview
-Brief summary of the application.
 
-## Architecture
-High-level architecture pattern and key decisions.
+## Mockup Description
 
-## Tech Stack
-Languages, frameworks, databases, and infrastructure.
+A concise ~200 word description of the frontend design covering: app name, layout structure, key UI components, primary user interactions, color scheme/visual identity, and demonstrated features. This is a visual design brief — describe what the user sees and does.
 
-## Data Model
-Core entities and their relationships.
+## OpenSpec Config
 
-## Core Patterns
-Key design patterns, conventions, and constraints.
+### Foundation
 
-Keep it concise — no more than 500 words. Focus on decisions, not explanations."""
+A single openspec-propose prompt instruction for the app's core architecture and foundation. This should be a clear, focused instruction that can be passed directly to `openspec-propose` as CLI input. It should cover: project scaffolding, tech stack choices, layout structure, navigation patterns, and core architectural patterns.
 
-FEATURES_SYSTEM_PROMPT = """You are an expert software architect. Given an idea description and its foundation spec, identify the MINIMUM set of features needed.
+IMPORTANT:
+- Mockup Description must be ~200 words max — concise and visual.
+- The Foundation openspec-propose instruction should be clear, actionable, and directly usable as a single CLI prompt.
+- Do NOT include features — those will be added separately.
+- Focus on decisions, not explanations."""
 
-For each feature, produce a concise spec in this markdown format:
+FEATURES_SYSTEM_PROMPT = """You are an expert software architect. Given an idea description and its foundation spec (which contains a Mockup Description and a Foundation openspec-propose instruction), identify the MINIMUM set of features needed and produce them as markdown.
 
-## Overview
-One sentence describing the feature.
+Structure your output EXACTLY as:
 
-## Requirements
-- Bullet list of functional requirements (use SHALL).
+### Features
 
-## Acceptance Criteria
-- Bullet list of testable criteria.
+#### Feature: [Feature Name 1]
+[An openspec-propose prompt instruction for this feature — a clear, focused instruction that can be passed directly to `openspec-propose` as CLI input]
 
-## Technical Notes
-Brief implementation guidance.
+#### Feature: [Feature Name 2]
+[An openspec-propose prompt instruction for this feature]
+
+[...repeat for each feature]
 
 IMPORTANT:
 - Keep feature count to an absolute minimum (typically 3-5 features).
-- Each feature should be focused on a single capability.
-- Do NOT include foundational concerns (those are in the foundation spec).
-- Respond with a JSON array of objects with "title" and "content" fields.
-
-Example response:
-[
-  {"title": "User Authentication", "content": "## Overview\\n..."},
-  {"title": "Data Dashboard", "content": "## Overview\\n..."}
-]"""
+- Each feature openspec-propose instruction should be self-contained and can run in parallel with other features.
+- Each instruction should be clear, focused, and directly usable as a single CLI prompt.
+- Do NOT include foundational concerns (those are in the Foundation instruction).
+- Do NOT wrap in JSON or code fences — output raw markdown only.
+- Do NOT include a Mockup Description or Foundation section — only output the ### Features section."""
 
 OPTIMIZE_SYSTEM_PROMPT = """You are an expert technical writer. Optimize this development spec to be more concise, clear, and actionable.
 
 Rules:
-- Keep the same structure and sections.
+- PRESERVE the two-part format: "## Mockup Description" followed by "## OpenSpec Config" (with "### Foundation" and "### Features" subsections).
+- Mockup Description should remain ~200 words max — concise and visual.
+- Each openspec-propose instruction (Foundation and Feature blocks) should be clear, focused, and directly usable as CLI input.
 - Remove redundancy and vague language.
 - Use precise, actionable wording.
-- Use SHALL for requirements.
-- Keep it under 500 words.
+- Do NOT merge or remove sections.
+- Do NOT change section headers.
 
 Return only the improved markdown content."""
 
@@ -235,7 +231,7 @@ class SpecAgent:
 
         user_content = idea_text + research_context
 
-        # 1. Generate foundation spec
+        # 1. Generate foundation spec (Mockup Description + OpenSpec Config > Foundation)
         foundation_response = await client.chat.completions.create(
             model=deployment,
             messages=[
@@ -247,17 +243,7 @@ class SpecAgent:
         )
         foundation_content = foundation_response.choices[0].message.content or ""
 
-        foundation = await service.create(
-            SpecCreate(
-                title=title,
-                content=foundation_content,
-                type="foundation",
-                ideaId=idea_id,
-            )
-        )
-        created_specs = [{"id": foundation.id, "title": foundation.title, "type": "foundation"}]
-
-        # 2. Generate feature specs
+        # 2. Generate features section (OpenSpec Config > Features)
         features_response = await client.chat.completions.create(
             model=deployment,
             messages=[
@@ -267,33 +253,20 @@ class SpecAgent:
             max_completion_tokens=4000,
             temperature=0.5,
         )
-        features_text = features_response.choices[0].message.content or "[]"
+        features_content = features_response.choices[0].message.content or ""
 
-        # Parse feature specs JSON
-        try:
-            # Strip markdown code fences if present
-            cleaned = features_text.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                cleaned = cleaned.strip()
-            features = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse features JSON, treating as single feature")
-            features = [{"title": "Features", "content": features_text}]
+        # Combine into a single two-part spec
+        combined_content = foundation_content.rstrip() + "\n\n" + features_content.strip()
 
-        for feature in features:
-            spec = await service.create(
-                SpecCreate(
-                    title=feature.get("title", "Untitled Feature"),
-                    content=feature.get("content", ""),
-                    type="feature",
-                    parentId=foundation.id,
-                    ideaId=idea_id,
-                )
+        spec = await service.create(
+            SpecCreate(
+                title=title,
+                content=combined_content,
+                type="foundation",
+                ideaId=idea_id,
             )
-            created_specs.append({"id": spec.id, "title": spec.title, "type": "feature"})
+        )
+        created_specs = [{"id": spec.id, "title": spec.title, "type": "foundation"}]
 
         return created_specs
 

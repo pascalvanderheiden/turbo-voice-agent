@@ -12,3 +12,8 @@ class UserProfile(BaseModel):
     locale: str = "en"
     avatarUrl: str | None = None
     lastLoginAt: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    # Sandbox GitHub auth
+    githubSandboxToken: str | None = Field(None, description="Encrypted GitHub token for CLI sandbox")
+    githubSandboxConnectedAt: str | None = Field(None, description="ISO timestamp of sandbox token connection")
+    # Sandbox config
+    sandboxModel: str = Field("claude-sonnet-4", description="Default Copilot CLI model for sandbox")

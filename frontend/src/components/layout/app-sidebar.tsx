@@ -16,6 +16,7 @@ import {
   IconCode,
   IconVideo,
   IconChecklist,
+  IconSettings,
   IconChevronLeft,
   IconChevronRight,
 } from "@tabler/icons-react";
@@ -34,6 +35,7 @@ const navItems = [
   { href: "/agents", labelKey: "nav.agents", icon: IconBolt },
   { href: "/voice", labelKey: "nav.voice", icon: IconMicrophone },
   { href: "/chat", labelKey: "nav.chat", icon: IconMessageCircle },
+  { href: "/settings", labelKey: "nav.settings", icon: IconSettings },
 ];
 
 export function AppSidebar() {

@@ -489,7 +489,7 @@ function DevelopDialog({
   onClose: () => void;
   onSubmit: (mode: string) => Promise<void>;
 }) {
-  const [mode, setMode] = useState("mock");
+  const [mode, setMode] = useState("mockup");
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
@@ -504,21 +504,21 @@ function DevelopDialog({
         <p className="text-sm text-[var(--color-text-secondary)]">Choose how you want to develop this spec.</p>
         <div className="grid grid-cols-2 gap-3">
           <button
-            onClick={() => setMode("mock")}
+            onClick={() => setMode("mockup")}
             className={`p-4 rounded-[var(--radius-md)] border text-left transition-all ${
-              mode === "mock" ? "border-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
+              mode === "mockup" ? "border-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
             }`}
           >
-            <div className="font-medium">Mock</div>
+            <div className="font-medium">Mockup</div>
             <div className="text-xs text-[var(--color-text-muted)] mt-1">Quick GUI preview from full spec in one pass</div>
           </button>
           <button
-            onClick={() => setMode("sequence")}
+            onClick={() => setMode("openspec")}
             className={`p-4 rounded-[var(--radius-md)] border text-left transition-all ${
-              mode === "sequence" ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
+              mode === "openspec" ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
             }`}
           >
-            <div className="font-medium">Sequence</div>
+            <div className="font-medium">OpenSpec</div>
             <div className="text-xs text-[var(--color-text-muted)] mt-1">Iterative: foundation first, then each feature</div>
           </button>
         </div>

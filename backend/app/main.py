@@ -22,7 +22,7 @@ from app.agents.todo_agent import TodoAgent
 from app.db.cosmos import close_cosmos_client, get_cosmos_client
 from app.db.init import ensure_database_and_containers
 from app.mcp.todo_mcp_client import TodoMcpClient
-from app.routes import chat, dev, ideas, marketing, notes, research, specs, todos, upload, voice_ws
+from app.routes import chat, dev, ideas, marketing, notes, research, sandbox as sandbox_routes, specs, todos, upload, voice_ws
 from app.services.memory_brainstorm_service import InMemoryBrainstormService
 from app.services.memory_marketing_service import InMemoryMarketingService
 from app.services.memory_research_service import InMemoryResearchService
@@ -36,6 +36,8 @@ from app.services.cosmos_dev_service import DevService
 from app.services.cosmos_marketing_service import MarketingService
 from app.services.cosmos_skills_service import CosmosSkillsService
 from app.services.blob_skills_storage import BlobSkillsStorage
+from app.services.sandbox_service import SandboxService as CosmosSandboxService
+from app.services.inmemory_sandbox_service import InMemorySandboxService
 from app.services.research_client import run_deep_research, run_web_search
 from app.middleware.auth_middleware import EntraAuthMiddleware
 from app.routes.user import router as user_router
@@ -131,6 +133,18 @@ async def lifespan(app: FastAPI):
         marketing_service = InMemoryMarketingService()
         logger.info("In-memory marketing service initialized.")
 
+    # Initialize Sandbox Service
+    sandbox_service = None
+    if client:
+        try:
+            sandbox_service = CosmosSandboxService(client)
+            logger.info("Cosmos sandbox service initialized.")
+        except Exception:
+            logger.warning("Failed to init Cosmos sandbox service — using in-memory.")
+    if sandbox_service is None:
+        sandbox_service = InMemorySandboxService()
+        logger.info("In-memory sandbox service initialized.")
+
     # Initialize agents
     notes_agent = NotesAgent(notes_service)
     brainstorm_agent = BrainstormAgent(brainstorm_service)
@@ -166,6 +180,7 @@ async def lifespan(app: FastAPI):
     voice_ws.set_supervisor(supervisor)
     chat.set_supervisor(supervisor)
     dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, spec_service=spec_service, dev_agent=dev_agent)
+    sandbox_routes.set_sandbox_service(sandbox_service)
     marketing.set_marketing_service(marketing_service, agent=marketing_agent)
     todos.set_todo_agent(todo_agent)
     global _skills_service
@@ -230,6 +245,7 @@ app.include_router(upload.router)
 app.include_router(voice_ws.router)
 app.include_router(chat.router)
 app.include_router(user_router)
+app.include_router(sandbox_routes.router)
 
 
 @app.get("/install-cert")
@@ -335,7 +351,7 @@ async def agent_status():
                 "id": "dev",
                 "name": "Turbo Dev Agent",
                 "type": "specialist",
-                "model": "gpt-5.3-codex (Copilot SDK BYOK)",
+                "model": "GitHub Copilot CLI (Sandbox)",
                 "status": "online",
                 "tools": ["create_dev_task", "get_dev_tasks", "get_dev_task", "delete_dev_task", "trigger_dev_pipeline"],
                 "mcpServers": ["playwright"],

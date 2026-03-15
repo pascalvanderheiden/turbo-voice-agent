@@ -46,7 +46,7 @@ class DevTaskCreate(BaseModel):
 
     title: str = Field(..., min_length=1)
     spec_id: str | None = Field(None, alias="specId")
-    mode: str = "mock"  # mock | sequence
+    mode: str = "mockup"  # mockup | openspec
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
 
     model_config = {"populate_by_name": True}
@@ -58,14 +58,17 @@ class DevTask(BaseModel):
     id: str
     title: str
     spec_id: str | None = Field(None, alias="specId")
-    mode: str = "mock"  # mock | sequence
+    mode: str = "mockup"  # mockup | openspec
     status: str = "pending"  # pending | running | completed | failed
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
     current_iteration: int = Field(0, alias="currentIteration")
     iterations: list[DevIteration] = Field(default_factory=list)
-    # Legacy flat stages for backward compat (populated from iterations[0] for mock)
+    # Legacy flat stages for backward compat (populated from iterations[0] for mockup)
     stages: list[DevStage] = Field(default_factory=list)
     artifacts: list[DevArtifact] = Field(default_factory=list)
+    screenshots: list[str] = Field(default_factory=list)
+    artifact_url: str | None = Field(None, alias="artifactUrl")
+    sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 

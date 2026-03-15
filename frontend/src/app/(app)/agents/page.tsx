@@ -23,6 +23,7 @@ import {
   IconSettings,
 } from "@tabler/icons-react";
 import { agentsApi, notesApi, ideasApi, researchApi, specsApi, devApi, skillsApi, type AgentInfo, type AgentEdge, type InstalledSkill } from "@/lib/api";
+import { SandboxConfig } from "@/components/agents/sandbox-config";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
 
@@ -353,6 +354,9 @@ export default function AgentsPage() {
           );
         })}
       </div>
+
+      {/* Sandbox Config */}
+      <SandboxConfig className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)]" />
 
       {/* Skills Marketplace */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">

@@ -20,6 +20,7 @@ jobs:
     outputs:
       infra: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
       app: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.app == 'true' }}
+      sandbox: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.sandbox == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,11 +35,13 @@ jobs:
             app:
               - 'backend/**'
               - 'frontend/**'
+            sandbox:
+              - 'sandbox/**'
 
   deploy:
     name: ${{ needs.detect-changes.outputs.infra == 'true' && 'Provision & Deploy' || 'Deploy' }}
     needs: detect-changes
-    if: needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.app == 'true'
+    if: needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.app == 'true' || needs.detect-changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     environment: production
     env:

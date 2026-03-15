@@ -38,6 +38,7 @@ class Spec(SpecBase):
 
     id: str
     status: str = "draft"  # draft | optimized | in-development | developed
+    format_version: str = Field("v2", alias="formatVersion")  # v1 (legacy) | v2 (mockup + openspec)
     dev_task_id: str | None = Field(None, alias="devTaskId")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")

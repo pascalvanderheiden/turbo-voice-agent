@@ -26,6 +26,15 @@ services:
       context: .
       remoteBuild: true
 
+  sandbox:
+    host: containerapp
+    project: ./sandbox
+    language: js
+    docker:
+      path: ./Dockerfile
+      context: .
+      remoteBuild: true
+
 hooks:
   preprovision:
     shell: sh
