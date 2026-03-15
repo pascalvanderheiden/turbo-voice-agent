@@ -115,6 +115,23 @@ app.get("/tasks/:id/stream", (req, res) => {
   req.on("close", () => clearInterval(interval));
 });
 
+// Get task status (for polling)
+app.get("/tasks/:id/status", (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    return res.status(404).json({ error: "task not found" });
+  }
+  const code = task.exitCode();
+  res.json({
+    id: req.params.id,
+    done: code !== null,
+    exitCode: code,
+    outputLines: task.output.length,
+    // Return last 20 output lines for quick preview
+    recentOutput: task.output.slice(-20),
+  });
+});
+
 // List active/completed tasks
 app.get("/tasks", (_req, res) => {
   const list = [...tasks.entries()].map(([id, t]) => ({

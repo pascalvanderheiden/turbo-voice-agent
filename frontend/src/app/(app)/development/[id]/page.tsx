@@ -14,6 +14,7 @@ import {
   IconSettingsAutomation,
   IconMessageChatbot,
   IconPackage,
+  IconArchive,
   IconPhoto,
   IconChevronDown,
   IconChevronRight,
@@ -30,6 +31,7 @@ const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: s
   init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
   propose:     { Icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
   apply:       { Icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
+  archive:     { Icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
 };
 

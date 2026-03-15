@@ -25,15 +25,15 @@ RUN npm install -g @github/copilot
 RUN npm install -g playwright \
     && npx playwright install --with-deps chromium
 
-# OpenSpec CLI
-RUN npm install -g openspec
-
 # Create non-root agent user (mirrors official sandbox template pattern)
 RUN useradd -m -s /bin/bash agent \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # Workspace for sandbox project work
 RUN mkdir -p /workspace && chown agent:agent /workspace
+
+# OpenSpec skills for Copilot CLI (stage for runtime copy — volume mounts override /workspace)
+COPY --chown=agent:agent skills/ /opt/openspec-skills/
 
 # Configure Copilot CLI: trust /workspace, enable yolo mode
 RUN mkdir -p /home/agent/.copilot \
@@ -45,11 +45,11 @@ RUN mkdir -p /home/agent/.copilot \
 WORKDIR /app
 COPY package.json ./
 RUN npm install --production
-COPY server.js ./
-RUN chown -R agent:agent /app
+COPY server.js entrypoint.sh ./
+RUN chmod +x entrypoint.sh && chown -R agent:agent /app
 
 USER agent
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["./entrypoint.sh"]

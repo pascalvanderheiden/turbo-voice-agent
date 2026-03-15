@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import httpx
 
@@ -256,7 +257,7 @@ class DevAgent:
                 )
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
-        """Mockup pipeline: openspec init → propose → apply → screenshots."""
+        """Mockup pipeline: openspec init → propose → apply → archive → screenshots."""
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -264,36 +265,58 @@ class DevAgent:
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
 
-        # Stage: init — initialize openspec project in sandbox
+        # Stage: init — copilot init to generate instructions + verify skills
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
-            prompt="Initialize a new Next.js project with TypeScript and Tailwind CSS. "
-            "Set up the basic project structure.",
+            prompt=(
+                "Initialize this workspace for development. "
+                "Run 'copilot init' if no copilot-instructions.md exists yet. "
+                "Verify the OpenSpec skills are available in .github/skills/."
+            ),
             model=model,
             stage_label="init",
         )
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
-        # Stage: propose — send mockup description to Copilot CLI
+        # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("Mockup propose: task=%s, desc_len=%d", task_id, len(mockup_desc))
         await self._sandbox_exec(
-            prompt=f"Build a mockup application based on this description:\n\n{mockup_desc}",
+            prompt=(
+                "Use the openspec-propose skill to create a complete proposal "
+                "for this mockup application. Generate design, specs, and tasks.\n\n"
+                f"{mockup_desc}"
+            ),
             model=model,
             stage_label="propose",
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
-        # Stage: apply — install deps and verify build
+        # Stage: apply — Copilot CLI implements the proposal via openspec-apply
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
         await self._sandbox_exec(
-            prompt="Install all dependencies with npm install, fix any build errors, "
-            "and verify the project builds successfully with npm run build.",
+            prompt=(
+                "Use the openspec-apply-change skill to implement all tasks "
+                "from the proposal. Work through every task until all are complete. "
+                "Fix any build errors along the way."
+            ),
             model=model,
             stage_label="apply",
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
+
+        # Stage: archive — Copilot CLI archives the completed change
+        await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
+        await self._sandbox_exec(
+            prompt=(
+                "Use the openspec-archive-change skill to archive the completed "
+                "change. Update the generic specs with the final state."
+            ),
+            model=model,
+            stage_label="archive",
+        )
+        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
         # Stage: screenshots — capture with Playwright (best-effort)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
@@ -310,7 +333,7 @@ class DevAgent:
         logger.info("Mockup pipeline COMPLETED for task %s", task_id)
 
     async def _run_openspec_pipeline(self, task_id: str, user_id: str) -> None:
-        """OpenSpec pipeline: init → foundation → parallel features → screenshots."""
+        """OpenSpec pipeline: init → foundation propose/apply → features → archive → screenshots."""
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -322,8 +345,11 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
-            prompt="Initialize a new Next.js project with TypeScript and Tailwind CSS. "
-            "Set up the basic project structure.",
+            prompt=(
+                "Initialize this workspace for development. "
+                "Run 'copilot init' if no copilot-instructions.md exists yet. "
+                "Verify the OpenSpec skills are available in .github/skills/."
+            ),
             model=model,
             stage_label="init",
         )
@@ -332,7 +358,11 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("OpenSpec foundation propose: task=%s", task_id)
         await self._sandbox_exec(
-            prompt=f"Build the foundation of the application:\n\n{foundation_prompt}",
+            prompt=(
+                "Use the openspec-propose skill to create a proposal for the "
+                "foundation of this application. Generate design, specs, and tasks.\n\n"
+                f"{foundation_prompt}"
+            ),
             model=model,
             stage_label="foundation-propose",
         )
@@ -340,50 +370,64 @@ class DevAgent:
 
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
         await self._sandbox_exec(
-            prompt="Install all dependencies, fix any build errors, and verify "
-            "the foundation builds successfully.",
+            prompt=(
+                "Use the openspec-apply-change skill to implement all tasks "
+                "from the foundation proposal. Work through every task until done. "
+                "Fix any build errors along the way."
+            ),
             model=model,
             stage_label="foundation-apply",
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
-        # ── Features: parallel propose/apply (max 3 concurrent) ──────
-        semaphore = asyncio.Semaphore(3)
-
-        async def run_feature(idx: int, prompt: str) -> None:
-            async with semaphore:
-                iter_idx = idx + 1
-                await svc.set_iteration_stage_status(
-                    task_id, iter_idx, "propose", "running"
-                )
-                logger.info(
-                    "OpenSpec feature propose: task=%s, iter=%d", task_id, iter_idx
-                )
-                await self._sandbox_exec(
-                    prompt=f"Add this feature to the existing application:\n\n{prompt}",
-                    model=model,
-                    stage_label=f"feature-{iter_idx}-propose",
-                )
-                await svc.set_iteration_stage_status(
-                    task_id, iter_idx, "propose", "completed"
-                )
-                await svc.set_iteration_stage_status(
-                    task_id, iter_idx, "apply", "running"
-                )
-                await self._sandbox_exec(
-                    prompt="Fix any build errors from the last change and verify "
-                    "the project still builds.",
-                    model=model,
-                    stage_label=f"feature-{iter_idx}-apply",
-                )
-                await svc.set_iteration_stage_status(
-                    task_id, iter_idx, "apply", "completed"
-                )
-
-        if feature_prompts:
-            await asyncio.gather(
-                *[run_feature(i, p) for i, p in enumerate(feature_prompts)]
+        # ── Features: sequential propose/apply ───────────────────────
+        for idx, feat_prompt in enumerate(feature_prompts):
+            iter_idx = idx + 1
+            await svc.set_iteration_stage_status(
+                task_id, iter_idx, "propose", "running"
             )
+            logger.info(
+                "OpenSpec feature propose: task=%s, iter=%d", task_id, iter_idx
+            )
+            await self._sandbox_exec(
+                prompt=(
+                    "Use the openspec-propose skill to create a proposal for "
+                    "adding this feature to the existing application.\n\n"
+                    f"{feat_prompt}"
+                ),
+                model=model,
+                stage_label=f"feature-{iter_idx}-propose",
+            )
+            await svc.set_iteration_stage_status(
+                task_id, iter_idx, "propose", "completed"
+            )
+            await svc.set_iteration_stage_status(
+                task_id, iter_idx, "apply", "running"
+            )
+            await self._sandbox_exec(
+                prompt=(
+                    "Use the openspec-apply-change skill to implement all tasks "
+                    "from the latest proposal. Work through every task until done. "
+                    "Fix any build errors."
+                ),
+                model=model,
+                stage_label=f"feature-{iter_idx}-apply",
+            )
+            await svc.set_iteration_stage_status(
+                task_id, iter_idx, "apply", "completed"
+            )
+
+        # ── Archive ──────────────────────────────────────────────────
+        await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
+        await self._sandbox_exec(
+            prompt=(
+                "Use the openspec-archive-change skill to archive the completed "
+                "change. Update the generic specs with the final state."
+            ),
+            model=model,
+            stage_label="archive",
+        )
+        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
         # ── Screenshots (best-effort) ────────────────────────────────
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
@@ -409,12 +453,13 @@ class DevAgent:
         args: list[str] | None = None,
         model: str = "claude-opus-4.6",
         stage_label: str = "",
-        timeout: float = 300,
+        timeout: float = 600,
         raise_on_error: bool = True,
     ) -> str:
-        """Submit a task to the sandbox container and wait for completion.
+        """Submit a task to the sandbox and poll until completion.
 
-        Returns the combined stdout output. Raises on failure if raise_on_error=True.
+        Uses polling (GET /tasks/:id/status) for reliability with long-running
+        Copilot CLI sessions. Returns combined stdout output.
         """
         payload: dict = {"workDir": "/workspace"}
         if prompt:
@@ -426,43 +471,49 @@ class DevAgent:
         else:
             raise ValueError("prompt or command is required")
 
-        logger.info("Sandbox exec [%s]: %s", stage_label, prompt[:120] if prompt else f"{command} {args}")
+        log_preview = prompt[:120] if prompt else f"{command} {args}"
+        logger.info("Sandbox exec [%s]: %s", stage_label, log_preview)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{SANDBOX_URL}/tasks", json=payload)
             resp.raise_for_status()
             task_data = resp.json()
-            task_id = task_data["id"]
+            sandbox_task_id = task_data["id"]
 
-        # Poll the SSE stream until the task exits
-        output_lines: list[str] = []
+        # Poll task status until done
+        start = time.monotonic()
         exit_code = -1
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
-                async with client.stream(
-                    "GET", f"{SANDBOX_URL}/tasks/{task_id}/stream"
-                ) as stream:
-                    async for line in stream.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = json.loads(line[6:])
-                        if data.get("type") == "stdout":
-                            output_lines.append(data.get("data", ""))
-                        elif data.get("type") == "stderr":
-                            logger.debug(
-                                "Sandbox stderr [%s]: %s",
-                                stage_label, data.get("data", ""),
-                            )
-                        elif data.get("type") == "exit":
-                            exit_code = data.get("code", -1)
-                            break
-        except httpx.ReadTimeout:
-            logger.error("Sandbox task [%s] timed out after %ds", stage_label, timeout)
-            raise RuntimeError(f"Sandbox task timed out: {stage_label}")
+        output_lines: list[str] = []
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            while time.monotonic() - start < timeout:
+                await asyncio.sleep(3)
+                try:
+                    resp = await client.get(
+                        f"{SANDBOX_URL}/tasks/{sandbox_task_id}/status"
+                    )
+                    resp.raise_for_status()
+                    status = resp.json()
+                except Exception:
+                    logger.debug("Sandbox poll [%s] failed, retrying...", stage_label)
+                    continue
+
+                if status.get("done"):
+                    exit_code = status.get("exitCode", -1)
+                    for entry in status.get("recentOutput", []):
+                        if entry.get("type") == "stdout":
+                            output_lines.append(entry.get("data", ""))
+                    break
+            else:
+                logger.error(
+                    "Sandbox task [%s] timed out after %ds", stage_label, timeout
+                )
+                raise RuntimeError(f"Sandbox task timed out: {stage_label}")
 
         combined = "".join(output_lines)
         logger.info(
-            "Sandbox exec [%s] exit=%d (%d chars output)", stage_label, exit_code, len(combined)
+            "Sandbox exec [%s] exit=%d (%d chars output)",
+            stage_label, exit_code, len(combined),
         )
 
         if exit_code != 0 and raise_on_error:

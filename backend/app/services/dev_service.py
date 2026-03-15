@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -12,7 +11,7 @@ from app.services.json_persistence import JsonPersistenceMixin
 
 logger = logging.getLogger(__name__)
 
-STAGE_NAMES = ["init", "propose", "apply", "screenshots"]
+STAGE_NAMES = ["init", "propose", "apply", "archive", "screenshots"]
 
 
 def _default_stages() -> list[dict]:
