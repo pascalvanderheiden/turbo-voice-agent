@@ -53,6 +53,26 @@ IMPORTANT:
 - Do NOT wrap in JSON or code fences — output raw markdown only.
 - Do NOT include a Mockup Description or Foundation section — only output the ### Features section."""
 
+ENHANCE_FEATURE_SYSTEM_PROMPT = """You are an expert software architect. Given an existing spec and a new feature description, produce two artifacts for adding this feature to the spec.
+
+Output EXACTLY this structure (no extra text before or after):
+
+## Mockup Addition
+
+A 50-100 word paragraph describing the visual/interaction aspects of this feature — what the user sees and does. Write in present tense, matching the tone of the existing Mockup Description.
+
+## Feature Entry
+
+#### Feature: [Feature Name]
+[An openspec-propose prompt instruction for this feature — a clear, focused instruction that can be passed directly to `openspec-propose` as CLI input. It should be self-contained and can run independently of other features.]
+
+IMPORTANT:
+- Read the existing spec carefully to ensure the feature is coherent with the foundation and existing features.
+- The Feature Name should be concise and descriptive (2-4 words).
+- The openspec-propose instruction should be actionable and directly usable as CLI input.
+- Do NOT duplicate concerns already covered by the foundation or existing features.
+- Do NOT wrap in code fences — output raw markdown only."""
+
 OPTIMIZE_SYSTEM_PROMPT = """You are an expert technical writer. Optimize this development spec to be more concise, clear, and actionable.
 
 Rules:
@@ -70,10 +90,11 @@ Return only the improved markdown content."""
 class SpecAgent:
     """Agent that handles spec operations including LLM-powered generation."""
 
-    def __init__(self, spec_service: InMemorySpecService, brainstorm_service=None, research_service=None):
+    def __init__(self, spec_service: InMemorySpecService, brainstorm_service=None, research_service=None, dev_agent=None):
         self._service = spec_service
         self._brainstorm_service = brainstorm_service
         self._research_service = research_service
+        self._dev_agent = dev_agent
         self._openai: AsyncAzureOpenAI | None = None
 
     def _get_openai(self) -> AsyncAzureOpenAI:
@@ -201,6 +222,27 @@ class SpecAgent:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "add_feature_to_spec",
+                    "description": (
+                        "Add a new feature to an existing foundation spec. "
+                        "The feature description is enhanced using AI into a polished spec entry. "
+                        "If the spec has a linked dev task in openspec mode, the feature is automatically "
+                        "added to the dev task and the pipeline is triggered. "
+                        "This runs in the background — tell the user it's starting."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "spec_id": {"type": "string", "description": "The foundation spec ID to add a feature to"},
+                            "description": {"type": "string", "description": "Description of the feature to add (can be brief — AI will enhance it)"},
+                        },
+                        "required": ["spec_id", "description"],
+                    },
+                },
+            },
         ]
 
     async def generate_from_idea(self, title: str, description: str, idea_id: str | None = None, user_id: str | None = None) -> list[dict]:
@@ -285,6 +327,130 @@ class SpecAgent:
             temperature=0.3,
         )
         return response.choices[0].message.content or spec.content
+
+    async def enhance_feature(self, spec_content: str, feature_description: str) -> tuple[str, str, str]:
+        """Enhance a raw feature description using GPT-5.2.
+
+        Returns (feature_name, mockup_paragraph, openspec_propose_instruction).
+        """
+        client = self._get_openai()
+        deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
+
+        response = await client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": ENHANCE_FEATURE_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Existing spec:\n\n{spec_content}\n\n---\n\n"
+                        f"New feature to add: {feature_description}"
+                    ),
+                },
+            ],
+            max_completion_tokens=1500,
+            temperature=0.5,
+        )
+        enhanced = response.choices[0].message.content or ""
+
+        # Parse the mockup paragraph
+        import re
+        mockup_match = re.search(
+            r'## Mockup Addition\s*\n(.*?)(?=\n## |\Z)', enhanced, re.DOTALL
+        )
+        mockup_paragraph = mockup_match.group(1).strip() if mockup_match else ""
+
+        # Parse the feature entry (#### Feature: Name\n<instruction>)
+        feature_match = re.search(
+            r'#### Feature: (.+?)\n(.*?)(?=\n#### |\n### |\n## |\Z)',
+            enhanced,
+            re.DOTALL,
+        )
+        feature_name = feature_match.group(1).strip() if feature_match else feature_description[:50]
+        propose_instruction = feature_match.group(2).strip() if feature_match else feature_description
+
+        return feature_name, mockup_paragraph, propose_instruction
+
+    async def add_feature_to_spec(
+        self,
+        spec_id: str,
+        feature_description: str,
+        user_id: str = "default-user",
+    ) -> dict:
+        """Add a feature to an existing spec: enhance → append → extend dev task → trigger pipeline.
+
+        Returns a result dict with success status and details.
+        """
+        import re
+        service = self._service.with_user(user_id) if hasattr(self._service, 'with_user') else self._service
+        spec = await service.get_by_id(spec_id)
+        if not spec:
+            return {"error": "Spec not found"}
+        if spec.type != "foundation":
+            return {"error": "Features can only be added to foundation specs"}
+
+        # 1. Enhance feature description with GPT-5.2
+        feature_name, mockup_paragraph, propose_instruction = await self.enhance_feature(
+            spec.content or "", feature_description
+        )
+
+        # 2. Append to spec content
+        content = spec.content or ""
+
+        # Append mockup paragraph to Mockup Description section
+        if mockup_paragraph:
+            mockup_end = re.search(r'(## Mockup Description\s*\n.*?)(?=\n## )', content, re.DOTALL)
+            if mockup_end:
+                insert_pos = mockup_end.end(1)
+                content = content[:insert_pos] + f"\n\n{mockup_paragraph}" + content[insert_pos:]
+
+        # Append feature entry to OpenSpec Config > Features section
+        feature_entry = f"\n\n#### Feature: {feature_name}\n{propose_instruction}"
+        # Try to append after the last #### Feature: block or after ### Features
+        last_feature = None
+        for m in re.finditer(
+            r'#### Feature: .+?\n.*?(?=\n#### Feature:|\n### |\n## |\Z)',
+            content,
+            re.DOTALL,
+        ):
+            last_feature = m
+        if last_feature:
+            insert_pos = last_feature.end()
+            content = content[:insert_pos] + feature_entry + content[insert_pos:]
+        elif "### Features" in content:
+            idx = content.index("### Features") + len("### Features")
+            content = content[:idx] + feature_entry + content[idx:]
+        else:
+            content += f"\n\n### Features{feature_entry}"
+
+        # Update spec
+        from app.models.spec import SpecUpdate
+        await service.update(spec_id, SpecUpdate(content=content))
+
+        # 3. Detect linked dev task and extend it
+        dev_task_extended = False
+        pipeline_triggered = False
+        if self._dev_agent and hasattr(spec, 'devTaskId') and spec.devTaskId:
+            try:
+                result = await self._dev_agent.append_feature_iteration(
+                    task_id=spec.devTaskId,
+                    feature_name=feature_name,
+                    propose_instruction=propose_instruction,
+                    spec_id=spec_id,
+                    user_id=user_id,
+                )
+                dev_task_extended = result.get("extended", False)
+                pipeline_triggered = result.get("pipeline_triggered", False)
+            except Exception:
+                logger.exception("Failed to extend dev task %s with new feature", spec.devTaskId)
+
+        return {
+            "success": True,
+            "feature_name": feature_name,
+            "spec_id": spec_id,
+            "dev_task_extended": dev_task_extended,
+            "pipeline_triggered": pipeline_triggered,
+        }
 
     async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
         try:

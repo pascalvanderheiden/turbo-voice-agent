@@ -228,13 +228,18 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
 async def download_archive(task_id: str, request: Request):
     """Download the generated code archive from the sandbox workspace."""
     svc = _get_service()
-    task = await svc.get(task_id)
+    task = await svc.get_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Each task has its own workspace directory
+    work_dir = f"/workspace/{task_id}"
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(f"{SANDBOX_URL}/workspace/archive")
+            resp = await client.get(
+                f"{SANDBOX_URL}/workspace/archive",
+                params={"dir": work_dir},
+            )
             resp.raise_for_status()
 
             async def stream_content():

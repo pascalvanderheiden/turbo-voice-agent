@@ -167,9 +167,14 @@ app.post("/tasks/:id/input", express.json(), (req, res) => {
 // List and download workspace files (for screenshot retrieval)
 app.get("/files", (req, res) => {
   const pattern = req.query.glob || "*.png";
+  const baseDir = req.query.dir || "/workspace";
+  const safeDir = path.resolve(baseDir);
+  if (!safeDir.startsWith("/workspace")) {
+    return res.status(403).json({ error: "Access denied" });
+  }
   try {
     const result = execSync(
-      `find /workspace -maxdepth 3 -name '${pattern.replace(/'/g, "")}' -type f 2>/dev/null || true`,
+      `find ${safeDir} -maxdepth 3 -name '${pattern.replace(/'/g, "")}' -type f 2>/dev/null || true`,
       { encoding: "utf-8" }
     );
     const files = result.trim().split("\n").filter(Boolean);
@@ -194,10 +199,15 @@ app.get("/files/*", (req, res) => {
 
 // Download workspace as tar.gz archive
 app.get("/workspace/archive", (req, res) => {
+  const baseDir = req.query.dir || "/workspace";
+  const safeDir = path.resolve(baseDir);
+  if (!safeDir.startsWith("/workspace")) {
+    return res.status(403).json({ error: "Access denied" });
+  }
   try {
     const archivePath = "/tmp/workspace-archive.tar.gz";
     execSync(
-      `cd /workspace && tar czf ${archivePath} --exclude='node_modules' --exclude='.git' --exclude='.cache' .`,
+      `cd ${safeDir} && tar czf ${archivePath} --exclude='node_modules' --exclude='.git' --exclude='.cache' .`,
       { timeout: 30000 }
     );
     res.setHeader("Content-Type", "application/gzip");

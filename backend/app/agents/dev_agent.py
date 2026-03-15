@@ -312,11 +312,12 @@ class DevAgent:
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
 
-        # Clean workspace before starting fresh
+        # Each dev task gets its own dedicated workspace directory
+        work_dir = f"/workspace/{task_id}"
         await self._sandbox_exec(
             task_id=task_id,
             command="bash",
-            args=["-c", "cd /workspace && find . -mindepth 1 -delete 2>/dev/null; true"],
+            args=["-c", f"rm -rf {work_dir} && mkdir -p {work_dir}"],
             stage_label="cleanup",
             raise_on_error=False,
         )
@@ -329,6 +330,7 @@ class DevAgent:
             command="openspec",
             args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
@@ -345,6 +347,7 @@ class DevAgent:
             model=model,
             stage_label="propose",
             raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
@@ -360,6 +363,7 @@ class DevAgent:
             model=model,
             stage_label="apply",
             raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
@@ -374,6 +378,7 @@ class DevAgent:
             model=model,
             stage_label="archive",
             raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
@@ -386,7 +391,7 @@ class DevAgent:
                 "First, start the app in the background (e.g. npm run dev &). "
                 "Wait for it to be ready, then use "
                 "'npx playwright screenshot http://localhost:3000 "
-                "/workspace/screenshot.png --full-page "
+                f"{work_dir}/screenshot.png --full-page "
                 "--wait-for-timeout=5000'. "
                 "If the app uses a different port, adjust accordingly. "
                 "Take at least one screenshot of the main page."
@@ -394,8 +399,9 @@ class DevAgent:
             model=model,
             stage_label="screenshots",
             raise_on_error=False,
+            work_dir=work_dir,
         )
-        await self._collect_screenshots(task_id)
+        await self._collect_screenshots(task_id, work_dir=work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -410,6 +416,16 @@ class DevAgent:
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
         model = await self._get_user_model(user_id)
 
+        # Each dev task gets its own dedicated workspace directory
+        work_dir = f"/workspace/{task_id}"
+        await self._sandbox_exec(
+            task_id=task_id,
+            command="bash",
+            args=["-c", f"rm -rf {work_dir} && mkdir -p {work_dir}"],
+            stage_label="cleanup",
+            raise_on_error=False,
+        )
+
         # ── Foundation: init → propose → apply ───────────────────────
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
@@ -418,6 +434,7 @@ class DevAgent:
             command="openspec",
             args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
@@ -432,6 +449,8 @@ class DevAgent:
             ),
             model=model,
             stage_label="foundation-propose",
+            raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
@@ -445,10 +464,14 @@ class DevAgent:
             ),
             model=model,
             stage_label="foundation-apply",
+            raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
-        # ── Features: sequential propose/apply ───────────────────────
+        # ── Features: parallel propose/apply ─────────────────────────
+        # Each feature runs in the same work_dir (sequential OpenSpec changes)
+        # but propose/apply pairs are still sequential since they build on each other
         for idx, feat_prompt in enumerate(feature_prompts):
             iter_idx = idx + 1
             await svc.set_iteration_stage_status(
@@ -466,6 +489,8 @@ class DevAgent:
                 ),
                 model=model,
                 stage_label=f"feature-{iter_idx}-propose",
+                raise_on_error=False,
+                work_dir=work_dir,
             )
             await svc.set_iteration_stage_status(
                 task_id, iter_idx, "propose", "completed"
@@ -482,6 +507,8 @@ class DevAgent:
                 ),
                 model=model,
                 stage_label=f"feature-{iter_idx}-apply",
+                raise_on_error=False,
+                work_dir=work_dir,
             )
             await svc.set_iteration_stage_status(
                 task_id, iter_idx, "apply", "completed"
@@ -497,6 +524,8 @@ class DevAgent:
             ),
             model=model,
             stage_label="archive",
+            raise_on_error=False,
+            work_dir=work_dir,
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
@@ -509,7 +538,7 @@ class DevAgent:
                 "First, start the app in the background (e.g. npm run dev &). "
                 "Wait for it to be ready, then use "
                 "'npx playwright screenshot http://localhost:3000 "
-                "/workspace/screenshot.png --full-page "
+                f"{work_dir}/screenshot.png --full-page "
                 "--wait-for-timeout=5000'. "
                 "If the app uses a different port, adjust accordingly. "
                 "Take at least one screenshot of the main page."
@@ -517,8 +546,9 @@ class DevAgent:
             model=model,
             stage_label="screenshots",
             raise_on_error=False,
+            work_dir=work_dir,
         )
-        await self._collect_screenshots(task_id)
+        await self._collect_screenshots(task_id, work_dir=work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -537,6 +567,7 @@ class DevAgent:
         stage_label: str = "",
         timeout: float = 600,
         raise_on_error: bool = True,
+        work_dir: str = "/workspace",
     ) -> str:
         """Submit a task to the sandbox and stream output via SSE.
 
@@ -544,7 +575,7 @@ class DevAgent:
         Detects CLI questions and auto-answers them using the model.
         Returns combined stdout output.
         """
-        payload: dict = {"workDir": "/workspace"}
+        payload: dict = {"workDir": work_dir}
         if prompt:
             payload["prompt"] = prompt
             payload["model"] = model
@@ -766,18 +797,21 @@ class DevAgent:
 
         raise RuntimeError(f"Sandbox task timed out: {stage_label}")
 
-    async def _collect_screenshots(self, task_id: str) -> None:
+    async def _collect_screenshots(self, task_id: str, work_dir: str = "/workspace") -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
         svc = self._dev_service
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(f"{SANDBOX_URL}/files", params={"glob": "*.png"})
+                resp = await client.get(
+                    f"{SANDBOX_URL}/files",
+                    params={"glob": "*.png", "dir": work_dir},
+                )
                 resp.raise_for_status()
                 files = resp.json().get("files", [])
                 logger.info("Found %d screenshot files in sandbox", len(files))
 
                 for file_path in files:
-                    rel = file_path.replace("/workspace/", "", 1)
+                    rel = file_path.replace(f"{work_dir}/", "", 1)
                     try:
                         fresp = await client.get(f"{SANDBOX_URL}/files/{rel}")
                         fresp.raise_for_status()
@@ -873,4 +907,4 @@ class DevAgent:
                     return state.config.model
             except Exception:
                 logger.debug("Failed to read sandbox config for user %s", user_id)
-        return "claude-sonnet-4"
+        return "claude-opus-4.6"

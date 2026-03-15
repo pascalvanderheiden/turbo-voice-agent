@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class SandboxConfig(BaseModel):
     """User's sandbox configuration."""
 
-    model: str = "claude-sonnet-4"
+    model: str = "claude-opus-4.6"
 
     model_config = {"populate_by_name": True}
 
