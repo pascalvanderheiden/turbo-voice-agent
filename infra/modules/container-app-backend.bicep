@@ -74,12 +74,12 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
           identity: 'system'
         }
       ]
-      secrets: [
+      secrets: !empty(entraClientSecret) ? [
         {
           name: 'entra-client-secret'
           value: entraClientSecret
         }
-      ]
+      ] : []
     }
     template: {
       containers: [
@@ -90,7 +90,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('2.0')
             memory: '4Gi'
           }
-          env: [
+          env: concat([
             { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
             { name: 'COSMOS_DATABASE', value: 'turbovoice' }
             { name: 'AZURE_OPENAI_ENDPOINT', value: aiEastUs2Endpoint }
@@ -107,11 +107,12 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
             { name: 'ENTRA_TENANT_ID', value: entraTenantId }
             { name: 'ENTRA_CLIENT_ID', value: entraClientId }
-            { name: 'ENTRA_CLIENT_SECRET', secretRef: 'entra-client-secret' }
             { name: 'TODO_OAUTH_REDIRECT_URI', value: todoOAuthRedirectUri }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
-          ]
+          ], !empty(entraClientSecret) ? [
+            { name: 'ENTRA_CLIENT_SECRET', secretRef: 'entra-client-secret' }
+          ] : [])
           volumeMounts: [
             {
               volumeName: 'data'
