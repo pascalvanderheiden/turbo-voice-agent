@@ -75,6 +75,8 @@ jobs:
             --location "$AZURE_LOCATION" \
             --no-prompt 2>/dev/null || true
           azd env refresh -e "$AZURE_ENV_NAME" --no-prompt
+          # Ensure resource group is set (may be missing when latest deployment failed)
+          azd env set AZURE_RESOURCE_GROUP "${{ vars.AZURE_RESOURCE_GROUP }}" -e "$AZURE_ENV_NAME"
           # azd deploy expects AZURE_CONTAINER_REGISTRY_ENDPOINT; Bicep outputs AZURE_CONTAINER_REGISTRY
           ACR=$(azd env get-value AZURE_CONTAINER_REGISTRY -e "$AZURE_ENV_NAME" 2>/dev/null || true)
           if [ -n "$ACR" ]; then
