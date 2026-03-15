@@ -9,6 +9,7 @@ import {
   IconCircleCheck,
   IconCircleX,
   IconClock,
+  IconCode,
   IconSettingsAutomation,
   IconMessageChatbot,
   IconPackage,

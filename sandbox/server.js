@@ -173,6 +173,26 @@ app.get("/files/*", (req, res) => {
   res.json({ name: path.basename(resolved), data: data.toString("base64") });
 });
 
+// Download workspace as tar.gz archive
+app.get("/workspace/archive", (req, res) => {
+  try {
+    const archivePath = "/tmp/workspace-archive.tar.gz";
+    execSync(
+      `cd /workspace && tar czf ${archivePath} --exclude='node_modules' --exclude='.git' --exclude='.cache' .`,
+      { timeout: 30000 }
+    );
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Disposition", "attachment; filename=workspace.tar.gz");
+    const stream = fs.createReadStream(archivePath);
+    stream.pipe(res);
+    stream.on("end", () => {
+      try { fs.unlinkSync(archivePath); } catch {}
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to create archive", details: String(err) });
+  }
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Copilot CLI Sandbox listening on port ${port} (model: ${DEFAULT_MODEL})`);

@@ -3,15 +3,30 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconMicrophone, IconBell, IconSettings } from "@tabler/icons-react";
+import { IconMicrophone, IconBell, IconSettings, IconServer } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
+import { sandboxApi } from "@/lib/sandbox-api";
+
+const SANDBOX_STATUS_STYLES: Record<string, { dot: string; pulse?: boolean }> = {
+  ready:          { dot: "bg-green-400" },
+  busy:           { dot: "bg-yellow-400", pulse: true },
+  provisioning:   { dot: "bg-yellow-400", pulse: true },
+  stopped:        { dot: "bg-[var(--color-text-muted)]" },
+  error:          { dot: "bg-red-400" },
+  not_configured: { dot: "bg-[var(--color-text-muted)]" },
+  loading:        { dot: "bg-[var(--color-text-muted)]" },
+};
 
 export function SiteHeader() {
   const pathname = usePathname();
   const { locale, t } = useI18n();
   const { notifications, unreadCount, markAllRead, clearAll } = useNotifications();
   const [showNotifications, setShowNotifications] = useState(false);
+  const [sandboxStatus, setSandboxStatus] = useState<{ status: string; activeTasks: number }>({
+    status: "loading",
+    activeTasks: 0,
+  });
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close panel on outside click
@@ -24,6 +39,27 @@ export function SiteHeader() {
     if (showNotifications) document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showNotifications]);
+
+  // Poll sandbox status every 10 seconds
+  useEffect(() => {
+    let mounted = true;
+    const fetchStatus = () => {
+      sandboxApi
+        .status()
+        .then((data) => {
+          if (mounted) setSandboxStatus(data);
+        })
+        .catch(() => {
+          if (mounted) setSandboxStatus({ status: "error", activeTasks: 0 });
+        });
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 10_000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const breadcrumb = pathname
     .split("/")
@@ -52,6 +88,28 @@ export function SiteHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-2">
+        {/* Sandbox status */}
+        {(() => {
+          const style = SANDBOX_STATUS_STYLES[sandboxStatus.status] ?? SANDBOX_STATUS_STYLES.loading;
+          return (
+            <Link
+              href="/agents"
+              className="relative flex items-center justify-center w-9 h-9 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+              title={`Sandbox: ${sandboxStatus.status}${sandboxStatus.activeTasks > 0 ? ` (${sandboxStatus.activeTasks} tasks)` : ""}`}
+            >
+              <IconServer size={18} stroke={1.5} />
+              <span
+                className={`absolute top-1 right-1 w-2.5 h-2.5 rounded-full border-2 border-[var(--color-bg-secondary)] ${style.dot}${style.pulse ? " animate-pulse" : ""}`}
+              />
+              {sandboxStatus.status === "busy" && sandboxStatus.activeTasks > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 text-[10px] font-bold text-white rounded-full bg-[var(--color-brand-pink)]">
+                  {sandboxStatus.activeTasks > 9 ? "9+" : sandboxStatus.activeTasks}
+                </span>
+              )}
+            </Link>
+          );
+        })()}
+
         {/* Settings */}
         <Link
           href="/settings"

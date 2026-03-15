@@ -21,6 +21,7 @@ import {
   IconPlus,
   IconVideo,
   IconX,
+  IconTerminal2,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo } from "@/lib/api";
@@ -134,6 +135,118 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function TerminalView({ taskId, isRunning }: { taskId: string; isRunning: boolean }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [connected, setConnected] = useState(false);
+  const termRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (!isRunning) {
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+      setConnected(false);
+      return;
+    }
+
+    // Find active sandbox task by polling sandbox status
+    let cancelled = false;
+    const connect = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/sandbox/status`);
+        const data = await res.json();
+        if (cancelled || data.activeTasks === 0) return;
+
+        // Connect to sandbox task stream via backend proxy
+        const tasksRes = await fetch(`${API_URL}/api/sandbox/status`);
+        const tasksData = await tasksRes.json();
+        if (cancelled || !tasksData.activeTasks) return;
+
+        // Use the dev task's latest sandbox task stream
+        const es = new EventSource(`${API_URL}/api/sandbox/tasks/${taskId}/stream`);
+        esRef.current = es;
+        setConnected(true);
+
+        es.onmessage = (ev) => {
+          try {
+            const entry = JSON.parse(ev.data);
+            if (entry.type === "stdout" || entry.type === "stderr") {
+              setLines((prev) => {
+                const newLines = [...prev, entry.data];
+                return newLines.slice(-200); // Keep last 200 lines
+              });
+            }
+            if (entry.type === "exit") {
+              setConnected(false);
+              es.close();
+            }
+          } catch { /* ignore parse errors */ }
+        };
+
+        es.onerror = () => {
+          setConnected(false);
+          es.close();
+        };
+      } catch { /* sandbox not available */ }
+    };
+
+    connect();
+    // Retry connection every 5s while running
+    const interval = setInterval(() => {
+      if (!esRef.current || esRef.current.readyState === EventSource.CLOSED) {
+        connect();
+      }
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    };
+  }, [isRunning, taskId]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight;
+    }
+  }, [lines]);
+
+  if (!isRunning && lines.length === 0) return null;
+
+  return (
+    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+        <div className="flex items-center gap-2">
+          <IconTerminal2 size={14} className="text-[var(--color-brand-cyan)]" />
+          <span className="text-xs font-medium text-[var(--color-text-muted)]">Copilot CLI Sandbox</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`relative flex h-2 w-2 ${connected ? "" : ""}`}>
+            {connected && <span className="absolute inset-0 rounded-full bg-green-400 opacity-75 animate-ping" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${connected ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
+          </span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">{connected ? "Live" : lines.length > 0 ? "Disconnected" : "Waiting..."}</span>
+        </div>
+      </div>
+      <div
+        ref={termRef}
+        className="p-4 font-mono text-xs leading-relaxed overflow-auto bg-[#0D0D14]"
+        style={{ maxHeight: 320, minHeight: 120 }}
+      >
+        {lines.length === 0 ? (
+          <span className="text-[var(--color-text-muted)]">Waiting for sandbox output...</span>
+        ) : (
+          lines.map((line, i) => (
+            <div key={i} className="whitespace-pre-wrap text-[var(--color-text-secondary)]">{line}</div>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -262,7 +375,7 @@ export default function DevTaskDetailPage() {
             <IconPlayerPlay size={16} /> {t("dev.runPipeline")}
           </button>
         )}
-        {hasArchive && (
+        {(task.status === "completed" || task.status === "running") && (
           <a href={devApi.downloadUrl(task.id)} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors">
             <IconDownload size={16} /> {t("dev.download")}
           </a>
@@ -321,6 +434,9 @@ export default function DevTaskDetailPage() {
         </h2>
         <IterationStages stages={iterations[activeIteration]?.stages || task.stages} />
       </div>
+
+      {/* Live Sandbox Terminal */}
+      <TerminalView taskId={task.id} isRunning={task.status === "running"} />
 
       {/* Screenshots / Preview */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">

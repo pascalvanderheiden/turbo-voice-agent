@@ -2,16 +2,20 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.models.dev_task import DevTask, DevTaskCreate
 from app.services.dev_service import InMemoryDevService
 
 logger = logging.getLogger(__name__)
+
+SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 
 router = APIRouter(prefix="/api/dev", tags=["development"])
 
@@ -205,9 +209,28 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
 
 @router.get("/{task_id}/download")
 async def download_archive(task_id: str, request: Request):
-    """Download the generated code archive."""
-    from app.services.json_persistence import DATA_DIR
-    archive_path = DATA_DIR / "dev" / f"{task_id}.tar.gz"
-    if not archive_path.exists():
-        raise HTTPException(status_code=404, detail="Archive not found")
-    return FileResponse(archive_path, media_type="application/gzip", filename=f"{task_id}.tar.gz")
+    """Download the generated code archive from the sandbox workspace."""
+    svc = _get_service()
+    task = await svc.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(f"{SANDBOX_URL}/workspace/archive")
+            resp.raise_for_status()
+
+            async def stream_content():
+                yield resp.content
+
+            filename = f"{task.title.replace(' ', '-').lower()[:40]}.tar.gz"
+            return StreamingResponse(
+                stream_content(),
+                media_type="application/gzip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Failed to download archive from sandbox: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Sandbox is not available for download"
+        )

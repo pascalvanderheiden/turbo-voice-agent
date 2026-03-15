@@ -281,18 +281,18 @@ export default function AgentsPage() {
               <svg width="100%" height={20} className="overflow-visible" preserveAspectRatio="none">
                 <defs>
                   <marker id="fan-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-                    <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" opacity="0.5" />
+                    <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" />
                   </marker>
                 </defs>
-                <line x1="50%" y1="0" x2="50%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.4" />
-                <line x1="5%" y1="10" x2="95%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.4" />
+                <line x1="50%" y1="0" x2="50%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.6" />
+                <line x1="5%" y1="10" x2="95%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.6" />
               </svg>
               <div className="flex flex-wrap justify-center gap-3 mt-0 px-2">
                 {specialists.map((s) => (
                   <div key={s.id} className="flex flex-col items-center">
                     <svg width={20} height={18} className="overflow-visible">
                       <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-text-muted)" strokeWidth="1.5"
-                        fill="none" opacity="0.4" markerEnd="url(#fan-arrow)" />
+                        fill="none" opacity="0.6" markerEnd="url(#fan-arrow)" />
                     </svg>
                     <AgentNode agent={s} compact />
                     {/* Sandbox node below the Dev agent */}
@@ -662,14 +662,14 @@ function AgentNode({ agent, compact }: { agent: AgentInfo; compact?: boolean }) 
 
 function FlowArrow() {
   return (
-    <svg width={20} height={24} className="overflow-visible">
+    <svg width={20} height={28} className="overflow-visible">
       <defs>
         <marker id="flow-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" opacity="0.5" />
+          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" />
         </marker>
       </defs>
-      <path d="M10,0 C10,8 10,14 10,20" stroke="var(--color-text-muted)" strokeWidth="1.5"
-        fill="none" opacity="0.4" markerEnd="url(#flow-arrow)" />
+      <path d="M10,0 C10,10 10,18 10,24" stroke="var(--color-text-muted)" strokeWidth="1.5"
+        fill="none" opacity="0.6" markerEnd="url(#flow-arrow)" />
     </svg>
   );
 }
@@ -710,11 +710,11 @@ function SandboxNode({ status, activeTasks }: { status: string; activeTasks: num
       <svg width={20} height={18} className="overflow-visible">
         <defs>
           <marker id="sandbox-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-            <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-brand-cyan)" strokeWidth="0.8" opacity="0.5" />
+            <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-brand-cyan)" strokeWidth="0.8" />
           </marker>
         </defs>
         <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-brand-cyan)" strokeWidth="1.5"
-          fill="none" opacity="0.4" markerEnd="url(#sandbox-arrow)" />
+          fill="none" opacity="0.6" markerEnd="url(#sandbox-arrow)" />
       </svg>
       <div
         className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-lg)] border border-dashed shrink-0"
