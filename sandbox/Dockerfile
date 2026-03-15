@@ -21,6 +21,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # GitHub Copilot CLI (installed globally via npm, same as official sandbox)
 RUN npm install -g @github/copilot
 
+# OpenSpec CLI (generates skills for Copilot CLI via `openspec init --tools github-copilot`)
+RUN npm install -g @fission-ai/openspec@latest
+
 # Playwright (for screenshot generation)
 RUN npm install -g playwright \
     && npx playwright install --with-deps chromium
@@ -31,9 +34,6 @@ RUN useradd -m -s /bin/bash agent \
 
 # Workspace for sandbox project work
 RUN mkdir -p /workspace && chown agent:agent /workspace
-
-# OpenSpec skills for Copilot CLI (stage for runtime copy — volume mounts override /workspace)
-COPY --chown=agent:agent skills/ /opt/openspec-skills/
 
 # Configure Copilot CLI: trust /workspace, enable yolo mode
 RUN mkdir -p /home/agent/.copilot \

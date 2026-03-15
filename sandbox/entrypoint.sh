@@ -1,11 +1,10 @@
 #!/bin/bash
-# Copy OpenSpec skills into workspace (volume mounts override build-time COPY)
-mkdir -p /workspace/.github/skills
-cp -r /opt/openspec-skills/* /workspace/.github/skills/ 2>/dev/null || true
-
-# Initialize git repo in workspace if needed (Copilot CLI may require it)
+# Initialize git repo in workspace if needed (Copilot CLI requires it)
 if [ ! -d /workspace/.git ]; then
   cd /workspace && git init -q && git config user.email "agent@sandbox" && git config user.name "Sandbox Agent"
 fi
+
+# Initialize OpenSpec with GitHub Copilot skills (generates .github/skills/)
+cd /workspace && openspec init --tools github-copilot --force 2>/dev/null || true
 
 exec node /app/server.js

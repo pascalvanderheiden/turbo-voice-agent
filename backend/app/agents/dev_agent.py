@@ -265,16 +265,12 @@ class DevAgent:
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
 
-        # Stage: init — copilot init to generate instructions + verify skills
+        # Stage: init — openspec init sets up skills for Copilot CLI
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
-            prompt=(
-                "Initialize this workspace for development. "
-                "Run 'copilot init' if no copilot-instructions.md exists yet. "
-                "Verify the OpenSpec skills are available in .github/skills/."
-            ),
-            model=model,
+            command="openspec",
+            args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
         )
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
@@ -345,12 +341,8 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
-            prompt=(
-                "Initialize this workspace for development. "
-                "Run 'copilot init' if no copilot-instructions.md exists yet. "
-                "Verify the OpenSpec skills are available in .github/skills/."
-            ),
-            model=model,
+            command="openspec",
+            args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
         )
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
