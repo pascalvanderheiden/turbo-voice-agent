@@ -21,9 +21,12 @@ import {
   IconFolderPlus,
   IconX,
   IconSettings,
+  IconBrandGithub,
+  IconServer,
 } from "@tabler/icons-react";
 import { agentsApi, notesApi, ideasApi, researchApi, specsApi, devApi, skillsApi, type AgentInfo, type AgentEdge, type InstalledSkill } from "@/lib/api";
 import { SandboxConfig } from "@/components/agents/sandbox-config";
+import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
 
@@ -77,6 +80,9 @@ export default function AgentsPage() {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [sandboxStatus, setSandboxStatus] = useState<string>("loading");
+  const [sandboxActiveTasks, setSandboxActiveTasks] = useState<number>(0);
+  const sandboxPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { t } = useI18n();
   const { addNotification } = useNotifications();
 
@@ -141,6 +147,27 @@ export default function AgentsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Poll sandbox status
+  const fetchSandboxStatus = useCallback(async () => {
+    try {
+      const data = await sandboxApi.status();
+      const raw = data.status || "not_configured";
+      const tasks = data.activeTasks ?? 0;
+      setSandboxActiveTasks(tasks);
+      setSandboxStatus(raw === "ready" && tasks > 0 ? "busy" : raw);
+    } catch {
+      setSandboxStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSandboxStatus();
+    sandboxPollRef.current = setInterval(fetchSandboxStatus, 15_000);
+    return () => {
+      if (sandboxPollRef.current) clearInterval(sandboxPollRef.current);
+    };
+  }, [fetchSandboxStatus]);
 
   const handleInstall = async (skill: MarketplaceSkill) => {
     const repo = skill.repo || "";
@@ -259,6 +286,10 @@ export default function AgentsPage() {
                     <div className="w-px h-3 bg-[var(--color-text-muted)]/30" />
                     <IconArrowDown size={10} className="text-[var(--color-text-muted)]/40 -mt-0.5 mb-1" />
                     <AgentNode agent={s} compact />
+                    {/* Sandbox node below the Dev agent */}
+                    {s.id === "dev" && (
+                      <SandboxNode status={sandboxStatus} activeTasks={sandboxActiveTasks} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -638,6 +669,58 @@ function StatusDot({ status }: { status: string }) {
           isOnline ? "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.4)]" : "bg-red-500"
         }`}
       />
+    </div>
+  );
+}
+
+const SANDBOX_STATUS: Record<string, { dot: string; pulse?: boolean }> = {
+  ready:          { dot: "bg-green-400" },
+  busy:           { dot: "bg-yellow-400", pulse: true },
+  provisioning:   { dot: "bg-yellow-400", pulse: true },
+  stopped:        { dot: "bg-[var(--color-text-muted)]" },
+  error:          { dot: "bg-red-400" },
+  not_configured: { dot: "bg-[var(--color-text-muted)]" },
+  loading:        { dot: "bg-[var(--color-text-muted)]" },
+};
+
+function SandboxNode({ status, activeTasks }: { status: string; activeTasks: number }) {
+  const cfg = SANDBOX_STATUS[status] || SANDBOX_STATUS.not_configured;
+  const label = status === "not_configured"
+    ? "Not Configured"
+    : status === "busy"
+      ? `Busy (${activeTasks})`
+      : status.charAt(0).toUpperCase() + status.slice(1);
+
+  return (
+    <div className="flex flex-col items-center mt-0.5">
+      <div className="w-px h-3 bg-[var(--color-text-muted)]/30" />
+      <IconArrowDown size={10} className="text-[var(--color-text-muted)]/40 -mt-0.5 mb-1" />
+      <div
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-lg)] border border-dashed shrink-0"
+        style={{
+          borderColor: "var(--color-brand-cyan)",
+          backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 5%, transparent)",
+        }}
+      >
+        <div
+          className="flex items-center justify-center w-6 h-6 rounded-[var(--radius-md)]"
+          style={{ backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 15%, transparent)" }}
+        >
+          <IconServer size={13} stroke={1.5} className="text-[var(--color-brand-cyan)]" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium text-[var(--color-brand-cyan)] truncate flex items-center gap-1">
+            <IconBrandGithub size={10} stroke={1.5} />
+            Copilot CLI Sandbox
+          </p>
+        </div>
+        <span className="relative flex h-2 w-2 shrink-0" title={label}>
+          {cfg.pulse && (
+            <span className={`absolute inset-0 rounded-full ${cfg.dot} opacity-75 animate-ping`} />
+          )}
+          <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.dot}`} />
+        </span>
+      </div>
     </div>
   );
 }
