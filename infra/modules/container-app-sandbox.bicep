@@ -13,6 +13,9 @@ param acrLoginServer string
 @description('Backend FQDN for API access')
 param backendFqdn string
 
+@description('Default Copilot CLI model')
+param copilotModel string = 'claude-opus-4.6'
+
 resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
@@ -48,8 +51,9 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '4Gi'
           }
           env: [
+            { name: 'PORT', value: '3000' }
             { name: 'BACKEND_URL', value: 'https://${backendFqdn}' }
-            { name: 'SANDBOX_MODE', value: 'true' }
+            { name: 'COPILOT_MODEL', value: copilotModel }
           ]
         }
       ]

@@ -28,6 +28,7 @@ services:
       - "4000:3000"
     environment:
       - PORT=3000
+      - GH_TOKEN=${GH_TOKEN:-}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - COPILOT_MODEL=${COPILOT_MODEL:-claude-opus-4.6}
     volumes:
