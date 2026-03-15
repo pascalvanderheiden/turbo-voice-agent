@@ -187,6 +187,19 @@ async def lifespan(app: FastAPI):
     _skills_service = skills_service
     logger.info("Services and agents initialized.")
 
+    # Seed demo data when running with in-memory services (no Cosmos DB)
+    if client is None:
+        from app.seed_data import seed_demo_data
+
+        await seed_demo_data(
+            notes_service=notes_service,
+            brainstorm_service=brainstorm_service,
+            research_service=research_service,
+            spec_service=spec_service,
+            dev_service=dev_service,
+            marketing_service=marketing_service,
+        )
+
     yield
 
     # Shutdown

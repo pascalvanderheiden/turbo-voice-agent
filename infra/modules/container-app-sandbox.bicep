@@ -7,9 +7,6 @@ param location string
 @description('Container Apps Environment resource ID')
 param containerAppsEnvId string
 
-@description('ACR login server')
-param acrLoginServer string
-
 @description('Backend FQDN for API access')
 param backendFqdn string
 
@@ -34,12 +31,9 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 3000
         transport: 'auto'
       }
-      registries: [
-        {
-          server: acrLoginServer
-          identity: 'system'
-        }
-      ]
+      // Note: registries are NOT configured here because during initial creation
+      // the system identity doesn't have AcrPull yet (RBAC runs after this module).
+      // azd deploy will configure ACR registry auth when deploying the actual image.
     }
     template: {
       containers: [

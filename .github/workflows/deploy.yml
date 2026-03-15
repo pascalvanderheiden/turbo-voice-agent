@@ -95,5 +95,19 @@ jobs:
         if: needs.detect-changes.outputs.infra == 'true'
         run: azd provision -e "$AZURE_ENV_NAME" --no-prompt
 
+      - name: Configure sandbox ACR registry
+        if: needs.detect-changes.outputs.infra == 'true'
+        run: |
+          # After provision + RBAC, configure ACR registry on sandbox
+          # (not done in Bicep to avoid chicken-and-egg with AcrPull role)
+          SANDBOX_NAME=$(az containerapp list -g "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query "[?tags.\"azd-service-name\"=='sandbox'].name" -o tsv)
+          ACR=$(azd env get-value AZURE_CONTAINER_REGISTRY -e "$AZURE_ENV_NAME" 2>/dev/null || true)
+          if [ -n "$SANDBOX_NAME" ] && [ -n "$ACR" ]; then
+            az containerapp registry set -n "$SANDBOX_NAME" \
+              -g "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --server "$ACR" --identity system
+          fi
+
       - name: Deploy applications
         run: azd deploy -e "$AZURE_ENV_NAME" --no-prompt

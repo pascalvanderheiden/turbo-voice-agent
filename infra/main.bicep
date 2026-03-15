@@ -159,7 +159,6 @@ module sandbox 'modules/container-app-sandbox.bicep' = {
     name: 'ca-sandbox-${resourceToken}'
     location: location
     containerAppsEnvId: cae.outputs.id
-    acrLoginServer: acr.outputs.loginServer
     backendFqdn: backend.outputs.fqdn
   }
 }
