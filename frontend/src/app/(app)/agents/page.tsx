@@ -260,51 +260,13 @@ export default function AgentsPage() {
       {/* Architecture Diagram */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 overflow-hidden">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-6">{t("agents.architecture")}</h2>
-
-        <div className="flex flex-col items-center gap-2 min-w-0">
-          {/* Gateways row */}
-          <div className="flex items-center justify-center gap-4 flex-wrap">
-            {gateways.map((gw) => (
-              <AgentNode key={gw.id} agent={gw} />
-            ))}
-          </div>
-
-          <FlowArrow />
-
-          {/* Supervisor */}
-          {orchestrator && <AgentNode agent={orchestrator} />}
-
-          {/* Fan-out to specialists */}
-          <div className="w-full flex justify-center pt-1">
-            <div className="relative w-full max-w-2xl">
-              {/* SVG fan-out: vertical drop → horizontal bar → branches */}
-              <svg width="100%" height={20} className="overflow-visible" preserveAspectRatio="none">
-                <defs>
-                  <marker id="fan-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-                    <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" />
-                  </marker>
-                </defs>
-                <line x1="50%" y1="0" x2="50%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.6" />
-                <line x1="5%" y1="10" x2="95%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.6" />
-              </svg>
-              <div className="flex flex-wrap justify-center gap-3 mt-0 px-2">
-                {specialists.map((s) => (
-                  <div key={s.id} className="flex flex-col items-center">
-                    <svg width={20} height={18} className="overflow-visible">
-                      <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-text-muted)" strokeWidth="1.5"
-                        fill="none" opacity="0.6" markerEnd="url(#fan-arrow)" />
-                    </svg>
-                    <AgentNode agent={s} compact />
-                    {/* Sandbox node below the Dev agent */}
-                    {s.id === "dev" && (
-                      <SandboxNode status={sandboxStatus} activeTasks={sandboxActiveTasks} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <ArchitectureDiagram
+          gateways={gateways}
+          orchestrator={orchestrator}
+          specialists={specialists}
+          sandboxStatus={sandboxStatus}
+          sandboxActiveTasks={sandboxActiveTasks}
+        />
       </div>
 
       {/* Agent Detail Cards */}
@@ -660,17 +622,167 @@ function AgentNode({ agent, compact }: { agent: AgentInfo; compact?: boolean }) 
   );
 }
 
-function FlowArrow() {
+interface ConnectorPath {
+  d: string;
+  dashed?: boolean;
+  color?: string;
+}
+
+function ArchitectureDiagram({
+  gateways,
+  orchestrator,
+  specialists,
+  sandboxStatus,
+  sandboxActiveTasks,
+}: {
+  gateways: AgentInfo[];
+  orchestrator: AgentInfo | undefined;
+  specialists: AgentInfo[];
+  sandboxStatus: string;
+  sandboxActiveTasks: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [paths, setPaths] = useState<ConnectorPath[]>([]);
+
+  const setRef = useCallback(
+    (id: string) => (el: HTMLDivElement | null) => {
+      if (el) nodeRefs.current.set(id, el);
+      else nodeRefs.current.delete(id);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const updatePaths = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const cRect = container.getBoundingClientRect();
+
+      const getRect = (id: string) => {
+        const el = nodeRefs.current.get(id);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return {
+          cx: r.left + r.width / 2 - cRect.left,
+          top: r.top - cRect.top,
+          bottom: r.bottom - cRect.top,
+        };
+      };
+
+      const newPaths: ConnectorPath[] = [];
+      const sup = getRect("supervisor");
+
+      // Gateways → Supervisor (smooth S-curve)
+      for (const gw of gateways) {
+        const from = getRect(gw.id);
+        if (from && sup) {
+          const midY = (from.bottom + sup.top) / 2;
+          newPaths.push({
+            d: `M${from.cx},${from.bottom} C${from.cx},${midY} ${sup.cx},${midY} ${sup.cx},${sup.top}`,
+          });
+        }
+      }
+
+      // Supervisor → each specialist (smooth bezier fan-out)
+      for (const spec of specialists) {
+        const to = getRect(spec.id);
+        if (sup && to) {
+          const dy = to.top - sup.bottom;
+          const cp1y = sup.bottom + dy * 0.35;
+          const cp2y = sup.bottom + dy * 0.65;
+          newPaths.push({
+            d: `M${sup.cx},${sup.bottom} C${sup.cx},${cp1y} ${to.cx},${cp2y} ${to.cx},${to.top}`,
+          });
+        }
+      }
+
+      // Dev → Sandbox (dashed cyan curve)
+      const dev = getRect("dev");
+      const sandbox = getRect("sandbox");
+      if (dev && sandbox) {
+        const dy = sandbox.top - dev.bottom;
+        const cp1y = dev.bottom + dy * 0.35;
+        const cp2y = dev.bottom + dy * 0.65;
+        newPaths.push({
+          d: `M${dev.cx},${dev.bottom} C${dev.cx},${cp1y} ${sandbox.cx},${cp2y} ${sandbox.cx},${sandbox.top}`,
+          dashed: true,
+          color: "var(--color-brand-cyan)",
+        });
+      }
+
+      setPaths(newPaths);
+    };
+
+    // Measure after layout settles
+    const raf = requestAnimationFrame(updatePaths);
+    const observer = new ResizeObserver(updatePaths);
+    if (containerRef.current) observer.observe(containerRef.current);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [gateways, specialists]);
+
   return (
-    <svg width={20} height={28} className="overflow-visible">
-      <defs>
-        <marker id="flow-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" />
-        </marker>
-      </defs>
-      <path d="M10,0 C10,10 10,18 10,24" stroke="var(--color-text-muted)" strokeWidth="1.5"
-        fill="none" opacity="0.6" markerEnd="url(#flow-arrow)" />
-    </svg>
+    <div ref={containerRef} className="relative">
+      {/* SVG connector overlay */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 0 }}>
+        <defs>
+          <marker id="conn-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+            <path d="M0,0.5 L3.5,2 L0,3.5" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.7" />
+          </marker>
+          <marker id="conn-arrow-cyan" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+            <path d="M0,0.5 L3.5,2 L0,3.5" fill="none" stroke="var(--color-brand-cyan)" strokeWidth="0.7" />
+          </marker>
+        </defs>
+        {paths.map((p, i) => (
+          <path
+            key={i}
+            d={p.d}
+            stroke={p.color || "var(--color-text-muted)"}
+            strokeWidth="1"
+            fill="none"
+            opacity="0.45"
+            strokeDasharray={p.dashed ? "4 3" : undefined}
+            markerEnd={p.color ? "url(#conn-arrow-cyan)" : "url(#conn-arrow)"}
+          />
+        ))}
+      </svg>
+
+      {/* Node layout */}
+      <div className="flex flex-col items-center gap-8 relative" style={{ zIndex: 1 }}>
+        {/* Gateways row */}
+        <div className="flex items-center justify-center gap-4 flex-wrap">
+          {gateways.map((gw) => (
+            <div key={gw.id} ref={setRef(gw.id)}>
+              <AgentNode agent={gw} />
+            </div>
+          ))}
+        </div>
+
+        {/* Supervisor */}
+        {orchestrator && (
+          <div ref={setRef("supervisor")}>
+            <AgentNode agent={orchestrator} />
+          </div>
+        )}
+
+        {/* Specialists - 2 rows of 4 */}
+        <div className="flex flex-wrap justify-center gap-3 max-w-3xl">
+          {specialists.map((s) => (
+            <div key={s.id} ref={setRef(s.id)} className="flex flex-col items-center">
+              <AgentNode agent={s} compact />
+              {s.id === "dev" && (
+                <div ref={setRef("sandbox")} className="mt-3">
+                  <SandboxNodeInline status={sandboxStatus} activeTasks={sandboxActiveTasks} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -697,7 +809,7 @@ const SANDBOX_STATUS: Record<string, { dot: string; pulse?: boolean }> = {
   loading:        { dot: "bg-[var(--color-text-muted)]" },
 };
 
-function SandboxNode({ status, activeTasks }: { status: string; activeTasks: number }) {
+function SandboxNodeInline({ status, activeTasks }: { status: string; activeTasks: number }) {
   const cfg = SANDBOX_STATUS[status] || SANDBOX_STATUS.not_configured;
   const label = status === "not_configured"
     ? "Not Configured"
@@ -706,42 +818,31 @@ function SandboxNode({ status, activeTasks }: { status: string; activeTasks: num
       : status.charAt(0).toUpperCase() + status.slice(1);
 
   return (
-    <div className="flex flex-col items-center mt-0.5">
-      <svg width={20} height={18} className="overflow-visible">
-        <defs>
-          <marker id="sandbox-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-            <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-brand-cyan)" strokeWidth="0.8" />
-          </marker>
-        </defs>
-        <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-brand-cyan)" strokeWidth="1.5"
-          fill="none" opacity="0.6" markerEnd="url(#sandbox-arrow)" />
-      </svg>
+    <div
+      className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-lg)] border border-dashed shrink-0"
+      style={{
+        borderColor: "var(--color-brand-cyan)",
+        backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 5%, transparent)",
+      }}
+    >
       <div
-        className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-lg)] border border-dashed shrink-0"
-        style={{
-          borderColor: "var(--color-brand-cyan)",
-          backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 5%, transparent)",
-        }}
+        className="flex items-center justify-center w-6 h-6 rounded-[var(--radius-md)]"
+        style={{ backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 15%, transparent)" }}
       >
-        <div
-          className="flex items-center justify-center w-6 h-6 rounded-[var(--radius-md)]"
-          style={{ backgroundColor: "color-mix(in srgb, var(--color-brand-cyan) 15%, transparent)" }}
-        >
-          <IconServer size={13} stroke={1.5} className="text-[var(--color-brand-cyan)]" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-[11px] font-medium text-[var(--color-brand-cyan)] truncate flex items-center gap-1">
-            <IconBrandGithub size={10} stroke={1.5} />
-            Copilot CLI Sandbox
-          </p>
-        </div>
-        <span className="relative flex h-2 w-2 shrink-0" title={label}>
-          {cfg.pulse && (
-            <span className={`absolute inset-0 rounded-full ${cfg.dot} opacity-75 animate-ping`} />
-          )}
-          <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.dot}`} />
-        </span>
+        <IconServer size={13} stroke={1.5} className="text-[var(--color-brand-cyan)]" />
       </div>
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium text-[var(--color-brand-cyan)] truncate flex items-center gap-1">
+          <IconBrandGithub size={10} stroke={1.5} />
+          Copilot CLI Sandbox
+        </p>
+      </div>
+      <span className="relative flex h-2 w-2 shrink-0" title={label}>
+        {cfg.pulse && (
+          <span className={`absolute inset-0 rounded-full ${cfg.dot} opacity-75 animate-ping`} />
+        )}
+        <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.dot}`} />
+      </span>
     </div>
   );
 }

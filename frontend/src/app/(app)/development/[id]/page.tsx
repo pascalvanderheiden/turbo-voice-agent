@@ -141,7 +141,7 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-function TerminalView({ taskId, isRunning }: { taskId: string; isRunning: boolean }) {
+function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRunning: boolean; taskStatus: string }) {
   const [lines, setLines] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
@@ -217,7 +217,7 @@ function TerminalView({ taskId, isRunning }: { taskId: string; isRunning: boolea
     }
   }, [lines]);
 
-  if (!isRunning && lines.length === 0) return null;
+  if (taskStatus === "pending") return null;
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
@@ -436,7 +436,7 @@ export default function DevTaskDetailPage() {
       </div>
 
       {/* Live Sandbox Terminal */}
-      <TerminalView taskId={task.id} isRunning={task.status === "running"} />
+      <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
 
       {/* Screenshots / Preview */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">

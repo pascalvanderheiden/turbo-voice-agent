@@ -101,7 +101,7 @@ export function SiteHeader() {
               <span
                 className={`absolute top-1 right-1 w-2.5 h-2.5 rounded-full border-2 border-[var(--color-bg-secondary)] ${style.dot}${style.pulse ? " animate-pulse" : ""}`}
               />
-              {sandboxStatus.status === "busy" && sandboxStatus.activeTasks > 0 && (
+              {sandboxStatus.activeTasks > 0 && (
                 <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 text-[10px] font-bold text-white rounded-full bg-[var(--color-brand-pink)]">
                   {sandboxStatus.activeTasks > 9 ? "9+" : sandboxStatus.activeTasks}
                 </span>
