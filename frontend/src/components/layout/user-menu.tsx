@@ -90,8 +90,13 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange, inline }
   const handleConnectTodo = async () => {
     setConnectingTodo(true);
     try {
-      const { authUrl } = await connectionsApi.microsoftTodo.connect();
-      window.location.href = authUrl;
+      const result = await connectionsApi.microsoftTodo.connect();
+      if (result.connected) {
+        setTodoConnected(true);
+        setConnectingTodo(false);
+      } else if (result.authUrl) {
+        window.location.href = result.authUrl;
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Connection failed";
       alert(msg);

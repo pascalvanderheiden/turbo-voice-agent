@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconMicrophone, IconBell } from "@tabler/icons-react";
-import { UserMenu } from "./user-menu";
+import { IconMicrophone, IconBell, IconSettings } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
 
@@ -13,34 +12,7 @@ export function SiteHeader() {
   const { locale, t } = useI18n();
   const { notifications, unreadCount, markAllRead, clearAll } = useNotifications();
   const [showNotifications, setShowNotifications] = useState(false);
-  const [userInfo, setUserInfo] = useState<{ name: string; email: string } | null>(null);
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
-    if (!clientId) {
-      // Local dev fallback — show user menu without MSAL
-      setUserInfo({ name: "Local User", email: "dev@localhost" });
-      return;
-    }
-    import("@/lib/msal-config").then(({ getMsalInstance }) => {
-      const instance = getMsalInstance();
-      const accounts = instance.getAllAccounts();
-      if (accounts.length > 0) {
-        setUserInfo({
-          name: accounts[0].name || "",
-          email: accounts[0].username || "",
-        });
-        // Fetch profile photo as blob via authenticated API proxy
-        import("@/lib/api").then(({ userApi }) => {
-          userApi.getPhotoObjectUrl().then((url) => {
-            if (url) setPhotoUrl(url);
-          }).catch(() => { /* photo not available */ });
-        });
-      }
-    });
-  }, []);
 
   // Close panel on outside click
   useEffect(() => {
@@ -80,10 +52,14 @@ export function SiteHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-2">
-        {/* User menu */}
-        {userInfo && (
-          <UserMenu displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
-        )}
+        {/* Settings */}
+        <Link
+          href="/settings"
+          className="flex items-center justify-center w-9 h-9 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+          title={t("nav.settings") || "Settings"}
+        >
+          <IconSettings size={18} stroke={1.5} />
+        </Link>
 
         {/* Notification bell */}
         <div className="relative" ref={panelRef}>

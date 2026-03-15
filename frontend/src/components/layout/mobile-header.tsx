@@ -15,7 +15,6 @@ import {
 } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 import { useNotifications } from "@/lib/notifications";
-import { UserMenu } from "./user-menu";
 
 const secondaryNav = [
   { href: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },
@@ -30,32 +29,7 @@ export function MobileHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
   const { unreadCount } = useNotifications();
-  const [userInfo, setUserInfo] = useState<{ name: string; email: string } | null>(null);
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
-    if (!clientId) {
-      setUserInfo({ name: "Local User", email: "dev@localhost" });
-      return;
-    }
-    import("@/lib/msal-config").then(({ getMsalInstance }) => {
-      const instance = getMsalInstance();
-      const accounts = instance.getAllAccounts();
-      if (accounts.length > 0) {
-        setUserInfo({
-          name: accounts[0].name || "",
-          email: accounts[0].username || "",
-        });
-        import("@/lib/api").then(({ userApi }) => {
-          userApi.getPhotoObjectUrl().then((url) => {
-            if (url) setPhotoUrl(url);
-          }).catch(() => {});
-        });
-      }
-    });
-  }, []);
 
   // Close on outside click
   useEffect(() => {
@@ -90,7 +64,7 @@ export function MobileHeader() {
         </button>
       </header>
 
-      {/* Slide-up settings menu */}
+      {/* Slide-up navigation menu */}
       {menuOpen && (
         <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setMenuOpen(false)}>
           <div
@@ -117,18 +91,8 @@ export function MobileHeader() {
               </button>
             </div>
 
-            {/* User profile */}
-            {userInfo && (
-              <div className="border-b border-[var(--color-border-dark)]">
-                <UserMenu inline displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
-              </div>
-            )}
-
-            {/* Secondary navigation */}
-            <div className="px-2 py-2 border-b border-[var(--color-border-dark)]">
-              <p className="px-3 pt-1 pb-2 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                More
-              </p>
+            {/* Navigation */}
+            <div className="px-2 py-2 pb-safe">
               {secondaryNav.map((item) => (
                 <Link
                   key={item.href}
@@ -140,10 +104,6 @@ export function MobileHeader() {
                   <span>{t(item.labelKey)}</span>
                 </Link>
               ))}
-            </div>
-
-            {/* Settings */}
-            <div className="px-4 py-3 space-y-3 pb-safe">
             </div>
           </div>
         </div>
