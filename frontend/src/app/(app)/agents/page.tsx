@@ -7,7 +7,6 @@ import {
   IconNote,
   IconBulb,
   IconSearch,
-  IconArrowDown,
   IconLoader2,
   IconRefresh,
   IconMessageCircle,
@@ -278,13 +277,23 @@ export default function AgentsPage() {
           {/* Fan-out to specialists */}
           <div className="w-full flex justify-center pt-1">
             <div className="relative w-full max-w-2xl">
-              <div className="mx-auto w-px h-4 bg-[var(--color-text-muted)]/30" />
-              <div className="mx-4 h-px bg-[var(--color-text-muted)]/30" />
-              <div className="flex flex-wrap justify-center gap-3 mt-1 px-2">
+              {/* SVG fan-out: vertical drop → horizontal bar → branches */}
+              <svg width="100%" height={20} className="overflow-visible" preserveAspectRatio="none">
+                <defs>
+                  <marker id="fan-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+                    <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" opacity="0.5" />
+                  </marker>
+                </defs>
+                <line x1="50%" y1="0" x2="50%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.4" />
+                <line x1="5%" y1="10" x2="95%" y2="10" stroke="var(--color-text-muted)" strokeWidth="1.5" opacity="0.4" />
+              </svg>
+              <div className="flex flex-wrap justify-center gap-3 mt-0 px-2">
                 {specialists.map((s) => (
                   <div key={s.id} className="flex flex-col items-center">
-                    <div className="w-px h-3 bg-[var(--color-text-muted)]/30" />
-                    <IconArrowDown size={10} className="text-[var(--color-text-muted)]/40 -mt-0.5 mb-1" />
+                    <svg width={20} height={18} className="overflow-visible">
+                      <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-text-muted)" strokeWidth="1.5"
+                        fill="none" opacity="0.4" markerEnd="url(#fan-arrow)" />
+                    </svg>
                     <AgentNode agent={s} compact />
                     {/* Sandbox node below the Dev agent */}
                     {s.id === "dev" && (
@@ -653,10 +662,15 @@ function AgentNode({ agent, compact }: { agent: AgentInfo; compact?: boolean }) 
 
 function FlowArrow() {
   return (
-    <div className="flex flex-col items-center text-[var(--color-text-muted)]/40">
-      <div className="w-px h-4 bg-current" />
-      <IconArrowDown size={12} />
-    </div>
+    <svg width={20} height={24} className="overflow-visible">
+      <defs>
+        <marker id="flow-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-text-muted)" strokeWidth="0.8" opacity="0.5" />
+        </marker>
+      </defs>
+      <path d="M10,0 C10,8 10,14 10,20" stroke="var(--color-text-muted)" strokeWidth="1.5"
+        fill="none" opacity="0.4" markerEnd="url(#flow-arrow)" />
+    </svg>
   );
 }
 
@@ -693,8 +707,15 @@ function SandboxNode({ status, activeTasks }: { status: string; activeTasks: num
 
   return (
     <div className="flex flex-col items-center mt-0.5">
-      <div className="w-px h-3 bg-[var(--color-text-muted)]/30" />
-      <IconArrowDown size={10} className="text-[var(--color-text-muted)]/40 -mt-0.5 mb-1" />
+      <svg width={20} height={18} className="overflow-visible">
+        <defs>
+          <marker id="sandbox-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+            <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-brand-cyan)" strokeWidth="0.8" opacity="0.5" />
+          </marker>
+        </defs>
+        <path d="M10,0 C10,6 10,12 10,14" stroke="var(--color-brand-cyan)" strokeWidth="1.5"
+          fill="none" opacity="0.4" markerEnd="url(#sandbox-arrow)" />
+      </svg>
       <div
         className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-lg)] border border-dashed shrink-0"
         style={{

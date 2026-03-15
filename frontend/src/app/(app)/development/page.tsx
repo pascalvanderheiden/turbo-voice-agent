@@ -55,7 +55,7 @@ function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
   const nodeW = 36, nodeH = 36, gapX = 32, gapY = 44, labelH = 14;
   const mainY = 0;
   const totalMainW = mainStages.length * nodeW + (mainStages.length - 1) * gapX;
-  const svgW = totalMainW + 4;
+  const svgW = totalMainW + (screenshotStage ? 24 : 4);
   const svgH = screenshotStage ? mainY + nodeH + labelH + gapY + nodeH + labelH + 4 : mainY + nodeH + labelH + 4;
 
   const getStageColor = (status: string) => {
@@ -71,11 +71,11 @@ function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
   return (
     <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full overflow-visible" style={{ maxHeight: svgH * 1.2 }}>
       <defs>
-        <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6" fill="none" stroke="#22C55E" strokeWidth="1" />
+        <marker id="arrow-green" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+          <path d="M0,0 L4,2 L0,4" fill="none" stroke="#22C55E" strokeWidth="0.8" />
         </marker>
-        <marker id="arrow-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6" fill="none" stroke="var(--color-border-dark)" strokeWidth="1" />
+        <marker id="arrow-muted" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-border-dark)" strokeWidth="0.8" />
         </marker>
       </defs>
 
@@ -100,17 +100,20 @@ function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
         );
       })}
 
-      {/* Curved connector from last main stage down to screenshots */}
+      {/* Curved connector from right side of archive to right side of screenshots */}
       {screenshotStage && mainStages.length > 0 && (() => {
         const lastIdx = mainStages.length - 1;
-        const lastX = lastIdx * (nodeW + gapX) + nodeW / 2;
-        const fromY = mainY + nodeH + 2;
-        const toY = mainY + nodeH + labelH + gapY - 2;
+        const archiveRight = lastIdx * (nodeW + gapX) + nodeW;
+        const archiveMidY = mainY + nodeH / 2;
+        const screenshotY = mainY + nodeH + labelH + gapY;
+        const screenshotRight = archiveRight;
+        const screenshotMidY = screenshotY + nodeH / 2;
+        const bulge = 20;
         const color = connectorColor(mainStages[lastIdx].status);
         const markerId = mainStages[lastIdx].status === "completed" ? "arrow-green" : "arrow-muted";
         return (
           <path
-            d={`M${lastX},${fromY} C${lastX},${fromY + 16} ${lastX},${toY - 16} ${lastX},${toY}`}
+            d={`M${archiveRight},${archiveMidY} C${archiveRight + bulge},${archiveMidY} ${screenshotRight + bulge},${screenshotMidY} ${screenshotRight},${screenshotMidY}`}
             stroke={color}
             strokeWidth="1.5"
             fill="none"

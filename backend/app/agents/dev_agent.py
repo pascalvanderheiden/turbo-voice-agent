@@ -17,6 +17,7 @@ import time
 
 import httpx
 
+from app.models.dev_task import DevArtifact
 from app.services.dev_service import InMemoryDevService, _default_iteration
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,7 @@ class DevAgent:
             stage_label="screenshots",
             raise_on_error=False,
         )
+        await self._collect_screenshots(task_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -446,6 +448,7 @@ class DevAgent:
             stage_label="screenshots",
             raise_on_error=False,
         )
+        await self._collect_screenshots(task_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -530,6 +533,34 @@ class DevAgent:
             )
 
         return combined
+
+    async def _collect_screenshots(self, task_id: str) -> None:
+        """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
+        svc = self._dev_service
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(f"{SANDBOX_URL}/files", params={"glob": "*.png"})
+                resp.raise_for_status()
+                files = resp.json().get("files", [])
+                logger.info("Found %d screenshot files in sandbox", len(files))
+
+                for file_path in files:
+                    rel = file_path.replace("/workspace/", "", 1)
+                    try:
+                        fresp = await client.get(f"{SANDBOX_URL}/files/{rel}")
+                        fresp.raise_for_status()
+                        fdata = fresp.json()
+                        artifact = DevArtifact(
+                            type="screenshot",
+                            name=fdata.get("name", rel),
+                            data=fdata.get("data", ""),
+                        )
+                        await svc.add_artifact(task_id, artifact)
+                        logger.info("Stored screenshot artifact: %s", rel)
+                    except Exception as e:
+                        logger.warning("Failed to fetch screenshot %s: %s", rel, e)
+        except Exception as e:
+            logger.warning("Failed to list screenshot files: %s", e)
 
     # ── Shared pipeline stages ──────────────────────────────────────
 

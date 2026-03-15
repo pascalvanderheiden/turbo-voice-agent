@@ -87,8 +87,8 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
                 {showConnector && (
                   <svg width={20} height={28} className="overflow-visible">
                     <defs>
-                      <marker id={`det-arrow-${i}`} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
-                        <path d="M0,0 L5,2.5 L0,5" fill="none" stroke={connectorColor(stage.status)} strokeWidth="1" />
+                      <marker id={`det-arrow-${i}`} markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+                        <path d="M0,0 L4,2 L0,4" fill="none" stroke={connectorColor(stage.status)} strokeWidth="0.8" />
                       </marker>
                     </defs>
                     <path

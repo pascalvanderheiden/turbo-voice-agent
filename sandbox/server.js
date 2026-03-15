@@ -2,6 +2,8 @@ const express = require("express");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 const path = require("path");
+const fs = require("fs");
+const { execSync } = require("child_process");
 
 const app = express();
 app.use(express.json());
@@ -141,6 +143,34 @@ app.get("/tasks", (_req, res) => {
     outputLines: t.output.length,
   }));
   res.json({ tasks: list });
+});
+
+// List and download workspace files (for screenshot retrieval)
+app.get("/files", (req, res) => {
+  const pattern = req.query.glob || "*.png";
+  try {
+    const result = execSync(
+      `find /workspace -maxdepth 3 -name '${pattern.replace(/'/g, "")}' -type f 2>/dev/null || true`,
+      { encoding: "utf-8" }
+    );
+    const files = result.trim().split("\n").filter(Boolean);
+    res.json({ files });
+  } catch {
+    res.json({ files: [] });
+  }
+});
+
+app.get("/files/*", (req, res) => {
+  const filePath = path.join("/workspace", req.params[0]);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith("/workspace")) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  if (!fs.existsSync(resolved)) {
+    return res.status(404).json({ error: "File not found" });
+  }
+  const data = fs.readFileSync(resolved);
+  res.json({ name: path.basename(resolved), data: data.toString("base64") });
 });
 
 const port = process.env.PORT || 3000;
