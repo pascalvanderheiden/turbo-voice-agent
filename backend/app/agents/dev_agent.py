@@ -314,12 +314,20 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
-        # Stage: screenshots — capture with Playwright (best-effort)
+        # Stage: screenshots — Copilot CLI starts app + captures with Playwright
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
-            command="npx",
-            args=["playwright", "screenshot", "--wait-for-timeout=3000",
-                  "http://localhost:3000", "/workspace/screenshot.png"],
+            prompt=(
+                "Take screenshots of the application you just built. "
+                "First, start the app in the background (e.g. npm run dev &). "
+                "Wait for it to be ready, then use "
+                "'npx playwright screenshot http://localhost:3000 "
+                "/workspace/screenshot.png --full-page "
+                "--wait-for-timeout=5000'. "
+                "If the app uses a different port, adjust accordingly. "
+                "Take at least one screenshot of the main page."
+            ),
+            model=model,
             stage_label="screenshots",
             raise_on_error=False,
         )
@@ -421,12 +429,20 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
-        # ── Screenshots (best-effort) ────────────────────────────────
+        # ── Screenshots — Copilot CLI starts app + captures ─────────
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
-            command="npx",
-            args=["playwright", "screenshot", "--wait-for-timeout=3000",
-                  "http://localhost:3000", "/workspace/screenshot.png"],
+            prompt=(
+                "Take screenshots of the application you just built. "
+                "First, start the app in the background (e.g. npm run dev &). "
+                "Wait for it to be ready, then use "
+                "'npx playwright screenshot http://localhost:3000 "
+                "/workspace/screenshot.png --full-page "
+                "--wait-for-timeout=5000'. "
+                "If the app uses a different port, adjust accordingly. "
+                "Take at least one screenshot of the main page."
+            ),
+            model=model,
             stage_label="screenshots",
             raise_on_error=False,
         )

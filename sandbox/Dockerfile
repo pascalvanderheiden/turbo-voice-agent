@@ -24,9 +24,8 @@ RUN npm install -g @github/copilot
 # OpenSpec CLI (generates skills for Copilot CLI via `openspec init --tools github-copilot`)
 RUN npm install -g @fission-ai/openspec@latest
 
-# Playwright (for screenshot generation)
-RUN npm install -g playwright \
-    && npx playwright install --with-deps chromium
+# Playwright npm package (browser install deferred to after user creation)
+RUN npm install -g playwright
 
 # Create non-root agent user (mirrors official sandbox template pattern)
 RUN useradd -m -s /bin/bash agent \
@@ -34,6 +33,11 @@ RUN useradd -m -s /bin/bash agent \
 
 # Workspace for sandbox project work
 RUN mkdir -p /workspace && chown agent:agent /workspace
+
+# Install Playwright browsers as agent user (must match runtime user)
+USER agent
+RUN npx playwright install --with-deps chromium
+USER root
 
 # Configure Copilot CLI: trust /workspace, enable yolo mode
 RUN mkdir -p /home/agent/.copilot \

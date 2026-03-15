@@ -10,10 +10,11 @@ import {
   IconCircleX,
   IconClock,
   IconCode,
-  IconClipboardList,
-  IconHammer,
-  IconRocket,
-  IconTestPipe,
+  IconSettingsAutomation,
+  IconMessageChatbot,
+  IconPackage,
+  IconArchive,
+  IconPhoto,
   IconChevronRight,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
@@ -23,11 +24,12 @@ import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 
-const STAGE_META: Record<string, { icon: typeof IconClipboardList; label: string; color: string }> = {
-  plan:  { icon: IconClipboardList, label: "Plan",  color: "var(--color-brand-purple)" },
-  build: { icon: IconHammer,        label: "Build", color: "var(--color-brand-cyan)" },
-  run:   { icon: IconRocket,        label: "Run",   color: "var(--color-brand-pink)" },
-  test:  { icon: IconTestPipe,      label: "Test",  color: "#22C55E" },
+const STAGE_META: Record<string, { icon: typeof IconSettingsAutomation; label: string; color: string }> = {
+  init:        { icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
+  propose:     { icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
+  apply:       { icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
+  archive:     { icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
+  screenshots: { icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -46,56 +48,75 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
-  return (
-    <div className="flex items-center gap-0.5">
-      {stages.map((stage, i) => {
-        const meta = STAGE_META[stage.name];
-        const Icon = meta?.icon || IconCode;
-        const isCompleted = stage.status === "completed";
-        const isRunning = stage.status === "running";
-        const isFailed = stage.status === "failed";
+  // Split into two rows: main pipeline (init→archive) and screenshots below
+  const mainStages = stages.filter((s) => s.name !== "screenshots");
+  const screenshotStage = stages.find((s) => s.name === "screenshots");
 
-        const ringColor = isCompleted
-          ? "ring-green-500/50 bg-green-500/10"
-          : isRunning
-          ? "ring-blue-500/50 bg-blue-500/10 animate-pulse"
-          : isFailed
-          ? "ring-red-500/50 bg-red-500/10"
-          : "ring-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]";
+  const renderStage = (stage: DevTask["stages"][0], showConnector: boolean) => {
+    const meta = STAGE_META[stage.name];
+    const Icon = meta?.icon || IconCode;
+    const isCompleted = stage.status === "completed";
+    const isRunning = stage.status === "running";
+    const isFailed = stage.status === "failed";
 
-        const iconColor = isCompleted
-          ? "text-green-400"
-          : isRunning
-          ? "text-blue-400"
-          : isFailed
-          ? "text-red-400"
-          : "text-[var(--color-text-muted)]";
+    const ringColor = isCompleted
+      ? "ring-green-500/50 bg-green-500/10"
+      : isRunning
+      ? "ring-blue-500/50 bg-blue-500/10 animate-pulse"
+      : isFailed
+      ? "ring-red-500/50 bg-red-500/10"
+      : "ring-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]";
 
-        return (
-          <div key={stage.name} className="flex items-center">
-            <div className="flex flex-col items-center gap-1">
-              <div
-                className={`w-9 h-9 rounded-lg ring-1 flex items-center justify-center ${ringColor}`}
-                title={`${meta?.label || stage.name}: ${stage.status}`}
-              >
-                {isCompleted ? (
-                  <IconCircleCheck size={18} className="text-green-400" />
-                ) : isFailed ? (
-                  <IconCircleX size={18} className="text-red-400" />
-                ) : isRunning ? (
-                  <IconLoader2 size={18} className="text-blue-400 animate-spin" />
-                ) : (
-                  <Icon size={18} className={iconColor} />
-                )}
-              </div>
-              <span className={`text-[10px] font-medium ${iconColor}`}>{meta?.label || stage.name}</span>
-            </div>
-            {i < stages.length - 1 && (
-              <div className={`w-5 h-px mb-4 ${isCompleted ? "bg-green-500/40" : "bg-[var(--color-border-dark)]"}`} />
+    const iconColor = isCompleted
+      ? "text-green-400"
+      : isRunning
+      ? "text-blue-400"
+      : isFailed
+      ? "text-red-400"
+      : "text-[var(--color-text-muted)]";
+
+    return (
+      <div key={stage.name} className="flex items-center">
+        <div className="flex flex-col items-center gap-1">
+          <div
+            className={`w-9 h-9 rounded-lg ring-1 flex items-center justify-center ${ringColor}`}
+            title={`${meta?.label || stage.name}: ${stage.status}`}
+          >
+            {isCompleted ? (
+              <IconCircleCheck size={18} className="text-green-400" />
+            ) : isFailed ? (
+              <IconCircleX size={18} className="text-red-400" />
+            ) : isRunning ? (
+              <IconLoader2 size={18} className="text-blue-400 animate-spin" />
+            ) : (
+              <Icon size={18} className={iconColor} />
             )}
           </div>
-        );
-      })}
+          <span className={`text-[10px] font-medium ${iconColor}`}>{meta?.label || stage.name}</span>
+        </div>
+        {showConnector && (
+          <div className={`w-5 h-px mb-4 ${isCompleted ? "bg-green-500/40" : "bg-[var(--color-border-dark)]"}`} />
+        )}
+      </div>
+    );
+  };
+
+  const lastMain = mainStages[mainStages.length - 1];
+  const vertLineColor = lastMain?.status === "completed" ? "bg-green-500/40" : "bg-[var(--color-border-dark)]";
+
+  return (
+    <div className="flex flex-col items-end">
+      {/* Main row: init → propose → apply → archive */}
+      <div className="flex items-center gap-0.5">
+        {mainStages.map((stage, i) => renderStage(stage, i < mainStages.length - 1))}
+      </div>
+      {/* Vertical connector + screenshots row below archive */}
+      {screenshotStage && (
+        <div className="flex flex-col items-center mr-2.5">
+          <div className={`w-px h-3 ${vertLineColor}`} />
+          {renderStage(screenshotStage, false)}
+        </div>
+      )}
     </div>
   );
 }
