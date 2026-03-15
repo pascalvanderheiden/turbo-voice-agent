@@ -45,37 +45,63 @@ function StageStatusIcon({ status }: { status: string }) {
 function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  const getStageColors = (status: string) => {
+    if (status === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)" };
+    if (status === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)" };
+    if (status === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)" };
+    return { stroke: "var(--color-border-dark)", fill: "var(--color-bg-tertiary)" };
+  };
+
+  const connectorColor = (status: string) =>
+    status === "completed" ? "#22C55E" : "var(--color-border-dark)";
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-0">
       {stages.map((stage, i) => {
         const meta = STAGE_META[stage.name] || { Icon: IconSettingsAutomation, label: stage.name, color: "var(--color-text-muted)" };
         const hasContent = !!(stage.output || stage.error);
         const isOpen = expanded === stage.name;
+        const colors = getStageColors(stage.status);
+        const showConnector = i < stages.length - 1;
+
         return (
           <div key={stage.name}>
             <div
-              className={`flex items-center gap-4 ${hasContent ? "cursor-pointer" : ""}`}
+              className={`flex items-start gap-4 ${hasContent ? "cursor-pointer" : ""}`}
               onClick={() => hasContent && setExpanded(isOpen ? null : stage.name)}
             >
-              <div className="flex flex-col items-center">
-                <div
-                  className={`w-10 h-10 rounded-xl flex items-center justify-center border-2 ${
-                    stage.status === "completed" ? "border-green-500 bg-green-500/10"
-                    : stage.status === "running" ? "border-blue-500 bg-blue-500/10"
-                    : stage.status === "failed" ? "border-red-500 bg-red-500/10"
-                    : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
-                  }`}
-                >
-                  {stage.status === "completed" ? <IconCircleCheck size={20} className="text-green-400" />
-                  : stage.status === "running" ? <IconLoader2 size={20} className="text-blue-400 animate-spin" />
-                  : stage.status === "failed" ? <IconCircleX size={20} className="text-red-400" />
-                  : <meta.Icon size={20} style={{ color: meta.color }} />}
-                </div>
-                {i < stages.length - 1 && (
-                  <div className={`w-0.5 h-4 ${stage.status === "completed" ? "bg-green-500/50" : "bg-[var(--color-border-dark)]"}`} />
+              {/* SVG node + connector */}
+              <div className="flex flex-col items-center flex-shrink-0" style={{ width: 44 }}>
+                <svg width={44} height={44} className="overflow-visible">
+                  <rect x={2} y={2} width={40} height={40} rx={12}
+                    fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5" />
+                  <foreignObject x={2} y={2} width={40} height={40}>
+                    <div className="w-full h-full flex items-center justify-center">
+                      {stage.status === "completed" ? <IconCircleCheck size={20} color="#4ADE80" />
+                      : stage.status === "running" ? <IconLoader2 size={20} color="#60A5FA" className="animate-spin" />
+                      : stage.status === "failed" ? <IconCircleX size={20} color="#F87171" />
+                      : <meta.Icon size={20} style={{ color: meta.color }} />}
+                    </div>
+                  </foreignObject>
+                </svg>
+                {showConnector && (
+                  <svg width={20} height={28} className="overflow-visible">
+                    <defs>
+                      <marker id={`det-arrow-${i}`} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                        <path d="M0,0 L5,2.5 L0,5" fill="none" stroke={connectorColor(stage.status)} strokeWidth="1" />
+                      </marker>
+                    </defs>
+                    <path
+                      d={`M10,0 C10,10 10,18 10,24`}
+                      stroke={connectorColor(stage.status)}
+                      strokeWidth="1.5" fill="none" opacity="0.7"
+                      markerEnd={`url(#det-arrow-${i})`}
+                    />
+                  </svg>
                 )}
               </div>
-              <div className="flex-1 flex items-center gap-3">
+              {/* Label + status */}
+              <div className="flex-1 flex items-center gap-3 pt-2.5">
                 <span className="font-medium">{meta.label}</span>
                 <StageStatusIcon status={stage.status} />
                 {stage.startedAt && stage.completedAt && (

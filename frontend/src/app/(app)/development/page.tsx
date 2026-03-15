@@ -9,7 +9,6 @@ import {
   IconCircleCheck,
   IconCircleX,
   IconClock,
-  IconCode,
   IconSettingsAutomation,
   IconMessageChatbot,
   IconPackage,
@@ -48,76 +47,161 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
-  // Split into two rows: main pipeline (init→archive) and screenshots below
+  // Layout: main row (init→archive), then screenshots drops below last stage
   const mainStages = stages.filter((s) => s.name !== "screenshots");
   const screenshotStage = stages.find((s) => s.name === "screenshots");
 
-  const renderStage = (stage: DevTask["stages"][0], showConnector: boolean) => {
-    const meta = STAGE_META[stage.name];
-    const Icon = meta?.icon || IconCode;
-    const isCompleted = stage.status === "completed";
-    const isRunning = stage.status === "running";
-    const isFailed = stage.status === "failed";
+  // Node dimensions in viewBox units
+  const nodeW = 36, nodeH = 36, gapX = 32, gapY = 44, labelH = 14;
+  const mainY = 0;
+  const totalMainW = mainStages.length * nodeW + (mainStages.length - 1) * gapX;
+  const svgW = totalMainW + 4;
+  const svgH = screenshotStage ? mainY + nodeH + labelH + gapY + nodeH + labelH + 4 : mainY + nodeH + labelH + 4;
 
-    const ringColor = isCompleted
-      ? "ring-green-500/50 bg-green-500/10"
-      : isRunning
-      ? "ring-blue-500/50 bg-blue-500/10 animate-pulse"
-      : isFailed
-      ? "ring-red-500/50 bg-red-500/10"
-      : "ring-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]";
-
-    const iconColor = isCompleted
-      ? "text-green-400"
-      : isRunning
-      ? "text-blue-400"
-      : isFailed
-      ? "text-red-400"
-      : "text-[var(--color-text-muted)]";
-
-    return (
-      <div key={stage.name} className="flex items-center">
-        <div className="flex flex-col items-center gap-1">
-          <div
-            className={`w-9 h-9 rounded-lg ring-1 flex items-center justify-center ${ringColor}`}
-            title={`${meta?.label || stage.name}: ${stage.status}`}
-          >
-            {isCompleted ? (
-              <IconCircleCheck size={18} className="text-green-400" />
-            ) : isFailed ? (
-              <IconCircleX size={18} className="text-red-400" />
-            ) : isRunning ? (
-              <IconLoader2 size={18} className="text-blue-400 animate-spin" />
-            ) : (
-              <Icon size={18} className={iconColor} />
-            )}
-          </div>
-          <span className={`text-[10px] font-medium ${iconColor}`}>{meta?.label || stage.name}</span>
-        </div>
-        {showConnector && (
-          <div className={`w-5 h-px mb-4 ${isCompleted ? "bg-green-500/40" : "bg-[var(--color-border-dark)]"}`} />
-        )}
-      </div>
-    );
+  const getStageColor = (status: string) => {
+    if (status === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)", text: "#4ADE80" };
+    if (status === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)", text: "#60A5FA" };
+    if (status === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)", text: "#F87171" };
+    return { stroke: "var(--color-border-dark)", fill: "var(--color-bg-tertiary)", text: "var(--color-text-muted)" };
   };
 
-  const lastMain = mainStages[mainStages.length - 1];
-  const vertLineColor = lastMain?.status === "completed" ? "bg-green-500/40" : "bg-[var(--color-border-dark)]";
+  const connectorColor = (fromStatus: string) =>
+    fromStatus === "completed" ? "#22C55E" : "var(--color-border-dark)";
 
   return (
-    <div className="flex flex-col items-end">
-      {/* Main row: init → propose → apply → archive */}
-      <div className="flex items-center gap-0.5">
-        {mainStages.map((stage, i) => renderStage(stage, i < mainStages.length - 1))}
-      </div>
-      {/* Vertical connector + screenshots row below archive */}
-      {screenshotStage && (
-        <div className="flex flex-col items-center mr-2.5">
-          <div className={`w-px h-3 ${vertLineColor}`} />
-          {renderStage(screenshotStage, false)}
-        </div>
-      )}
-    </div>
+    <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full overflow-visible" style={{ maxHeight: svgH * 1.2 }}>
+      <defs>
+        <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6" fill="none" stroke="#22C55E" strokeWidth="1" />
+        </marker>
+        <marker id="arrow-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6" fill="none" stroke="var(--color-border-dark)" strokeWidth="1" />
+        </marker>
+      </defs>
+
+      {/* Horizontal connectors between main stages */}
+      {mainStages.map((stage, i) => {
+        if (i >= mainStages.length - 1) return null;
+        const x1 = i * (nodeW + gapX) + nodeW + 4;
+        const x2 = (i + 1) * (nodeW + gapX) - 4;
+        const y = mainY + nodeH / 2;
+        const color = connectorColor(stage.status);
+        const markerId = stage.status === "completed" ? "arrow-green" : "arrow-muted";
+        return (
+          <path
+            key={`conn-${i}`}
+            d={`M${x1},${y} C${x1 + 14},${y} ${x2 - 14},${y} ${x2},${y}`}
+            stroke={color}
+            strokeWidth="1.5"
+            fill="none"
+            opacity="0.7"
+            markerEnd={`url(#${markerId})`}
+          />
+        );
+      })}
+
+      {/* Curved connector from last main stage down to screenshots */}
+      {screenshotStage && mainStages.length > 0 && (() => {
+        const lastIdx = mainStages.length - 1;
+        const lastX = lastIdx * (nodeW + gapX) + nodeW / 2;
+        const fromY = mainY + nodeH + 2;
+        const toY = mainY + nodeH + labelH + gapY - 2;
+        const color = connectorColor(mainStages[lastIdx].status);
+        const markerId = mainStages[lastIdx].status === "completed" ? "arrow-green" : "arrow-muted";
+        return (
+          <path
+            d={`M${lastX},${fromY} C${lastX},${fromY + 16} ${lastX},${toY - 16} ${lastX},${toY}`}
+            stroke={color}
+            strokeWidth="1.5"
+            fill="none"
+            opacity="0.7"
+            markerEnd={`url(#${markerId})`}
+          />
+        );
+      })()}
+
+      {/* Main stage nodes */}
+      {mainStages.map((stage, i) => {
+        const x = i * (nodeW + gapX);
+        const colors = getStageColor(stage.status);
+        const meta = STAGE_META[stage.name];
+        const cx = x + nodeW / 2, cy = mainY + nodeH / 2;
+        return (
+          <g key={stage.name}>
+            <rect
+              x={x} y={mainY} width={nodeW} height={nodeH} rx={10}
+              fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5"
+            />
+            {stage.status === "completed" ? (
+              <path d={`M${cx - 6},${cy} L${cx - 1},${cy + 5} L${cx + 7},${cy - 4}`}
+                stroke="#4ADE80" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            ) : stage.status === "failed" ? (
+              <g stroke="#F87171" strokeWidth="2.5" strokeLinecap="round">
+                <line x1={cx - 5} y1={cy - 5} x2={cx + 5} y2={cy + 5} />
+                <line x1={cx + 5} y1={cy - 5} x2={cx - 5} y2={cy + 5} />
+              </g>
+            ) : stage.status === "running" ? (
+              <circle cx={cx} cy={cy} r={6} fill="none" stroke="#60A5FA" strokeWidth="2.5"
+                strokeDasharray="12 8" strokeLinecap="round">
+                <animateTransform attributeName="transform" type="rotate"
+                  from={`0 ${cx} ${cy}`} to={`360 ${cx} ${cy}`} dur="1s" repeatCount="indefinite" />
+              </circle>
+            ) : (
+              <circle cx={cx} cy={cy} r={4} fill={meta?.color || "var(--color-text-muted)"} opacity="0.6" />
+            )}
+            <text
+              x={x + nodeW / 2} y={mainY + nodeH + 12}
+              textAnchor="middle" fontSize="9" fontWeight="500"
+              fill={colors.text}
+            >
+              {meta?.label || stage.name}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Screenshots node (below last main stage) */}
+      {screenshotStage && (() => {
+        const lastIdx = mainStages.length - 1;
+        const x = lastIdx * (nodeW + gapX);
+        const y = mainY + nodeH + labelH + gapY;
+        const colors = getStageColor(screenshotStage.status);
+        const meta = STAGE_META.screenshots;
+        const cx = x + nodeW / 2, cy = y + nodeH / 2;
+        return (
+          <g>
+            <rect
+              x={x} y={y} width={nodeW} height={nodeH} rx={10}
+              fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5"
+            />
+            {screenshotStage.status === "completed" ? (
+              <path d={`M${cx - 6},${cy} L${cx - 1},${cy + 5} L${cx + 7},${cy - 4}`}
+                stroke="#4ADE80" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            ) : screenshotStage.status === "failed" ? (
+              <g stroke="#F87171" strokeWidth="2.5" strokeLinecap="round">
+                <line x1={cx - 5} y1={cy - 5} x2={cx + 5} y2={cy + 5} />
+                <line x1={cx + 5} y1={cy - 5} x2={cx - 5} y2={cy + 5} />
+              </g>
+            ) : screenshotStage.status === "running" ? (
+              <circle cx={cx} cy={cy} r={6} fill="none" stroke="#60A5FA" strokeWidth="2.5"
+                strokeDasharray="12 8" strokeLinecap="round">
+                <animateTransform attributeName="transform" type="rotate"
+                  from={`0 ${cx} ${cy}`} to={`360 ${cx} ${cy}`} dur="1s" repeatCount="indefinite" />
+              </circle>
+            ) : (
+              <circle cx={cx} cy={cy} r={4} fill={meta.color} opacity="0.6" />
+            )}
+            <text
+              x={x + nodeW / 2} y={y + nodeH + 12}
+              textAnchor="middle" fontSize="9" fontWeight="500"
+              fill={colors.text}
+            >
+              {meta.label}
+            </text>
+          </g>
+        );
+      })()}
+    </svg>
   );
 }
 
