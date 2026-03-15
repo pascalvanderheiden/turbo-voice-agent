@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Setup Entra ID app registration for Turbo Voice Agent.
 # Idempotent — safe to run multiple times. Skips creation if app already exists.
+# Skips entirely in CI — Entra app is managed locally, CI sets vars via azd env set.
 set -euo pipefail
+
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "Running in GitHub Actions — skipping Entra ID setup (vars set externally)"
+    exit 0
+fi
 
 APP_NAME="Turbo Voice Agent"
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN_NAME:-}"
