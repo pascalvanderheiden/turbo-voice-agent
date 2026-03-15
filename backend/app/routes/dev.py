@@ -140,14 +140,30 @@ class TriggerRequest(BaseModel):
 
 @router.post("/{task_id}/trigger", response_model=DevTask)
 async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest | None = None):
-    """Trigger the dev pipeline (runs in background)."""
+    """Trigger the dev pipeline (runs in background).
+
+    Returns 503 if the sandbox container is not reachable — the task is set to
+    'paused' and the frontend should notify the user.
+    """
     user_id = getattr(request.state, "user_id", "default-user")
     service = _get_service().with_user(user_id)
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
-    if task.status not in ("pending", "failed"):
+    if task.status not in ("pending", "failed", "paused"):
         raise HTTPException(status_code=400, detail="Task already running or completed")
+
+    # Check sandbox availability before starting the pipeline
+    from app.routes.sandbox import _probe_sandbox_health
+
+    reachable, _ = await _probe_sandbox_health()
+    if not reachable:
+        await service.set_status(task_id, "paused")
+        logger.warning("Sandbox unreachable — task %s paused", task_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Sandbox is not running. Task is paused until the sandbox is available.",
+        )
 
     await service.set_status(task_id, "running")
     logger.info("Triggering pipeline for task %s (mode=%s, user=%s)", task_id, task.mode, user_id)

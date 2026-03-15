@@ -24,6 +24,7 @@ import {
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo } from "@/lib/api";
+import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
 const STAGE_META: Record<string, { Icon: typeof IconClipboardList; label: string; color: string }> = {
@@ -168,7 +169,8 @@ export default function DevTaskDetailPage() {
       toast.success("Pipeline started");
       loadTask();
     } catch {
-      toast.error("Failed to start pipeline");
+      toast.error("Sandbox is not running. Task is paused until the sandbox is available.");
+      loadTask();
     }
   };
 
@@ -228,7 +230,7 @@ export default function DevTaskDetailPage() {
 
       {/* Action buttons */}
       <div className="flex gap-2 flex-wrap">
-        {(task.status === "pending" || task.status === "failed") && (
+        {(task.status === "pending" || task.status === "failed" || task.status === "paused") && (
           <button onClick={handleTrigger} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-gradient-to-r from-[var(--color-brand-pink)] to-[var(--color-brand-purple)] text-white hover:opacity-90 transition-opacity">
             <IconPlayerPlay size={16} /> {t("dev.runPipeline")}
           </button>
@@ -239,6 +241,22 @@ export default function DevTaskDetailPage() {
           </a>
         )}
       </div>
+
+      {/* Paused banner */}
+      {task.status === "paused" && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-[var(--radius-lg)] bg-orange-500/10 border border-orange-500/20">
+          <IconClock size={18} className="text-orange-400 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-orange-400">Sandbox not running</p>
+            <p className="text-xs text-orange-400/70 mt-0.5">
+              This task is paused. Start the sandbox and click &quot;Run Pipeline&quot; to resume.
+            </p>
+          </div>
+          <Link href="/agents" className="text-xs text-orange-400 hover:underline shrink-0">
+            Go to Agents →
+          </Link>
+        </div>
+      )}
 
       {/* Iteration tabs for openspec mode */}
       {isOpenSpec && (

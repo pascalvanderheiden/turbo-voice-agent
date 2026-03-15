@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import Link from "next/link";
 import { devApi, specsApi, skillsApi, type DevTask, type Spec, type InstalledSkill } from "@/lib/api";
+import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 
@@ -32,6 +33,7 @@ const STAGE_META: Record<string, { icon: typeof IconClipboardList; label: string
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     pending: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+    paused: "bg-orange-500/10 text-orange-400 border-orange-500/20",
     running: "bg-blue-500/10 text-blue-400 border-blue-500/20",
     completed: "bg-green-500/10 text-green-400 border-green-500/20",
     failed: "bg-red-500/10 text-red-400 border-red-500/20",
@@ -151,6 +153,11 @@ export default function DevelopmentPage() {
 
   const handleCreate = async (title: string, specId?: string, mode?: string, skillIds?: string[]) => {
     try {
+      // Check sandbox availability first
+      const status = await sandboxApi.status();
+      if (status.status !== "ready") {
+        toast.warning("Sandbox is not running. Task will be paused until the sandbox is available.");
+      }
       await devApi.create({ title, specId: specId || undefined, mode: mode || "mockup", skillIds });
       setShowCreate(false);
       loadTasks();
@@ -177,7 +184,8 @@ export default function DevelopmentPage() {
       toast.success(`Pipeline started for "${task.title}"`);
       loadTasks();
     } catch {
-      toast.error("Failed to start pipeline");
+      toast.error("Sandbox is not running. Task is paused until the sandbox is available.");
+      loadTasks();
     }
   };
 
@@ -257,7 +265,7 @@ export default function DevelopmentPage() {
                     {new Date(task.createdAt).toLocaleDateString()}
                   </span>
                   <div className="flex gap-2">
-                    {task.status === "pending" && (
+                    {(task.status === "pending" || task.status === "paused") && (
                       <button
                         onClick={() => handleTrigger(task)}
                         className="p-1.5 rounded-[var(--radius-sm)] hover:bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] transition-colors"
