@@ -146,7 +146,7 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
           </div>
         </div>
 
-        {/* Recreate Button */}
+        {/* Create / Recreate Button */}
         <button
           onClick={handleRecreate}
           disabled={loading || status === "provisioning" || status === "busy"}
@@ -157,7 +157,11 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
           ) : (
             <IconRefresh size={14} />
           )}
-          {loading ? "Recreating..." : "Recreate Sandbox"}
+          {loading
+            ? "Creating..."
+            : status === "stopped" || status === "not_configured"
+              ? "Create Sandbox"
+              : "Recreate Sandbox"}
         </button>
       </div>
     </div>

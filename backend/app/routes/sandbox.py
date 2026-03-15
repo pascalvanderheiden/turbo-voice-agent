@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.models.sandbox import SandboxConfig, SandboxState
+from app.models.sandbox import SandboxConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +52,23 @@ async def get_sandbox_status(request: Request):
     reachable, active_tasks = await _probe_sandbox_health()
     live_status = "ready" if reachable else "stopped"
 
+    # Check if user has a GitHub token stored in user connections
+    from app.routes.user import _connection_store
+
+    github_connected = bool(_connection_store.get(f"sandbox:{user_id}"))
+
     if state is None:
         return {
             "status": live_status,
             "activeTasks": active_tasks,
-            "githubConnected": False,
+            "githubConnected": github_connected,
             "config": SandboxConfig().model_dump(),
         }
 
     result = state if isinstance(state, dict) else state.model_dump()
     result["status"] = live_status
     result["activeTasks"] = active_tasks
+    result["githubConnected"] = github_connected
     return result
 
 
@@ -137,6 +143,6 @@ async def stream_sandbox_task(task_id: str, request: Request):
                             yield f"{line}\n\n"
         except httpx.HTTPError as exc:
             logger.error("Sandbox SSE stream error: %s", exc)
-            yield f"data: {{\"type\": \"error\", \"message\": \"Sandbox connection lost\"}}\n\n"
+            yield 'data: {"type": "error", "message": "Sandbox connection lost"}\n\n'
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
