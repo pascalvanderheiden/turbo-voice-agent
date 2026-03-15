@@ -1,63 +1,27 @@
-# spec-service Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-spec-agent. Update Purpose after archive.
-## Requirements
-### Requirement: Spec CRUD
-The system SHALL provide full CRUD operations for development specs, including create, read, update, delete, and list. Each spec SHALL have a type field of either "foundation" or "feature".
+### Requirement: Spec generation output format
+The system SHALL generate specs in a two-part format: (1) **Mockup Description** — a concise description of the frontend design demonstrating key features (~200 words, covering layout, components, interactions, and visual style), and (2) **OpenSpec Config** — a series of focused prompt instructions, starting with one `openspec-propose` instruction for the foundation and one `openspec-propose` instruction per feature.
 
-#### Scenario: Create foundation spec manually
-- **WHEN** a user creates a spec with type "foundation", a title and content
-- **THEN** the system stores the spec with status "draft" and returns it with a unique ID
+#### Scenario: Generate spec from idea
+- **WHEN** a user requests spec generation from an idea (via voice or UI)
+- **THEN** the system SHALL produce a spec with exactly two sections: a `## Mockup Description` section containing a concise frontend design brief, and a `## OpenSpec Config` section containing structured `openspec-propose` prompt instructions
 
-#### Scenario: Create feature spec manually
-- **WHEN** a user creates a spec with type "feature", a title, content, and parentId referencing a foundation spec
-- **THEN** the system stores the feature spec linked to the foundation spec
+#### Scenario: Mockup Description content
+- **WHEN** a spec is generated
+- **THEN** the Mockup Description SHALL include: app name, layout structure, key UI components, primary user interactions, color scheme/visual identity, and a list of demonstrated features — all in ~200 words maximum
 
-#### Scenario: Generate specs from idea
-- **WHEN** a user requests spec generation for an existing idea
-- **THEN** the system uses GPT-5.2 to first produce a foundation spec (Overview, Architecture, Tech Stack, Data Model, Core Patterns)
-- **AND** then identifies the minimum set of features and produces one feature spec per feature (Overview, Requirements, Acceptance Criteria, Technical Notes)
-- **AND** all specs are linked to the source idea via ideaId and feature specs reference the foundation spec via parentId
+#### Scenario: OpenSpec Config content
+- **WHEN** a spec is generated
+- **THEN** the OpenSpec Config SHALL contain a `### Foundation` subsection with a single `openspec-propose` prompt instruction covering the app's core architecture, and a `### Features` subsection with one `openspec-propose` prompt instruction per feature, each focused and self-contained
 
-#### Scenario: List specs
-- **WHEN** a user requests the spec list
-- **THEN** the system returns all specs ordered by type (foundation first) then updatedAt descending
+#### Scenario: OpenSpec Config prompt quality
+- **WHEN** the OpenSpec Config is consumed by the Copilot CLI
+- **THEN** each `openspec-propose` instruction SHALL be a clear, focused prompt that can be directly used as input to the `openspec-propose` CLI command without further editing
 
-#### Scenario: Delete spec
-- **WHEN** a user deletes a spec by ID
-- **THEN** the spec is removed from storage
+### Requirement: Spec optimization
+The system SHALL optimize specs while preserving the two-part format structure.
 
-### Requirement: Spec Persistence
-The system SHALL persist specs to JSON files for local development and to Cosmos DB when available.
-
-#### Scenario: Data survives restart
-- **WHEN** the backend restarts
-- **THEN** previously created specs are loaded from disk and available via API
-
-### Requirement: Spec LLM Optimization
-The system SHALL use GPT-5.2 with max_completion_tokens to generate and optimize specs. The output SHALL be concise, clear, and structured in markdown. Feature count SHALL be kept to a minimum.
-
-#### Scenario: Optimize existing spec
-- **WHEN** a user triggers optimization on a draft spec
-- **THEN** the system sends the spec content to GPT-5.2 for refinement
-- **AND** updates the spec status to "optimized" and stores the improved content
-
-### Requirement: Spec Naming
-The spec-service SHALL store spec titles without type suffixes. When returning specs via the API, the title field SHALL contain only the user-provided title (e.g., "My App") without appending "- Foundation" or "- Feature". The spec type SHALL be conveyed solely through the `type` field in the spec data model. Existing specs with type suffixes in titles SHALL be normalized on read.
-
-#### Scenario: Create a foundation spec
-- **WHEN** a foundation spec is created with title "My App"
-- **THEN** the stored title SHALL be "My App" (not "My App - Foundation")
-- **AND** the `type` field SHALL be "foundation"
-
-#### Scenario: Create a feature spec
-- **WHEN** a feature spec is created with title "Dark Theme"
-- **THEN** the stored title SHALL be "Dark Theme" (not "Dark Theme - Feature")
-- **AND** the `type` field SHALL be "feature"
-
-#### Scenario: List specs returns clean titles
-- **WHEN** specs are listed via `GET /api/specs`
-- **THEN** all titles SHALL be returned without type suffixes
-- **AND** foundation specs SHALL be ordered before feature specs
-
+#### Scenario: Optimize preserves format
+- **WHEN** a user requests spec optimization
+- **THEN** the optimized spec SHALL retain both the Mockup Description and OpenSpec Config sections, refining content for clarity and conciseness within each section
