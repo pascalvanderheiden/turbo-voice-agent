@@ -387,14 +387,18 @@ class DevAgent:
         await self._sandbox_exec(
             task_id=task_id,
             prompt=(
-                "Take screenshots of the application you just built. "
-                "First, start the app in the background (e.g. npm run dev &). "
-                "Wait for it to be ready, then use "
-                "'npx playwright screenshot http://localhost:3000 "
-                f"{work_dir}/screenshot.png --full-page "
-                "--wait-for-timeout=5000'. "
-                "If the app uses a different port, adjust accordingly. "
-                "Take at least one screenshot of the main page."
+                "Look at the project in the current directory. "
+                "Find the main application entry point and figure out how to start it. "
+                "Then:\n"
+                "1. Install dependencies if needed (npm install or pip install etc)\n"
+                "2. Start the app in background (e.g. `npm run dev &` or `npx serve . &`)\n"
+                "3. Wait a few seconds for it to be ready\n"
+                "4. Take a screenshot with: npx playwright screenshot "
+                f"http://localhost:3000 {work_dir}/screenshot.png "
+                "--full-page --wait-for-timeout=5000\n"
+                "5. If port 3000 doesn't work, check package.json for the correct port\n"
+                "6. If the app has no dev server, try `npx serve . -l 3000 &` to serve static files\n"
+                "Save screenshots as PNG files in the current directory."
             ),
             model=model,
             stage_label="screenshots",
@@ -562,14 +566,18 @@ class DevAgent:
         await self._sandbox_exec(
             task_id=task_id,
             prompt=(
-                "Take screenshots of the application you just built. "
-                "First, start the app in the background (e.g. npm run dev &). "
-                "Wait for it to be ready, then use "
-                "'npx playwright screenshot http://localhost:3000 "
-                f"{work_dir}/screenshot.png --full-page "
-                "--wait-for-timeout=5000'. "
-                "If the app uses a different port, adjust accordingly. "
-                "Take at least one screenshot of the main page."
+                "Look at the project in the current directory. "
+                "Find the main application entry point and figure out how to start it. "
+                "Then:\n"
+                "1. Install dependencies if needed (npm install or pip install etc)\n"
+                "2. Start the app in background (e.g. `npm run dev &` or `npx serve . &`)\n"
+                "3. Wait a few seconds for it to be ready\n"
+                "4. Take a screenshot with: npx playwright screenshot "
+                f"http://localhost:3000 {work_dir}/screenshot.png "
+                "--full-page --wait-for-timeout=5000\n"
+                "5. If port 3000 doesn't work, check package.json for the correct port\n"
+                "6. If the app has no dev server, try `npx serve . -l 3000 &` to serve static files\n"
+                "Save screenshots as PNG files in the current directory."
             ),
             model=model,
             stage_label="screenshots",
@@ -985,12 +993,21 @@ class DevAgent:
         svc = self._service
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
+                # Search for screenshot*.png files specifically
                 resp = await client.get(
                     f"{SANDBOX_URL}/files",
-                    params={"glob": "*.png", "dir": work_dir},
+                    params={"glob": "screenshot*.png", "dir": work_dir},
                 )
                 resp.raise_for_status()
                 files = resp.json().get("files", [])
+                # Also search for any *.png at the root of work_dir
+                if not files:
+                    resp2 = await client.get(
+                        f"{SANDBOX_URL}/files",
+                        params={"glob": "*.png", "dir": work_dir},
+                    )
+                    resp2.raise_for_status()
+                    files = resp2.json().get("files", [])
                 logger.info("Found %d screenshot files in sandbox", len(files))
 
                 for file_path in files:

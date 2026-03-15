@@ -189,7 +189,7 @@ app.get("/files", (req, res) => {
   }
   try {
     const result = execSync(
-      `find ${safeDir} -maxdepth 3 -name '${pattern.replace(/'/g, "")}' -type f 2>/dev/null || true`,
+      `find ${safeDir} -maxdepth 5 -name '${pattern.replace(/'/g, "")}' -type f 2>/dev/null || true`,
       { encoding: "utf-8" }
     );
     const files = result.trim().split("\n").filter(Boolean);
