@@ -8,7 +8,7 @@ param location string
 param throughput int = 400
 
 var databaseName = 'turbovoice'
-var containers = ['notes', 'ideas', 'research', 'specs', 'dev_tasks', 'marketing', 'skills', 'profiles']
+var containers = ['notes', 'ideas', 'research', 'specs', 'dev_tasks', 'marketing', 'skills', 'profiles', 'sandbox_state']
 
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name: name
