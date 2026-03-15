@@ -1,5 +1,5 @@
 const express = require("express");
-const { spawn, execSync } = require("child_process");
+const { spawn } = require("child_process");
 const crypto = require("crypto");
 const path = require("path");
 
@@ -9,17 +9,10 @@ app.use(express.json());
 const tasks = new Map();
 
 // GitHub auth: accept GH_TOKEN or GITHUB_TOKEN (same as official Docker sandbox)
+// When GH_TOKEN env var is set, gh CLI uses it directly — no need to run `gh auth login`.
 const ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 if (ghToken) {
-  try {
-    execSync("gh auth login --with-token", {
-      input: ghToken,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    console.log("GitHub CLI authenticated via token env var");
-  } catch (err) {
-    console.error("Failed to authenticate gh CLI:", err.message);
-  }
+  console.log("GitHub CLI will authenticate via GH_TOKEN environment variable");
 }
 
 // Default model from env (overridable per-task)
