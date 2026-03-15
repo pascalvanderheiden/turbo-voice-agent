@@ -3,9 +3,42 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Seed data for local development
+_SEED_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "task-001",
+        "title": "Review design mockups for v2",
+        "isCompleted": False,
+        "dueDate": "2026-03-20",
+        "notes": "Check the latest UX designs from the Figma board",
+    },
+    {
+        "id": "task-002",
+        "title": "Prepare sprint demo presentation",
+        "isCompleted": True,
+        "dueDate": "2026-03-14",
+        "notes": "Include architecture diagram and live demo",
+    },
+    {
+        "id": "task-003",
+        "title": "Update API documentation",
+        "isCompleted": False,
+        "dueDate": "2026-03-18",
+        "notes": "Add new sandbox endpoints and auth flow",
+    },
+    {
+        "id": "task-004",
+        "title": "Fix CI pipeline flaky tests",
+        "isCompleted": False,
+        "dueDate": None,
+        "notes": "",
+    },
+]
 
 
 class TodoMcpClient:
@@ -19,6 +52,7 @@ class TodoMcpClient:
 
     def __init__(self) -> None:
         self._healthy = True
+        self._stub_tasks: dict[str, dict[str, Any]] = {t["id"]: dict(t) for t in _SEED_TASKS}
 
     # ------------------------------------------------------------------
     # Health
@@ -67,11 +101,6 @@ class TodoMcpClient:
         logger.info("MCP call_tool: %s (has_token=%s)", tool_name, bool(user_token))
 
         # TODO: Replace stub with real MCP JSON-RPC stdio transport.
-        #       The MCP server will be started as a subprocess in main.py lifespan
-        #       and this client will send JSON-RPC requests over stdin/stdout.
-        #
-        # For now, return a placeholder response so the full wiring can be tested
-        # end-to-end before the MCP server is actually connected.
         return await self._stub_call(tool_name, arguments)
 
     # ------------------------------------------------------------------
@@ -79,32 +108,44 @@ class TodoMcpClient:
     # ------------------------------------------------------------------
 
     async def _stub_call(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Stub that returns plausible responses for development/testing."""
+        """Stub with persistent in-memory task store for local dev/testing."""
         if tool_name == "list_tasks":
-            return {"tasks": []}
+            return {"tasks": list(self._stub_tasks.values())}
+
         if tool_name == "create_task":
-            return {
-                "task": {
-                    "id": "stub-task-id",
-                    "title": arguments.get("title", "Untitled"),
-                    "isCompleted": False,
-                    "dueDate": arguments.get("dueDate"),
-                    "notes": arguments.get("notes", ""),
-                },
+            task_id = f"task-{uuid.uuid4().hex[:8]}"
+            new_task = {
+                "id": task_id,
+                "title": arguments.get("title", "Untitled"),
+                "isCompleted": False,
+                "dueDate": arguments.get("dueDate"),
+                "notes": arguments.get("notes", ""),
             }
+            self._stub_tasks[task_id] = new_task
+            return {"task": new_task}
+
         if tool_name == "get_task":
-            return {
-                "task": {
-                    "id": arguments.get("task_id", "unknown"),
-                    "title": "Stub task",
-                    "isCompleted": False,
-                    "notes": "",
-                },
-            }
+            task_id = arguments.get("task_id", "unknown")
+            task = self._stub_tasks.get(task_id)
+            if task:
+                return {"task": task}
+            return {"error": f"Task {task_id} not found"}
+
         if tool_name == "update_task":
-            return {"task": {"id": arguments.get("task_id", "unknown"), **arguments}}
+            task_id = arguments.get("task_id", "unknown")
+            task = self._stub_tasks.get(task_id)
+            if not task:
+                return {"error": f"Task {task_id} not found"}
+            for key in ("title", "notes", "dueDate", "isCompleted"):
+                if key in arguments:
+                    task[key] = arguments[key]
+            return {"task": task}
+
         if tool_name == "delete_task":
+            task_id = arguments.get("task_id", "unknown")
+            self._stub_tasks.pop(task_id, None)
             return {"success": True}
+
         return {"error": f"Unknown MCP tool: {tool_name}"}
 
     # ------------------------------------------------------------------

@@ -510,7 +510,10 @@ export const connectionsApi = {
   microsoftTodo: {
     status: () => fetchApi<ConnectionStatus>("/api/me/connections/microsoft-todo"),
     connect: () =>
-      fetchApi<{ authUrl: string }>("/api/me/connections/microsoft-todo", { method: "POST" }),
+      fetchApi<{ authUrl?: string; connected?: boolean; connectedAt?: string }>(
+        "/api/me/connections/microsoft-todo",
+        { method: "POST" },
+      ),
     disconnect: () =>
       fetchApi<ConnectionStatus>("/api/me/connections/microsoft-todo", { method: "DELETE" }),
   },

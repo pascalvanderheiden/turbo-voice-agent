@@ -134,8 +134,17 @@ export default function SettingsPage() {
   const handleConnectTodo = async () => {
     setConnectingTodo(true);
     try {
-      const { authUrl } = await connectionsApi.microsoftTodo.connect();
-      window.location.href = authUrl;
+      const result = await connectionsApi.microsoftTodo.connect();
+      if (result.connected) {
+        // AUTH_DISABLED mode: auto-connected, no redirect needed
+        setTodoConnected(true);
+        setTodoConnectedAt(result.connectedAt || "");
+        toast.success("Microsoft To-Do connected");
+        setConnectingTodo(false);
+      } else if (result.authUrl) {
+        // Production: redirect to OAuth consent
+        window.location.href = result.authUrl;
+      }
     } catch {
       toast.error("Failed to start Microsoft To-Do connection");
       setConnectingTodo(false);

@@ -60,11 +60,24 @@ async def get_todo_connection_status(request: Request):
 async def initiate_todo_connection(request: Request):
     """Start Microsoft OAuth consent flow for To-Do access.
 
-    Returns the authorization URL the frontend should redirect to.
+    When AUTH_DISABLED=true, auto-connects with a mock token so the full
+    To-Do flow can be tested locally without real Entra credentials.
     """
+    import datetime
+
     user_id, _ = _get_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    # Local dev: auto-connect with mock token (no OAuth needed)
+    if os.environ.get("AUTH_DISABLED", "").lower() == "true":
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        _connection_store[f"todo:{user_id}"] = {
+            "refreshToken": "mock-token-auth-disabled",
+            "connectedAt": now,
+        }
+        logger.info("Auto-connected Microsoft To-Do for user %s (AUTH_DISABLED)", user_id)
+        return {"connected": True, "connectedAt": now}
 
     cfg = _todo_oauth_config()
     if not cfg["client_id"]:
