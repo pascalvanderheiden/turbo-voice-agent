@@ -31,8 +31,18 @@ param entraTenantId string = ''
 @description('Entra ID client ID')
 param entraClientId string = ''
 
+@secure()
+@description('Entra ID client secret for OAuth flows')
+param entraClientSecret string = ''
+
+@description('OAuth redirect URI for Microsoft To-Do callback')
+param todoOAuthRedirectUri string = ''
+
 @description('Comma-separated allowed CORS origins')
 param allowedOrigins string = ''
+
+@description('Sandbox Container App FQDN')
+param sandboxFqdn string = ''
 
 resource backend 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
@@ -64,6 +74,12 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
           identity: 'system'
         }
       ]
+      secrets: [
+        {
+          name: 'entra-client-secret'
+          value: entraClientSecret
+        }
+      ]
     }
     template: {
       containers: [
@@ -85,14 +101,16 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'VOICE_LIVE_ENDPOINT', value: aiCentralUsEndpoint }
             { name: 'VOICE_LIVE_DEPLOYMENT', value: 'gpt-realtime' }
             { name: 'VOICE_TRANSCRIBE_DEPLOYMENT', value: 'gpt-4o-transcribe' }
-            { name: 'DEV_CODEX_DEPLOYMENT', value: 'gpt-5.3-codex' }
             { name: 'SORA_ENDPOINT', value: aiEastUs2Endpoint }
             { name: 'SORA_DEPLOYMENT', value: 'sora-2' }
             { name: 'DATA_DIR', value: '/mnt/data' }
             { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
             { name: 'ENTRA_TENANT_ID', value: entraTenantId }
             { name: 'ENTRA_CLIENT_ID', value: entraClientId }
+            { name: 'ENTRA_CLIENT_SECRET', secretRef: 'entra-client-secret' }
+            { name: 'TODO_OAUTH_REDIRECT_URI', value: todoOAuthRedirectUri }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
+            { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
           ]
           volumeMounts: [
             {

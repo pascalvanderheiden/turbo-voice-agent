@@ -18,6 +18,10 @@ param entraTenantId string = ''
 @description('Entra ID application (client) ID')
 param entraClientId string = ''
 
+@secure()
+@description('Entra ID client secret for OAuth flows (Microsoft To-Do)')
+param entraClientSecret string = ''
+
 @description('Custom domain name for the frontend (e.g. voice.turboagent.nl)')
 param customDomainName string = ''
 
@@ -138,7 +142,25 @@ module backend 'modules/container-app-backend.bicep' = {
     storageAccountName: storage.outputs.name
     entraTenantId: entraTenantId
     entraClientId: entraClientId
+    entraClientSecret: entraClientSecret
+    todoOAuthRedirectUri: customDomainName != '' ? 'https://${customDomainName}/api/auth/callback/microsoft-todo' : 'https://ca-backend-${resourceToken}.${cae.outputs.defaultDomain}/api/auth/callback/microsoft-todo'
     allowedOrigins: customDomainName != '' ? 'https://${customDomainName},https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
+    sandboxFqdn: sandbox.outputs.fqdn
+  }
+}
+
+// ──────────────────────────────────────────────
+// Container App — Sandbox (GitHub Copilot CLI)
+// ──────────────────────────────────────────────
+module sandbox 'modules/container-app-sandbox.bicep' = {
+  name: 'deploy-ca-sandbox'
+  scope: rg
+  params: {
+    name: 'ca-sandbox-${resourceToken}'
+    location: location
+    containerAppsEnvId: cae.outputs.id
+    acrLoginServer: acr.outputs.loginServer
+    backendFqdn: backend.outputs.fqdn
   }
 }
 
@@ -176,6 +198,7 @@ module rbac 'modules/rbac.bicep' = {
     aiEastUs2Name: aiEastUs2.outputs.name
     aiWestUsName: aiWestUs.outputs.name
     aiCentralUsName: aiCentralUs.outputs.name
+    sandboxPrincipalId: sandbox.outputs.principalId
     deployerPrincipalId: deployerPrincipalId
   }
 }
@@ -191,3 +214,4 @@ output COSMOS_ENDPOINT string = cosmos.outputs.endpoint
 output AI_EASTUS2_ENDPOINT string = aiEastUs2.outputs.endpoint
 output AI_WESTUS_ENDPOINT string = aiWestUs.outputs.endpoint
 output AI_CENTRALUS_ENDPOINT string = aiCentralUs.outputs.endpoint
+output SANDBOX_URL string = 'https://${sandbox.outputs.fqdn}'
