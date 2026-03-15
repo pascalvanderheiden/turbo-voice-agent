@@ -1,0 +1,83 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
+      app: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.app == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            infra:
+              - 'infra/**'
+              - 'azure.yaml'
+            app:
+              - 'backend/**'
+              - 'frontend/**'
+
+  deploy:
+    name: ${{ needs.detect-changes.outputs.infra == 'true' && 'Provision & Deploy' || 'Deploy' }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI
+        uses: Azure/setup-azd@v2
+
+      - name: Initialize azd environment
+        run: |
+          azd env new "$AZURE_ENV_NAME" \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --location "$AZURE_LOCATION" \
+            --no-prompt 2>/dev/null || true
+          azd env refresh -e "$AZURE_ENV_NAME" --no-prompt
+
+      - name: Set Bicep parameters
+        if: needs.detect-changes.outputs.infra == 'true'
+        run: |
+          azd env set ENTRA_TENANT_ID "${{ vars.ENTRA_TENANT_ID }}" -e "$AZURE_ENV_NAME"
+          azd env set ENTRA_CLIENT_ID "${{ vars.ENTRA_CLIENT_ID }}" -e "$AZURE_ENV_NAME"
+          azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}" -e "$AZURE_ENV_NAME"
+          azd env set EXISTING_CERT_NAME "${{ vars.EXISTING_CERT_NAME }}" -e "$AZURE_ENV_NAME"
+          azd env set DEPLOYER_PRINCIPAL_ID "${{ vars.DEPLOYER_PRINCIPAL_ID }}" -e "$AZURE_ENV_NAME"
+
+      - name: Provision infrastructure
+        if: needs.detect-changes.outputs.infra == 'true'
+        run: azd provision -e "$AZURE_ENV_NAME" --no-prompt
+
+      - name: Deploy applications
+        run: azd deploy -e "$AZURE_ENV_NAME" --no-prompt
