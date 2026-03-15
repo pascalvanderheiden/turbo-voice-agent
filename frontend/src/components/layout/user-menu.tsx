@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconChevronDown, IconChevronUp, IconLanguage, IconLogout, IconCamera, IconSun, IconMoon } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronUp, IconLanguage, IconLogout, IconCamera, IconSun, IconMoon, IconPlugConnected, IconPlugConnectedX } from "@tabler/icons-react";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { useTheme } from "next-themes";
-import { userApi, profileApi } from "@/lib/api";
+import { userApi, profileApi, connectionsApi } from "@/lib/api";
 
 interface UserMenuProps {
   displayName: string;
   email: string;
   photoUrl?: string | null;
   onPhotoChange?: (url: string) => void;
+  inline?: boolean;
 }
 
 function getInitials(name: string): string {
@@ -22,17 +23,26 @@ function getInitials(name: string): string {
     .slice(0, 2);
 }
 
-export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMenuProps) {
+export function UserMenu({ displayName, email, photoUrl, onPhotoChange, inline }: UserMenuProps) {
   const { locale, setLocale, t } = useI18n();
   const { theme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState(photoUrl);
   const [mounted, setMounted] = useState(false);
+  const [todoConnected, setTodoConnected] = useState(false);
+  const [connectingTodo, setConnectingTodo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
+
+  // Check Microsoft To-Do connection status on mount
+  useEffect(() => {
+    connectionsApi.microsoftTodo.status()
+      .then((s) => setTodoConnected(s.connected))
+      .catch(() => {});
+  }, []);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -77,6 +87,28 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
     profileApi.updateProfile({ theme: next }).catch(() => {});
   };
 
+  const handleConnectTodo = async () => {
+    setConnectingTodo(true);
+    try {
+      const { authUrl } = await connectionsApi.microsoftTodo.connect();
+      window.location.href = authUrl;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Connection failed";
+      alert(msg);
+      console.error("Failed to start Microsoft To-Do connection:", err);
+      setConnectingTodo(false);
+    }
+  };
+
+  const handleDisconnectTodo = async () => {
+    try {
+      await connectionsApi.microsoftTodo.disconnect();
+      setTodoConnected(false);
+    } catch (err) {
+      console.error("Failed to disconnect Microsoft To-Do:", err);
+    }
+  };
+
   const handleLogout = () => {
     const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
     if (clientId) {
@@ -86,6 +118,135 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
       });
     }
   };
+
+  // Shared panel content (used in both dropdown and inline mode)
+  const panelContent = (
+    <>
+      {/* Profile info + photo preview */}
+      <div className="px-4 py-3 border-b border-[var(--color-border-dark)] flex items-center gap-3">
+        {currentPhotoUrl ? (
+          <img
+            src={currentPhotoUrl}
+            alt={displayName}
+            className="w-10 h-10 rounded-full object-cover shrink-0"
+          />
+        ) : (
+          <div className="w-10 h-10 rounded-full bg-[var(--color-brand-pink)]/20 text-[var(--color-brand-pink)] flex items-center justify-center text-sm font-bold shrink-0">
+            {getInitials(displayName || email)}
+          </div>
+        )}
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate">
+            {displayName}
+          </p>
+          <p className="text-[12px] text-[var(--color-text-muted)] truncate">{email}</p>
+        </div>
+      </div>
+
+      {/* Change photo */}
+      <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          onChange={handlePhotoUpload}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors disabled:opacity-50"
+        >
+          <IconCamera size={16} stroke={1.5} />
+          <span>{uploading ? "Uploading…" : "Change Photo"}</span>
+        </button>
+      </div>
+
+      {/* Theme toggle */}
+      <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+        <button
+          onClick={handleToggleTheme}
+          className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors"
+        >
+          {mounted && (theme === "dark" ? <IconSun size={16} stroke={1.5} /> : <IconMoon size={16} stroke={1.5} />)}
+          <span>{t("theme.toggle")}</span>
+        </button>
+      </div>
+
+      {/* Language selector */}
+      <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+        <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+          <IconLanguage size={16} stroke={1.5} />
+          <span>{t("header.language") || "Language"}</span>
+          <div className="ml-auto flex items-center gap-1 bg-[var(--color-bg-tertiary)] rounded-full p-0.5">
+            {(["en", "nl"] as Locale[]).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setLocale(lang)}
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
+                  locale === lang
+                    ? "bg-[var(--color-brand-pink)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                }`}
+              >
+                {lang.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Connected Accounts */}
+      <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
+        <p className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+          {t("connections.title") || "Connected Accounts"}
+        </p>
+        <div className="flex items-center gap-2">
+          {todoConnected ? (
+            <>
+              <IconPlugConnected size={16} stroke={1.5} className="text-emerald-400" />
+              <span className="text-[13px] text-emerald-400 flex-1">
+                {t("connections.todoConnected") || "Microsoft To-Do"}
+              </span>
+              <button
+                onClick={handleDisconnectTodo}
+                className="text-[11px] text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
+              >
+                {t("connections.disconnect") || "Disconnect"}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleConnectTodo}
+              disabled={connectingTodo}
+              className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors disabled:opacity-50"
+            >
+              <IconPlugConnectedX size={16} stroke={1.5} />
+              <span>
+                {connectingTodo
+                  ? (t("connections.connecting") || "Connecting…")
+                  : (t("connections.connectTodo") || "Connect Microsoft To-Do")}
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Logout */}
+      <button
+        onClick={handleLogout}
+        className="flex items-center gap-2 w-full px-4 py-2.5 text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+      >
+        <IconLogout size={16} stroke={1.5} />
+        <span>{t("header.logout") || "Sign out"}</span>
+      </button>
+    </>
+  );
+
+  // Inline mode: render panel content directly (for mobile sheet)
+  if (inline) {
+    return <div className="w-full">{panelContent}</div>;
+  }
 
   return (
     <div ref={menuRef} className="relative w-full">
@@ -114,88 +275,7 @@ export function UserMenu({ displayName, email, photoUrl, onPhotoChange }: UserMe
       {/* Dropdown panel — positioned absolutely to avoid pushing layout */}
       {open && (
         <div className="absolute right-0 top-11 w-64 rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] overflow-hidden z-50 shadow-xl">
-          {/* Profile info + photo preview */}
-          <div className="px-4 py-3 border-b border-[var(--color-border-dark)] flex items-center gap-3">
-            {currentPhotoUrl ? (
-              <img
-                src={currentPhotoUrl}
-                alt={displayName}
-                className="w-10 h-10 rounded-full object-cover shrink-0"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-[var(--color-brand-pink)]/20 text-[var(--color-brand-pink)] flex items-center justify-center text-sm font-bold shrink-0">
-                {getInitials(displayName || email)}
-              </div>
-            )}
-            <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate">
-                {displayName}
-              </p>
-              <p className="text-[12px] text-[var(--color-text-muted)] truncate">{email}</p>
-            </div>
-          </div>
-
-          {/* Change photo */}
-          <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={handlePhotoUpload}
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors disabled:opacity-50"
-            >
-              <IconCamera size={16} stroke={1.5} />
-              <span>{uploading ? "Uploading…" : "Change Photo"}</span>
-            </button>
-          </div>
-
-          {/* Theme toggle */}
-          <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
-            <button
-              onClick={handleToggleTheme}
-              className="flex items-center gap-2 w-full text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] transition-colors"
-            >
-              {mounted && (theme === "dark" ? <IconSun size={16} stroke={1.5} /> : <IconMoon size={16} stroke={1.5} />)}
-              <span>{t("theme.toggle")}</span>
-            </button>
-          </div>
-
-          {/* Language selector */}
-          <div className="px-4 py-2.5 border-b border-[var(--color-border-dark)]">
-            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
-              <IconLanguage size={16} stroke={1.5} />
-              <span>{t("header.language") || "Language"}</span>
-              <div className="ml-auto flex items-center gap-1 bg-[var(--color-bg-tertiary)] rounded-full p-0.5">
-                {(["en", "nl"] as Locale[]).map((lang) => (
-                  <button
-                    key={lang}
-                    onClick={() => setLocale(lang)}
-                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
-                      locale === lang
-                        ? "bg-[var(--color-brand-pink)] text-white"
-                        : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                    }`}
-                  >
-                    {lang.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Logout */}
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 w-full px-4 py-2.5 text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-pink)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-          >
-            <IconLogout size={16} stroke={1.5} />
-            <span>{t("header.logout") || "Sign out"}</span>
-          </button>
+          {panelContent}
         </div>
       )}
     </div>

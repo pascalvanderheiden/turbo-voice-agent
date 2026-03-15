@@ -18,9 +18,11 @@ from app.agents.research_agent import ResearchAgent
 from app.agents.skills_agent import SkillsAgent
 from app.agents.spec_agent import SpecAgent
 from app.agents.supervisor import SupervisorAgent
+from app.agents.todo_agent import TodoAgent
 from app.db.cosmos import close_cosmos_client, get_cosmos_client
 from app.db.init import ensure_database_and_containers
-from app.routes import chat, dev, ideas, marketing, notes, research, specs, upload, voice_ws
+from app.mcp.todo_mcp_client import TodoMcpClient
+from app.routes import chat, dev, ideas, marketing, notes, research, specs, todos, upload, voice_ws
 from app.services.memory_brainstorm_service import InMemoryBrainstormService
 from app.services.memory_marketing_service import InMemoryMarketingService
 from app.services.memory_research_service import InMemoryResearchService
@@ -137,7 +139,19 @@ async def lifespan(app: FastAPI):
     dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)
     skills_agent = SkillsAgent(skills_service)
     marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
-    supervisor = SupervisorAgent(notes_agent, brainstorm_agent, research_agent, spec_agent, dev_agent, skills_agent, marketing_agent=marketing_agent)
+
+    # Initialize MCP client and Todo Agent
+    from app.routes.user import get_todo_user_token
+
+    todo_mcp_client = TodoMcpClient()
+    await todo_mcp_client.start()
+    todo_agent = TodoAgent(todo_mcp_client, get_user_token=get_todo_user_token)
+
+    supervisor = SupervisorAgent(
+        notes_agent, brainstorm_agent, research_agent, spec_agent,
+        dev_agent, skills_agent, marketing_agent=marketing_agent,
+        todo_agent=todo_agent,
+    )
 
     notes.set_notes_service(notes_service)
     ideas.set_brainstorm_service(brainstorm_service, refine_fn=brainstorm_agent.refine, refine_stream_fn=brainstorm_agent.refine_stream)
@@ -153,6 +167,7 @@ async def lifespan(app: FastAPI):
     chat.set_supervisor(supervisor)
     dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, spec_service=spec_service, dev_agent=dev_agent)
     marketing.set_marketing_service(marketing_service, agent=marketing_agent)
+    todos.set_todo_agent(todo_agent)
     global _skills_service
     _skills_service = skills_service
     logger.info("Services and agents initialized.")
@@ -160,6 +175,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    await todo_mcp_client.stop()
     if blob_skills:
         await blob_skills.close()
     await close_cosmos_client()
@@ -209,6 +225,7 @@ app.include_router(research.router)
 app.include_router(specs.router)
 app.include_router(dev.router)
 app.include_router(marketing.router)
+app.include_router(todos.router)
 app.include_router(upload.router)
 app.include_router(voice_ws.router)
 app.include_router(chat.router)
@@ -340,6 +357,15 @@ async def agent_status():
                 "status": "online",
                 "tools": ["create_marketing_video", "get_marketing_videos", "get_marketing_video", "delete_marketing_video", "trigger_video_generation"],
             },
+            {
+                "id": "todo",
+                "name": "Todo Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo"],
+                "mcpServers": ["microsoft-todo"],
+            },
         ],
         "edges": [
             {"from": "voice", "to": "supervisor"},
@@ -351,6 +377,7 @@ async def agent_status():
             {"from": "supervisor", "to": "dev"},
             {"from": "supervisor", "to": "skills"},
             {"from": "supervisor", "to": "marketing"},
+            {"from": "supervisor", "to": "todo"},
         ],
     }
 

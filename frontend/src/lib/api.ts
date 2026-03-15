@@ -105,7 +105,9 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    const body = await res.json().catch(() => null);
+    const detail = body?.detail ?? `${res.status} ${res.statusText}`;
+    throw new Error(detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -460,5 +462,56 @@ export const userApi = {
     } catch {
       return null;
     }
+  },
+};
+
+/* ── To-Do Tasks (Microsoft To-Do) ── */
+
+export interface Todo {
+  id: string;
+  title: string;
+  isCompleted: boolean;
+  notes?: string;
+  dueDate?: string;
+}
+
+export interface TodoCreate {
+  title: string;
+  notes?: string;
+  dueDate?: string;
+}
+
+export interface TodoUpdate {
+  title?: string;
+  notes?: string;
+  dueDate?: string;
+  isCompleted?: boolean;
+}
+
+export const todosApi = {
+  list: () => fetchApi<Todo[]>("/api/todos"),
+  get: (id: string) => fetchApi<Todo>(`/api/todos/${id}`),
+  create: (data: TodoCreate) =>
+    fetchApi<Todo>("/api/todos", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: TodoUpdate) =>
+    fetchApi<Todo>(`/api/todos/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    fetchApi<void>(`/api/todos/${id}`, { method: "DELETE" }),
+};
+
+/* ── Connected Accounts ── */
+
+export interface ConnectionStatus {
+  connected: boolean;
+  connectedAt?: string;
+}
+
+export const connectionsApi = {
+  microsoftTodo: {
+    status: () => fetchApi<ConnectionStatus>("/api/me/connections/microsoft-todo"),
+    connect: () =>
+      fetchApi<{ authUrl: string }>("/api/me/connections/microsoft-todo", { method: "POST" }),
+    disconnect: () =>
+      fetchApi<ConnectionStatus>("/api/me/connections/microsoft-todo", { method: "DELETE" }),
   },
 };

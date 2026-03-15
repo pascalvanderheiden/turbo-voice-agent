@@ -15,6 +15,7 @@ import {
   IconFileCode,
   IconCode,
   IconVideo,
+  IconChecklist,
   IconChevronLeft,
   IconChevronRight,
 } from "@tabler/icons-react";
@@ -24,6 +25,7 @@ import { useI18n } from "@/lib/i18n";
 const navItems = [
   { href: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },
   { href: "/notes", labelKey: "nav.notes", icon: IconNote },
+  { href: "/todos", labelKey: "nav.todos", icon: IconChecklist },
   { href: "/ideas", labelKey: "nav.ideas", icon: IconBulb },
   { href: "/research", labelKey: "nav.research", icon: IconSearch },
   { href: "/specs", labelKey: "nav.specs", icon: IconFileCode },

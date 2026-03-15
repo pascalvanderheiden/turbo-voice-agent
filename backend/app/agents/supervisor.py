@@ -10,6 +10,7 @@ from app.agents.notes_agent import NotesAgent
 from app.agents.research_agent import ResearchAgent
 from app.agents.skills_agent import SkillsAgent
 from app.agents.spec_agent import SpecAgent
+from app.agents.todo_agent import TodoAgent
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class SupervisorAgent:
         dev_agent: DevAgent | None = None,
         skills_agent: SkillsAgent | None = None,
         marketing_agent: MarketingAgent | None = None,
+        todo_agent: TodoAgent | None = None,
     ):
         self._notes_agent = notes_agent
         self._brainstorm_agent = brainstorm_agent
@@ -34,6 +36,7 @@ class SupervisorAgent:
         self._dev_agent = dev_agent
         self._skills_agent = skills_agent
         self._marketing_agent = marketing_agent
+        self._todo_agent = todo_agent
         self._agents: dict[str, object] = {"notes": notes_agent}
         if brainstorm_agent:
             self._agents["brainstorm"] = brainstorm_agent
@@ -47,6 +50,8 @@ class SupervisorAgent:
             self._agents["skills"] = skills_agent
         if marketing_agent:
             self._agents["marketing"] = marketing_agent
+        if todo_agent:
+            self._agents["todo"] = todo_agent
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -85,6 +90,9 @@ class SupervisorAgent:
             "create_marketing_video", "get_marketing_videos", "get_marketing_video",
             "delete_marketing_video", "trigger_video_generation",
         }
+        todo_functions = {
+            "create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo",
+        }
 
         if function_name in notes_functions:
             logger.info("Routing '%s' to Notes Agent", function_name)
@@ -121,10 +129,16 @@ class SupervisorAgent:
             result = await self._marketing_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Marketing Agent"
 
+        if function_name in todo_functions and self._todo_agent:
+            logger.info("Routing '%s' to Todo Agent", function_name)
+            result = await self._todo_agent.handle_function_call(function_name, arguments, user_id=user_id)
+            return result, "Todo Agent"
+
         logger.warning("Unknown function: %s", function_name)
         return json.dumps(
             {
                 "error": f"I don't know how to handle '{function_name}'. "
-                "I can help with notes, brainstorming ideas, research, specs, development tasks, skills management, and marketing videos."
+                "I can help with notes, brainstorming ideas, research, specs, development tasks, "
+                "skills management, marketing videos, and to-do tasks."
             }
         ), "Supervisor"

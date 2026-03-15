@@ -1,4 +1,5 @@
 """User profile routes."""
+
 from __future__ import annotations
 
 import logging
@@ -15,12 +16,166 @@ router = APIRouter(prefix="/api", tags=["user"])
 ALLOWED_PHOTO_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 MAX_PHOTO_SIZE = 5 * 1024 * 1024  # 5MB
 
+# ── In-memory connection store (local dev fallback) ──
+_connection_store: dict[str, dict] = {}
+
 
 def _get_user(request: Request) -> tuple[str, dict]:
     """Extract user_id and claims from request state."""
     user_id = getattr(request.state, "user_id", None)
     claims = getattr(request.state, "user_claims", {})
     return user_id, claims
+
+
+# ── Microsoft To-Do Connection ──────────────────────────────────
+
+
+def _todo_oauth_config() -> dict:
+    """Return OAuth config for Microsoft To-Do consent."""
+    return {
+        "client_id": os.environ.get("ENTRA_CLIENT_ID", ""),
+        "tenant_id": os.environ.get("ENTRA_TENANT_ID", "common"),
+        "redirect_uri": os.environ.get(
+            "TODO_OAUTH_REDIRECT_URI",
+            "http://localhost:8000/api/auth/callback/microsoft-todo",
+        ),
+        "scope": "offline_access Tasks.ReadWrite",
+    }
+
+
+@router.get("/me/connections/microsoft-todo")
+async def get_todo_connection_status(request: Request):
+    """Check whether the user has connected Microsoft To-Do."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    conn = _connection_store.get(f"todo:{user_id}")
+    if conn:
+        return {"connected": True, "connectedAt": conn.get("connectedAt", "")}
+    return {"connected": False}
+
+
+@router.post("/me/connections/microsoft-todo")
+async def initiate_todo_connection(request: Request):
+    """Start Microsoft OAuth consent flow for To-Do access.
+
+    Returns the authorization URL the frontend should redirect to.
+    """
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    cfg = _todo_oauth_config()
+    if not cfg["client_id"]:
+        logger.error("ENTRA_CLIENT_ID env var is not set — cannot start OAuth flow")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Microsoft To-Do connection is not configured. "
+                "Set ENTRA_CLIENT_ID in backend .env."
+            },
+        )
+
+    from urllib.parse import urlencode
+
+    params = urlencode({
+        "client_id": cfg["client_id"],
+        "response_type": "code",
+        "redirect_uri": cfg["redirect_uri"],
+        "scope": cfg["scope"],
+        "state": user_id,
+        "prompt": "consent",
+    })
+    auth_url = (
+        f"https://login.microsoftonline.com/{cfg['tenant_id']}"
+        f"/oauth2/v2.0/authorize?{params}"
+    )
+    return {"authUrl": auth_url}
+
+
+@router.get("/auth/callback/microsoft-todo")
+async def todo_oauth_callback(request: Request, code: str = "", error: str = "", state: str = ""):
+    """Handle OAuth callback from Microsoft for To-Do consent."""
+    import datetime
+
+    from fastapi.responses import RedirectResponse
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+    if error or not code:
+        logger.warning("Microsoft To-Do OAuth error: %s", error)
+        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+
+    user_id = state
+    if not user_id:
+        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+
+    cfg = _todo_oauth_config()
+
+    # Exchange authorization code for tokens
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://login.microsoftonline.com/{cfg['tenant_id']}/oauth2/v2.0/token",
+                data={
+                    "client_id": cfg["client_id"],
+                    "client_secret": os.environ.get("ENTRA_CLIENT_SECRET", ""),
+                    "code": code,
+                    "redirect_uri": cfg["redirect_uri"],
+                    "grant_type": "authorization_code",
+                    "scope": cfg["scope"],
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error("Token exchange failed (%d): %s", resp.status, body)
+                    return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+
+                tokens = await resp.json()
+    except Exception:
+        logger.exception("Token exchange request failed")
+        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+
+    refresh_token = tokens.get("refresh_token", "")
+    if not refresh_token:
+        logger.error("No refresh_token in token response")
+        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+
+    # Store token (in-memory for now; Cosmos DB in production)
+    # TODO: encrypt the refresh_token before storing
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    _connection_store[f"todo:{user_id}"] = {
+        "refreshToken": refresh_token,
+        "connectedAt": now,
+    }
+    logger.info("Microsoft To-Do connected for user %s", user_id)
+
+    return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=success")
+
+
+@router.delete("/me/connections/microsoft-todo")
+async def disconnect_todo(request: Request):
+    """Disconnect Microsoft To-Do — remove stored tokens."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    _connection_store.pop(f"todo:{user_id}", None)
+    logger.info("Microsoft To-Do disconnected for user %s", user_id)
+    return {"connected": False}
+
+
+async def get_todo_user_token(user_id: str) -> str | None:
+    """Retrieve the stored Microsoft To-Do refresh token for a user.
+
+    Called by the TodoAgent to get the user's delegated token for MCP calls.
+    """
+    conn = _connection_store.get(f"todo:{user_id}")
+    if conn:
+        return conn.get("refreshToken")
+    return None
 
 
 @router.get("/me")
@@ -90,19 +245,24 @@ async def get_profile_photo(request: Request):
                 photo_url = profile["profilePhotoUrl"]
                 # Extract blob path from URL and fetch via authenticated SDK
                 storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-                if storage_account and f"{storage_account}.blob.core.windows.net/uploads/" in photo_url:
+                if (
+                    storage_account
+                    and f"{storage_account}.blob.core.windows.net/uploads/" in photo_url
+                ):
                     try:
                         from azure.identity.aio import DefaultAzureCredential
                         from azure.storage.blob.aio import BlobServiceClient
 
-                        blob_path = photo_url.split(f"/uploads/", 1)[1]
+                        blob_path = photo_url.split("/uploads/", 1)[1]
                         credential = DefaultAzureCredential()
                         blob_service = BlobServiceClient(
                             account_url=f"https://{storage_account}.blob.core.windows.net",
                             credential=credential,
                         )
                         async with blob_service:
-                            blob_client = blob_service.get_container_client("uploads").get_blob_client(blob_path)
+                            blob_client = blob_service.get_container_client(
+                                "uploads"
+                            ).get_blob_client(blob_path)
                             download = await blob_client.download_blob()
                             photo_data = await download.readall()
                             props = await blob_client.get_blob_properties()
@@ -110,10 +270,13 @@ async def get_profile_photo(request: Request):
                         await credential.close()
                         return Response(content=photo_data, media_type=content_type)
                     except Exception:
-                        logger.warning("Failed to fetch custom profile photo from Blob for user %s", user_id)
+                        logger.warning(
+                            "Failed to fetch custom profile photo from Blob for user %s", user_id
+                        )
 
         # Check for locally uploaded photo (local dev without Cosmos)
         from pathlib import Path
+
         upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads" / "profile-photos"
         if upload_dir.exists():
             user_photos = sorted(
@@ -124,7 +287,12 @@ async def get_profile_photo(request: Request):
             if user_photos:
                 photo_data = user_photos[0].read_bytes()
                 ext = user_photos[0].suffix.lower().lstrip(".")
-                ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+                ct = {
+                    "jpg": "image/jpeg",
+                    "jpeg": "image/jpeg",
+                    "png": "image/png",
+                    "webp": "image/webp",
+                }
                 return Response(content=photo_data, media_type=ct.get(ext, "image/jpeg"))
 
     # Fallback to Microsoft Graph photo
@@ -170,7 +338,9 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
     if len(content) > MAX_PHOTO_SIZE:
         return JSONResponse(
             status_code=400,
-            content={"detail": f"File too large. Maximum size: {MAX_PHOTO_SIZE // (1024*1024)}MB"},
+            content={
+                "detail": f"File too large. Maximum size: {MAX_PHOTO_SIZE // (1024 * 1024)}MB"
+            },
         )
 
     # Try to upload to Blob Storage
@@ -180,7 +350,11 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
             from azure.identity.aio import DefaultAzureCredential
             from azure.storage.blob.aio import BlobServiceClient
 
-            ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "jpg"
+            ext = (
+                file.filename.rsplit(".", 1)[-1]
+                if file.filename and "." in file.filename
+                else "jpg"
+            )
             blob_name = f"profile-photos/{user_id}/{uuid.uuid4()}.{ext}"
 
             credential = DefaultAzureCredential()
@@ -196,7 +370,9 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
                 except Exception:
                     pass  # Container may already exist
                 blob_client = container_client.get_blob_client(blob_name)
-                await blob_client.upload_blob(content, content_type=file.content_type, overwrite=True)
+                await blob_client.upload_blob(
+                    content, content_type=file.content_type, overwrite=True
+                )
                 photo_url = f"https://{storage_account}.blob.core.windows.net/uploads/{blob_name}"
 
             await credential.close()
@@ -210,11 +386,14 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
             return {"success": True, "photoUrl": photo_url}
 
         except Exception:
-            logger.exception("Failed to upload profile photo to Blob Storage — falling back to local")
+            logger.exception(
+                "Failed to upload profile photo to Blob Storage — falling back to local"
+            )
             # Fall through to local storage below
 
     # Local dev (or Blob Storage fallback): save to uploads directory
     from pathlib import Path
+
     upload_dir = Path(__file__).parent.parent.parent / "uploads" / "profile-photos"
     upload_dir.mkdir(parents=True, exist_ok=True)
     ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "jpg"

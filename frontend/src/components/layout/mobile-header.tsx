@@ -34,7 +34,10 @@ export function MobileHeader() {
 
   useEffect(() => {
     const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
-    if (!clientId) return;
+    if (!clientId) {
+      setUserInfo({ name: "Local User", email: "dev@localhost" });
+      return;
+    }
     import("@/lib/msal-config").then(({ getMsalInstance }) => {
       const instance = getMsalInstance();
       const accounts = instance.getAllAccounts();
@@ -114,8 +117,8 @@ export function MobileHeader() {
 
             {/* User profile */}
             {userInfo && (
-              <div className="px-4 py-3 border-b border-[var(--color-border-dark)]">
-                <UserMenu displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
+              <div className="border-b border-[var(--color-border-dark)]">
+                <UserMenu inline displayName={userInfo.name} email={userInfo.email} photoUrl={photoUrl} onPhotoChange={setPhotoUrl} />
               </div>
             )}
 

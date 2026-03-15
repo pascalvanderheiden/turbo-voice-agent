@@ -19,7 +19,11 @@ export function SiteHeader() {
 
   useEffect(() => {
     const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
-    if (!clientId) return;
+    if (!clientId) {
+      // Local dev fallback — show user menu without MSAL
+      setUserInfo({ name: "Local User", email: "dev@localhost" });
+      return;
+    }
     import("@/lib/msal-config").then(({ getMsalInstance }) => {
       const instance = getMsalInstance();
       const accounts = instance.getAllAccounts();

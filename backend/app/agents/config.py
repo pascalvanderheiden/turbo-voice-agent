@@ -14,6 +14,9 @@ When a user wants to work with notes, delegate to the Notes Agent.
 When a user asks something you or your agents cannot handle, politely explain what you can help with.
 Always respond in a natural, conversational tone suitable for voice interaction."""
 
+TODO_AGENT_MODEL = "gpt-5.2"
+"""Model deployment name used by the Todo Agent."""
+
 NOTES_AGENT_INSTRUCTIONS = """You are the Notes Agent. You manage notes for the user.
 You can create, list, read, update, and delete notes.
 
