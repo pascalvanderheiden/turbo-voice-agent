@@ -52,6 +52,17 @@ class DevTaskCreate(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DevDecision(BaseModel):
+    """A decision made automatically by the agent during pipeline execution."""
+
+    question: str
+    answer: str
+    stage: str
+    timestamp: str
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
 class DevTask(BaseModel):
     """API response model for a development task."""
 
@@ -69,6 +80,7 @@ class DevTask(BaseModel):
     screenshots: list[str] = Field(default_factory=list)
     artifact_url: str | None = Field(None, alias="artifactUrl")
     sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")
+    decisions: list[DevDecision] = Field(default_factory=list)
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 

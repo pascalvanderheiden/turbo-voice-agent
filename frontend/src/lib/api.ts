@@ -312,6 +312,7 @@ export interface DevTask {
   iterations: DevIteration[];
   stages: DevStage[]; // legacy flat view (iteration 0)
   artifacts: DevArtifact[];
+  decisions?: { question: string; answer: string; stage: string; timestamp: string }[];
   createdAt: string;
   updatedAt: string;
 }

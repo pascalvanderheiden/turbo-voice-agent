@@ -14,16 +14,48 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import httpx
 
-from app.models.dev_task import DevArtifact
+from app.models.dev_task import DevArtifact, DevDecision
 from app.services.dev_service import InMemoryDevService, _default_iteration
 
 logger = logging.getLogger(__name__)
 
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
+
+# ── Pipeline output buffers (module-level, keyed by dev task ID) ──────────
+# Stores streaming output entries for the frontend terminal view.
+_pipeline_outputs: dict[str, list[dict]] = {}
+
+# Question patterns that indicate the CLI is waiting for user input
+_QUESTION_PATTERNS = [
+    r"\?\s*$",                          # ends with ?
+    r"\(y/n\)",                          # (y/n)
+    r"\(Y/n\)",                          # (Y/n)
+    r"\(y/N\)",                          # (y/N)
+    r"\[y/N\]",                          # [y/N]
+    r"\[Y/n\]",                          # [Y/n]
+    r"\[yes/no\]",                       # [yes/no]
+    r":\s*$",                            # ends with :
+    r">\s*$",                            # ends with >
+    r"Press Enter",                      # Press Enter to continue
+    r"Do you want to",                   # Do you want to ...
+    r"Would you like",                   # Would you like ...
+    r"Enter a value",                    # Enter a value for ...
+    r"Select.*:",                        # Select an option:
+    r"Choose.*:",                        # Choose ...
+    r"Overwrite.*\?",                    # Overwrite file?
+    r"proceed\?",                        # proceed?
+]
+_QUESTION_RE = re.compile("|".join(_QUESTION_PATTERNS), re.IGNORECASE)
+
+
+def get_pipeline_output(task_id: str) -> list[dict]:
+    """Get the pipeline output buffer for a task (for SSE streaming)."""
+    return _pipeline_outputs.get(task_id, [])
 
 
 class DevAgent:
@@ -232,6 +264,9 @@ class DevAgent:
         logger.info("Pipeline starting: task=%s, user=%s", task_id, user_id)
         service = self._service.with_user(user_id)
 
+        # Initialize pipeline output buffer for terminal streaming
+        _pipeline_outputs[task_id] = []
+
         if not USE_CLI_SANDBOX:
             logger.warning("CLI sandbox disabled — skipping pipeline for task %s", task_id)
             await service.set_status(task_id, "completed")
@@ -250,12 +285,23 @@ class DevAgent:
 
         except Exception as e:
             logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
+            # Emit error to terminal
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "stderr", "data": f"Pipeline failed: {e}", "ts": time.time()
+                })
             try:
                 await service.set_status(task_id, "failed")
             except Exception:
                 logger.exception(
                     "Failed to set error status on task %s after pipeline failure", task_id
                 )
+        finally:
+            # Emit completion marker
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "exit", "code": 0, "ts": time.time()
+                })
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
         """Mockup pipeline: openspec init → propose → apply → archive → screenshots."""
@@ -266,10 +312,20 @@ class DevAgent:
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
 
+        # Clean workspace before starting fresh
+        await self._sandbox_exec(
+            task_id=task_id,
+            command="bash",
+            args=["-c", "cd /workspace && find . -mindepth 1 -delete 2>/dev/null; true"],
+            stage_label="cleanup",
+            raise_on_error=False,
+        )
+
         # Stage: init — openspec init sets up skills for Copilot CLI
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
+            task_id=task_id,
             command="openspec",
             args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
@@ -280,6 +336,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("Mockup propose: task=%s, desc_len=%d", task_id, len(mockup_desc))
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-propose skill to create a complete proposal "
                 "for this mockup application. Generate design, specs, and tasks.\n\n"
@@ -287,12 +344,14 @@ class DevAgent:
             ),
             model=model,
             stage_label="propose",
+            raise_on_error=False,
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
         # Stage: apply — Copilot CLI implements the proposal via openspec-apply
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-apply-change skill to implement all tasks "
                 "from the proposal. Work through every task until all are complete. "
@@ -300,24 +359,28 @@ class DevAgent:
             ),
             model=model,
             stage_label="apply",
+            raise_on_error=False,
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
         # Stage: archive — Copilot CLI archives the completed change
         await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-archive-change skill to archive the completed "
                 "change. Update the generic specs with the final state."
             ),
             model=model,
             stage_label="archive",
+            raise_on_error=False,
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
         # Stage: screenshots — Copilot CLI starts app + captures with Playwright
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Take screenshots of the application you just built. "
                 "First, start the app in the background (e.g. npm run dev &). "
@@ -351,6 +414,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
+            task_id=task_id,
             command="openspec",
             args=["init", "--tools", "github-copilot", "--force"],
             stage_label="init",
@@ -360,6 +424,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("OpenSpec foundation propose: task=%s", task_id)
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-propose skill to create a proposal for the "
                 "foundation of this application. Generate design, specs, and tasks.\n\n"
@@ -372,6 +437,7 @@ class DevAgent:
 
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-apply-change skill to implement all tasks "
                 "from the foundation proposal. Work through every task until done. "
@@ -392,6 +458,7 @@ class DevAgent:
                 "OpenSpec feature propose: task=%s, iter=%d", task_id, iter_idx
             )
             await self._sandbox_exec(
+                task_id=task_id,
                 prompt=(
                     "Use the openspec-propose skill to create a proposal for "
                     "adding this feature to the existing application.\n\n"
@@ -407,6 +474,7 @@ class DevAgent:
                 task_id, iter_idx, "apply", "running"
             )
             await self._sandbox_exec(
+                task_id=task_id,
                 prompt=(
                     "Use the openspec-apply-change skill to implement all tasks "
                     "from the latest proposal. Work through every task until done. "
@@ -422,6 +490,7 @@ class DevAgent:
         # ── Archive ──────────────────────────────────────────────────
         await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Use the openspec-archive-change skill to archive the completed "
                 "change. Update the generic specs with the final state."
@@ -434,6 +503,7 @@ class DevAgent:
         # ── Screenshots — Copilot CLI starts app + captures ─────────
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
+            task_id=task_id,
             prompt=(
                 "Take screenshots of the application you just built. "
                 "First, start the app in the background (e.g. npm run dev &). "
@@ -459,6 +529,7 @@ class DevAgent:
     async def _sandbox_exec(
         self,
         *,
+        task_id: str = "",
         prompt: str | None = None,
         command: str | None = None,
         args: list[str] | None = None,
@@ -467,10 +538,11 @@ class DevAgent:
         timeout: float = 600,
         raise_on_error: bool = True,
     ) -> str:
-        """Submit a task to the sandbox and poll until completion.
+        """Submit a task to the sandbox and stream output via SSE.
 
-        Uses polling (GET /tasks/:id/status) for reliability with long-running
-        Copilot CLI sessions. Returns combined stdout output.
+        Streams real-time output into the pipeline buffer for the terminal view.
+        Detects CLI questions and auto-answers them using the model.
+        Returns combined stdout output.
         """
         payload: dict = {"workDir": "/workspace"}
         if prompt:
@@ -485,41 +557,90 @@ class DevAgent:
         log_preview = prompt[:120] if prompt else f"{command} {args}"
         logger.info("Sandbox exec [%s]: %s", stage_label, log_preview)
 
+        # Ensure pipeline output buffer exists
+        if task_id and task_id not in _pipeline_outputs:
+            _pipeline_outputs[task_id] = []
+        output_buf = _pipeline_outputs.get(task_id, [])
+
+        # Emit stage marker
+        if task_id:
+            output_buf.append({
+                "type": "stage", "data": f"── {stage_label} ──", "ts": time.time()
+            })
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{SANDBOX_URL}/tasks", json=payload)
             resp.raise_for_status()
             task_data = resp.json()
             sandbox_task_id = task_data["id"]
 
-        # Poll task status until done
+        # Stream output via SSE
         start = time.monotonic()
         exit_code = -1
         output_lines: list[str] = []
+        accumulated_text = ""
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            while time.monotonic() - start < timeout:
-                await asyncio.sleep(3)
-                try:
-                    resp = await client.get(
-                        f"{SANDBOX_URL}/tasks/{sandbox_task_id}/status"
-                    )
-                    resp.raise_for_status()
-                    status = resp.json()
-                except Exception:
-                    logger.debug("Sandbox poll [%s] failed, retrying...", stage_label)
-                    continue
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "GET", f"{SANDBOX_URL}/tasks/{sandbox_task_id}/stream"
+                ) as sse_resp:
+                    async for raw_line in sse_resp.aiter_lines():
+                        if time.monotonic() - start > timeout:
+                            raise RuntimeError(
+                                f"Sandbox task timed out: {stage_label}"
+                            )
 
-                if status.get("done"):
-                    exit_code = status.get("exitCode", -1)
-                    for entry in status.get("recentOutput", []):
-                        if entry.get("type") == "stdout":
-                            output_lines.append(entry.get("data", ""))
-                    break
-            else:
-                logger.error(
-                    "Sandbox task [%s] timed out after %ds", stage_label, timeout
-                )
-                raise RuntimeError(f"Sandbox task timed out: {stage_label}")
+                        if not raw_line.startswith("data: "):
+                            continue
+
+                        try:
+                            entry = json.loads(raw_line[6:])
+                        except json.JSONDecodeError:
+                            continue
+
+                        entry_type = entry.get("type", "")
+
+                        # Forward to pipeline buffer for terminal view
+                        # (skip exit events — the pipeline emits its own on completion)
+                        if task_id and entry_type != "exit":
+                            output_buf.append(entry)
+
+                        if entry_type == "stdout":
+                            data = entry.get("data", "")
+                            output_lines.append(data)
+                            accumulated_text += data
+
+                            # Detect questions and auto-answer
+                            if _QUESTION_RE.search(accumulated_text.strip()):
+                                await self._auto_answer(
+                                    sandbox_task_id=sandbox_task_id,
+                                    question=accumulated_text.strip(),
+                                    stage_label=stage_label,
+                                    task_id=task_id,
+                                    model=model,
+                                    output_buf=output_buf,
+                                )
+                                accumulated_text = ""
+
+                        elif entry_type == "stderr":
+                            if task_id:
+                                pass  # already appended above
+
+                        elif entry_type == "exit":
+                            exit_code = entry.get("code", -1)
+                            break
+
+        except httpx.HTTPError as e:
+            logger.warning(
+                "SSE stream error [%s], falling back to polling: %s",
+                stage_label, e,
+            )
+            # Fallback: poll for completion
+            exit_code = await self._poll_until_done(
+                sandbox_task_id, stage_label, timeout - (time.monotonic() - start),
+                output_lines, output_buf, task_id,
+            )
 
         combined = "".join(output_lines)
         logger.info(
@@ -533,6 +654,117 @@ class DevAgent:
             )
 
         return combined
+
+    async def _auto_answer(
+        self,
+        *,
+        sandbox_task_id: str,
+        question: str,
+        stage_label: str,
+        task_id: str,
+        model: str,
+        output_buf: list[dict],
+    ) -> None:
+        """Detect a CLI question and auto-answer it."""
+        # Generate answer using a simple heuristic + context
+        answer = self._generate_quick_answer(question)
+        logger.info(
+            "Auto-answer [%s]: Q=%s → A=%s",
+            stage_label, question[-100:], answer,
+        )
+
+        # Send answer to sandbox stdin
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{SANDBOX_URL}/tasks/{sandbox_task_id}/input",
+                    json={"input": answer},
+                )
+                resp.raise_for_status()
+        except Exception as e:
+            logger.warning("Failed to send auto-answer: %s", e)
+            return
+
+        # Log to output buffer
+        output_buf.append({
+            "type": "decision",
+            "data": f"🤖 Auto-answered: {answer}",
+            "ts": time.time(),
+        })
+
+        # Store decision in the dev task
+        if task_id:
+            try:
+                svc = self._service.with_user("default-user")
+                task = await svc.get_by_id(task_id)
+                if task:
+                    decision = DevDecision(
+                        question=question[-500:],
+                        answer=answer,
+                        stage=stage_label,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+                    task.decisions.append(decision)
+            except Exception as e:
+                logger.debug("Could not store decision: %s", e)
+
+    @staticmethod
+    def _generate_quick_answer(question: str) -> str:
+        """Generate a quick answer to a CLI question using heuristics."""
+        q_lower = question.lower().strip()
+
+        # Common yes/no patterns — default to yes (proceed)
+        if any(p in q_lower for p in [
+            "(y/n)", "[y/n]", "(yes/no)", "[yes/no]",
+            "do you want to", "would you like", "overwrite",
+            "proceed?", "continue?",
+        ]):
+            return "y"
+
+        # Press Enter to continue
+        if "press enter" in q_lower:
+            return ""
+
+        # Select/choose — pick first option or default
+        if any(p in q_lower for p in ["select", "choose"]):
+            return "1"
+
+        # Default: press Enter (accept default)
+        return ""
+
+    async def _poll_until_done(
+        self,
+        sandbox_task_id: str,
+        stage_label: str,
+        remaining_timeout: float,
+        output_lines: list[str],
+        output_buf: list[dict],
+        task_id: str,
+    ) -> int:
+        """Fallback polling when SSE fails."""
+        start = time.monotonic()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            while time.monotonic() - start < remaining_timeout:
+                await asyncio.sleep(3)
+                try:
+                    resp = await client.get(
+                        f"{SANDBOX_URL}/tasks/{sandbox_task_id}/status"
+                    )
+                    resp.raise_for_status()
+                    status = resp.json()
+                except Exception:
+                    continue
+
+                if status.get("done"):
+                    for entry in status.get("recentOutput", []):
+                        if entry.get("type") == "stdout":
+                            data = entry.get("data", "")
+                            output_lines.append(data)
+                        if task_id:
+                            output_buf.append(entry)
+                    return status.get("exitCode", -1)
+
+        raise RuntimeError(f"Sandbox task timed out: {stage_label}")
 
     async def _collect_screenshots(self, task_id: str) -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""

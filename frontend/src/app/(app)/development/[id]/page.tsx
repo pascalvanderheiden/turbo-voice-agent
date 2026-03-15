@@ -154,54 +154,40 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
       return;
     }
 
-    // Find active sandbox task by polling sandbox status
     let cancelled = false;
-    const connect = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/sandbox/status`);
-        const data = await res.json();
-        if (cancelled || data.activeTasks === 0) return;
+    const connect = () => {
+      if (cancelled || (esRef.current && esRef.current.readyState !== EventSource.CLOSED)) return;
 
-        // Connect to sandbox task stream via backend proxy
-        const tasksRes = await fetch(`${API_URL}/api/sandbox/status`);
-        const tasksData = await tasksRes.json();
-        if (cancelled || !tasksData.activeTasks) return;
+      // Connect directly to the dev task pipeline stream
+      const es = new EventSource(`${API_URL}/api/dev/${taskId}/stream`);
+      esRef.current = es;
+      setConnected(true);
 
-        // Use the dev task's latest sandbox task stream
-        const es = new EventSource(`${API_URL}/api/sandbox/tasks/${taskId}/stream`);
-        esRef.current = es;
-        setConnected(true);
+      es.onmessage = (ev) => {
+        try {
+          const entry = JSON.parse(ev.data);
+          if (entry.type === "stdout" || entry.type === "stderr" || entry.type === "stage" || entry.type === "decision") {
+            setLines((prev) => {
+              const newLines = [...prev, entry.data];
+              return newLines.slice(-200);
+            });
+          }
+          if (entry.type === "exit") {
+            setConnected(false);
+            es.close();
+          }
+        } catch { /* ignore parse errors */ }
+      };
 
-        es.onmessage = (ev) => {
-          try {
-            const entry = JSON.parse(ev.data);
-            if (entry.type === "stdout" || entry.type === "stderr") {
-              setLines((prev) => {
-                const newLines = [...prev, entry.data];
-                return newLines.slice(-200); // Keep last 200 lines
-              });
-            }
-            if (entry.type === "exit") {
-              setConnected(false);
-              es.close();
-            }
-          } catch { /* ignore parse errors */ }
-        };
-
-        es.onerror = () => {
-          setConnected(false);
-          es.close();
-        };
-      } catch { /* sandbox not available */ }
+      es.onerror = () => {
+        setConnected(false);
+        es.close();
+      };
     };
 
     connect();
     // Retry connection every 5s while running
-    const interval = setInterval(() => {
-      if (!esRef.current || esRef.current.readyState === EventSource.CLOSED) {
-        connect();
-      }
-    }, 5000);
+    const interval = setInterval(connect, 5000);
 
     return () => {
       cancelled = true;
@@ -437,6 +423,26 @@ export default function DevTaskDetailPage() {
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
+
+      {/* Agent Decisions */}
+      {task.decisions && task.decisions.length > 0 && (
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
+          <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
+            🤖 Agent Decisions ({task.decisions.length})
+          </h2>
+          <div className="space-y-3">
+            {task.decisions.map((d: { question: string; answer: string; stage: string; timestamp: string }, i: number) => (
+              <div key={i} className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)]">
+                <span className="text-xs font-medium text-[var(--color-brand-cyan)] shrink-0 mt-0.5 w-20">{d.stage}</span>
+                <div className="flex-1 min-w-0 space-y-1">
+                  <p className="text-xs text-[var(--color-text-secondary)] line-clamp-2">{d.question}</p>
+                  <p className="text-xs font-medium text-green-400">→ {d.answer || "(Enter)"}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Screenshots / Preview */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">

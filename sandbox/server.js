@@ -145,6 +145,25 @@ app.get("/tasks", (_req, res) => {
   res.json({ tasks: list });
 });
 
+// Send stdin input to a running task (for auto-answering CLI questions)
+app.post("/tasks/:id/input", express.json(), (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    return res.status(404).json({ error: "task not found" });
+  }
+  if (task.exitCode() !== null) {
+    return res.status(409).json({ error: "task already finished" });
+  }
+  const input = req.body.input || "";
+  try {
+    task.proc.stdin.write(input + "\n");
+    task.output.push({ type: "stdin", data: input, ts: Date.now() });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "failed to write stdin: " + err.message });
+  }
+});
+
 // List and download workspace files (for screenshot retrieval)
 app.get("/files", (req, res) => {
   const pattern = req.query.glob || "*.png";

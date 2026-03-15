@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -154,7 +153,7 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
-    if task.status not in ("pending", "failed", "paused"):
+    if task.status not in ("pending", "failed", "paused", "running"):
         raise HTTPException(status_code=400, detail="Task already running or completed")
 
     # Check sandbox availability before starting the pipeline
@@ -168,6 +167,24 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
             status_code=503,
             detail="Sandbox is not running. Task is paused until the sandbox is available.",
         )
+
+    # Reset stage timestamps before re-running
+    raw_doc = service._store.get(task_id)
+    if raw_doc:
+        for it in raw_doc.get("iterations", []):
+            for stage in it.get("stages", []):
+                stage["status"] = "pending"
+                stage["startedAt"] = None
+                stage["completedAt"] = None
+                stage["output"] = None
+                stage["error"] = None
+        for stage in raw_doc.get("stages", []):
+            stage["status"] = "pending"
+            stage["startedAt"] = None
+            stage["completedAt"] = None
+            stage["output"] = None
+            stage["error"] = None
+        raw_doc["decisions"] = []
 
     await service.set_status(task_id, "running")
     logger.info("Triggering pipeline for task %s (mode=%s, user=%s)", task_id, task.mode, user_id)
@@ -234,3 +251,46 @@ async def download_archive(task_id: str, request: Request):
         raise HTTPException(
             status_code=503, detail="Sandbox is not available for download"
         )
+
+
+@router.get("/{task_id}/stream")
+async def stream_pipeline_output(task_id: str, request: Request):
+    """Stream real-time pipeline output as Server-Sent Events.
+
+    Reads from the pipeline output buffer populated by the dev agent
+    during sandbox execution.
+    """
+    from app.agents.dev_agent import get_pipeline_output
+
+    svc = _get_service()
+    task = await svc.get_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    async def event_stream():
+        cursor = 0
+        idle_count = 0
+        while True:
+            buf = get_pipeline_output(task_id)
+            if cursor < len(buf):
+                while cursor < len(buf):
+                    entry = buf[cursor]
+                    cursor += 1
+                    yield f"data: {__import__('json').dumps(entry)}\n\n"
+                    if entry.get("type") == "exit":
+                        return
+                idle_count = 0
+            else:
+                idle_count += 1
+                # Check if the task is done (no buffer = never started or already cleaned up)
+                if idle_count > 10 and not buf:
+                    # Check task status to decide whether to keep waiting
+                    t = await svc.get_by_id(task_id)
+                    if not t or t.status not in ("running", "pending"):
+                        return
+                # Stop after 10 min of no new output
+                if idle_count > 1200:
+                    return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
