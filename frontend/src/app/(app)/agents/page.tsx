@@ -356,7 +356,7 @@ export default function AgentsPage() {
       </div>
 
       {/* Sandbox Config */}
-      <SandboxConfig className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)]" />
+      <SandboxConfig />
 
       {/* Skills Marketplace */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
