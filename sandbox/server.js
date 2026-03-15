@@ -40,9 +40,9 @@ app.post("/tasks", (req, res) => {
   // Two modes: a) raw command, b) Copilot CLI prompt
   let spawnCmd, spawnArgs;
   if (prompt) {
-    // Run Copilot CLI in yolo mode with the given prompt
+    // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
-    spawnArgs = ["-m", prompt, "--model", model, "--yolo"];
+    spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
   } else if (command) {
     spawnCmd = command;
     spawnArgs = args;
@@ -54,9 +54,13 @@ app.post("/tasks", (req, res) => {
   const output = [];
   let exitCode = null;
 
+  // Use shell only for raw commands (they may need PATH resolution)
+  // For Copilot CLI prompts, avoid shell to preserve prompt as single argument
+  const useShell = !prompt;
+
   const proc = spawn(spawnCmd, spawnArgs, {
     cwd: workDir,
-    shell: true,
+    shell: useShell,
     env: {
       ...process.env,
       FORCE_COLOR: "0",

@@ -11,13 +11,12 @@ import {
   IconCircleCheck,
   IconCircleX,
   IconClock,
-  IconClipboardList,
-  IconHammer,
-  IconRocket,
-  IconTestPipe,
+  IconSettingsAutomation,
+  IconMessageChatbot,
+  IconPackage,
+  IconPhoto,
   IconChevronDown,
   IconChevronRight,
-  IconPhoto,
   IconPlus,
   IconVideo,
   IconX,
@@ -27,11 +26,11 @@ import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVi
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
-const STAGE_META: Record<string, { Icon: typeof IconClipboardList; label: string; color: string }> = {
-  plan:  { Icon: IconClipboardList, label: "Plan",  color: "var(--color-brand-purple)" },
-  build: { Icon: IconHammer,        label: "Build", color: "var(--color-brand-cyan)" },
-  run:   { Icon: IconRocket,        label: "Run",   color: "var(--color-brand-pink)" },
-  test:  { Icon: IconTestPipe,      label: "Test",  color: "#22C55E" },
+const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: string; color: string }> = {
+  init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
+  propose:     { Icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
+  apply:       { Icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
+  screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
 };
 
 function StageStatusIcon({ status }: { status: string }) {
@@ -47,7 +46,7 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
   return (
     <div className="space-y-3">
       {stages.map((stage, i) => {
-        const meta = STAGE_META[stage.name] || { Icon: IconClipboardList, label: stage.name, color: "var(--color-text-muted)" };
+        const meta = STAGE_META[stage.name] || { Icon: IconSettingsAutomation, label: stage.name, color: "var(--color-text-muted)" };
         const hasContent = !!(stage.output || stage.error);
         const isOpen = expanded === stage.name;
         return (
@@ -92,7 +91,7 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
               <div className="ml-14 mt-2 mb-2">
                 {stage.output && (
                   <div className={`text-xs bg-[var(--color-bg-tertiary)] rounded-[var(--radius-md)] p-3 overflow-auto max-h-80 ${
-                    stage.name === "plan" ? "text-[var(--color-text-primary)] whitespace-pre-wrap leading-relaxed" : "text-[var(--color-text-secondary)] whitespace-pre-wrap font-mono"
+                    stage.name === "propose" ? "text-[var(--color-text-primary)] whitespace-pre-wrap leading-relaxed" : "text-[var(--color-text-secondary)] whitespace-pre-wrap font-mono"
                   }`}>
                     {stage.output}
                   </div>

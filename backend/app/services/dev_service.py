@@ -12,7 +12,7 @@ from app.services.json_persistence import JsonPersistenceMixin
 
 logger = logging.getLogger(__name__)
 
-STAGE_NAMES = ["plan", "build", "run", "test"]
+STAGE_NAMES = ["init", "propose", "apply", "screenshots"]
 
 
 def _default_stages() -> list[dict]:

@@ -295,13 +295,14 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
-        # Stage: screenshots — capture with Playwright
+        # Stage: screenshots — capture with Playwright (best-effort)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
             command="npx",
             args=["playwright", "screenshot", "--wait-for-timeout=3000",
                   "http://localhost:3000", "/workspace/screenshot.png"],
             stage_label="screenshots",
+            raise_on_error=False,
         )
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
@@ -384,13 +385,14 @@ class DevAgent:
                 *[run_feature(i, p) for i, p in enumerate(feature_prompts)]
             )
 
-        # ── Screenshots ──────────────────────────────────────────────
+        # ── Screenshots (best-effort) ────────────────────────────────
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
             command="npx",
             args=["playwright", "screenshot", "--wait-for-timeout=3000",
                   "http://localhost:3000", "/workspace/screenshot.png"],
             stage_label="screenshots",
+            raise_on_error=False,
         )
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
@@ -408,10 +410,11 @@ class DevAgent:
         model: str = "claude-opus-4.6",
         stage_label: str = "",
         timeout: float = 300,
+        raise_on_error: bool = True,
     ) -> str:
         """Submit a task to the sandbox container and wait for completion.
 
-        Returns the combined stdout output. Raises on failure.
+        Returns the combined stdout output. Raises on failure if raise_on_error=True.
         """
         payload: dict = {"workDir": "/workspace"}
         if prompt:
@@ -423,7 +426,7 @@ class DevAgent:
         else:
             raise ValueError("prompt or command is required")
 
-        logger.info("Sandbox exec [%s]: %s", stage_label, prompt or f"{command} {args}")
+        logger.info("Sandbox exec [%s]: %s", stage_label, prompt[:120] if prompt else f"{command} {args}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{SANDBOX_URL}/tasks", json=payload)
@@ -433,6 +436,7 @@ class DevAgent:
 
         # Poll the SSE stream until the task exits
         output_lines: list[str] = []
+        exit_code = -1
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
                 async with client.stream(
@@ -450,12 +454,7 @@ class DevAgent:
                                 stage_label, data.get("data", ""),
                             )
                         elif data.get("type") == "exit":
-                            code = data.get("code", -1)
-                            if code != 0:
-                                logger.warning(
-                                    "Sandbox task [%s] exited with code %d",
-                                    stage_label, code,
-                                )
+                            exit_code = data.get("code", -1)
                             break
         except httpx.ReadTimeout:
             logger.error("Sandbox task [%s] timed out after %ds", stage_label, timeout)
@@ -463,8 +462,14 @@ class DevAgent:
 
         combined = "".join(output_lines)
         logger.info(
-            "Sandbox exec [%s] completed (%d chars output)", stage_label, len(combined)
+            "Sandbox exec [%s] exit=%d (%d chars output)", stage_label, exit_code, len(combined)
         )
+
+        if exit_code != 0 and raise_on_error:
+            raise RuntimeError(
+                f"Sandbox task [{stage_label}] failed with exit code {exit_code}"
+            )
+
         return combined
 
     # ── Shared pipeline stages ──────────────────────────────────────
