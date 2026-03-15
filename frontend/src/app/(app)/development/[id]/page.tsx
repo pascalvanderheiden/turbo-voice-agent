@@ -390,6 +390,10 @@ export default function DevTaskDetailPage() {
           {iterations.map((it, i) => {
             const allDone = it.stages.every((s) => s.status === "completed");
             const anyFailed = it.stages.some((s) => s.status === "failed");
+            const anyRunning = it.stages.some((s) => s.status === "running");
+            const allPending = it.stages.every((s) => s.status === "pending");
+            const foundationDone = iterations[0]?.stages.every((s) => s.status === "completed");
+            const isQueued = allPending && i > 0 && !foundationDone;
             const isCurrent = task.currentIteration === i && task.status === "running";
             return (
               <button
@@ -402,11 +406,17 @@ export default function DevTaskDetailPage() {
                     ? "border-green-500/30 bg-green-500/5 text-green-400"
                     : anyFailed
                     ? "border-red-500/30 bg-red-500/5 text-red-400"
+                    : anyRunning
+                    ? "border-blue-500/30 bg-blue-500/5 text-blue-400"
+                    : isQueued
+                    ? "border-amber-500/30 bg-amber-500/5 text-amber-400"
                     : "border-[var(--color-border-dark)] text-[var(--color-text-muted)]"
                 }`}
               >
                 {isCurrent && <IconLoader2 size={12} className="inline animate-spin mr-1" />}
+                {isQueued && <IconClock size={12} className="inline mr-1" />}
                 {it.label}
+                {isQueued && <span className="ml-1 opacity-70">(queued)</span>}
               </button>
             );
           })}

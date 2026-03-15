@@ -77,7 +77,7 @@ class SupervisorAgent:
         }
         spec_functions = {
             "create_spec", "get_specs", "get_spec", "update_spec", "delete_spec",
-            "generate_spec", "optimize_spec",
+            "generate_spec", "optimize_spec", "add_feature_to_spec",
         }
         dev_functions = {
             "create_dev_task", "get_dev_tasks", "get_dev_task", "delete_dev_task",

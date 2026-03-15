@@ -56,18 +56,33 @@ app.post("/tasks", (req, res) => {
   const output = [];
   let exitCode = null;
 
-  // Use shell only for raw commands (they may need PATH resolution)
-  // For Copilot CLI prompts, avoid shell to preserve prompt as single argument
-  const useShell = !prompt;
+  // Ensure workDir exists
+  if (!fs.existsSync(workDir)) {
+    fs.mkdirSync(workDir, { recursive: true });
+  }
 
-  const proc = spawn(spawnCmd, spawnArgs, {
-    cwd: workDir,
-    shell: useShell,
-    env: {
-      ...process.env,
-      FORCE_COLOR: "0",
-      COPILOT_MODEL: model,
-    },
+  // Use shell for raw commands that need PATH/pipes/&&.
+  // For Copilot CLI prompts, avoid shell to preserve multi-word prompt as single arg.
+  const useShell = !prompt;
+  let proc;
+  try {
+    proc = spawn(spawnCmd, spawnArgs, {
+      cwd: workDir,
+      shell: useShell,
+      env: {
+        ...process.env,
+        FORCE_COLOR: "0",
+        COPILOT_MODEL: model,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to spawn process", details: String(err) });
+  }
+
+  proc.on("error", (err) => {
+    output.push({ type: "stderr", data: `Spawn error: ${err.message}`, ts: Date.now() });
+    exitCode = 1;
+    output.push({ type: "exit", code: 1, ts: Date.now() });
   });
 
   proc.stdout.on("data", (chunk) => {

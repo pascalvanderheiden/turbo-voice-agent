@@ -204,6 +204,20 @@ class InMemoryDevService(JsonPersistenceMixin):
             doc["updatedAt"] = datetime.now(UTC).isoformat()
             self._save_to_disk()
 
+    async def add_iteration(self, task_id: str, iteration: dict) -> int | None:
+        """Append a new iteration to a task. Returns the new iteration index, or None if task not found."""
+        doc = self._store.get(task_id)
+        if not doc:
+            return None
+        iterations = doc.setdefault("iterations", [])
+        new_index = max((it["iterationIndex"] for it in iterations), default=-1) + 1
+        iteration["iterationIndex"] = new_index
+        iterations.append(iteration)
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
+        logger.info("Added iteration %d to dev task %s: %s", new_index, task_id, iteration.get("label", ""))
+        return new_index
+
     async def add_artifact(self, task_id: str, artifact: DevArtifact) -> DevTask | None:
         doc = self._store.get(task_id)
         if not doc:

@@ -249,6 +249,17 @@ export const specsApi = {
       "/api/specs/generate",
       { method: "POST", body: JSON.stringify({ idea_id: ideaId }) }
     ),
+  addFeature: (specId: string, description: string) =>
+    fetchApi<{
+      success: boolean;
+      feature_name: string;
+      spec_id: string;
+      dev_task_extended: boolean;
+      pipeline_triggered: boolean;
+    }>(`/api/specs/${specId}/add-feature`, {
+      method: "POST",
+      body: JSON.stringify({ description }),
+    }),
 };
 
 export async function uploadImage(file: File): Promise<string> {

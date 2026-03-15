@@ -10,14 +10,16 @@ router = APIRouter(prefix="/api/specs", tags=["specs"])
 _spec_service = None
 _optimize_fn = None
 _generate_fn = None
+_add_feature_fn = None
 _brainstorm_service = None
 
 
-def set_spec_service(service, optimize_fn=None, generate_fn=None, brainstorm_service=None) -> None:
-    global _spec_service, _optimize_fn, _generate_fn, _brainstorm_service
+def set_spec_service(service, optimize_fn=None, generate_fn=None, add_feature_fn=None, brainstorm_service=None) -> None:
+    global _spec_service, _optimize_fn, _generate_fn, _add_feature_fn, _brainstorm_service
     _spec_service = service
     _optimize_fn = optimize_fn
     _generate_fn = generate_fn
+    _add_feature_fn = add_feature_fn
     _brainstorm_service = brainstorm_service
 
 
@@ -118,3 +120,32 @@ async def generate_specs(data: GenerateRequest, request: Request):
         return {"success": True, "specs": specs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+
+class AddFeatureRequest(BaseModel):
+    description: str = Field(..., min_length=1)
+
+
+@router.post("/{spec_id}/add-feature")
+async def add_feature_to_spec(spec_id: str, data: AddFeatureRequest, request: Request):
+    """Add a new feature to a foundation spec, enhanced with AI."""
+    if _add_feature_fn is None:
+        raise HTTPException(status_code=503, detail="Add feature not available")
+
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+    spec = await service.get_by_id(spec_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    if spec.type != "foundation":
+        raise HTTPException(status_code=400, detail="Features can only be added to foundation specs")
+
+    try:
+        result = await _add_feature_fn(spec_id, data.description, user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add feature: {str(e)}")

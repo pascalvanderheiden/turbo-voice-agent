@@ -316,8 +316,8 @@ class DevAgent:
         work_dir = f"/workspace/{task_id}"
         await self._sandbox_exec(
             task_id=task_id,
-            command="bash",
-            args=["-c", f"rm -rf {work_dir} && mkdir -p {work_dir}"],
+            command=f"rm -rf {work_dir} && mkdir -p {work_dir}",
+            args=[],
             stage_label="cleanup",
             raise_on_error=False,
         )
@@ -420,8 +420,8 @@ class DevAgent:
         work_dir = f"/workspace/{task_id}"
         await self._sandbox_exec(
             task_id=task_id,
-            command="bash",
-            args=["-c", f"rm -rf {work_dir} && mkdir -p {work_dir}"],
+            command=f"rm -rf {work_dir} && mkdir -p {work_dir}",
+            args=[],
             stage_label="cleanup",
             raise_on_error=False,
         )
@@ -469,6 +469,15 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
+        # ── Post-foundation hook: pick up any queued feature iterations ──
+        # Features may have been added via add_feature_to_spec while foundation was running
+        task = await svc.get_by_id(task_id)
+        queued_iterations = []
+        if task:
+            for it in task.iterations:
+                if it.iteration_index > len(feature_prompts) and hasattr(it, '_raw_data'):
+                    queued_iterations.append(it)
+
         # ── Features: parallel propose/apply ─────────────────────────
         # Each feature runs in the same work_dir (sequential OpenSpec changes)
         # but propose/apply pairs are still sequential since they build on each other
@@ -514,6 +523,25 @@ class DevAgent:
                 task_id, iter_idx, "apply", "completed"
             )
 
+        # ── Execute any queued iterations added during pipeline ──────
+        task = await svc.get_by_id(task_id)
+        if task:
+            known_count = len(feature_prompts) + 1  # foundation + original features
+            for it in task.iterations:
+                if it.iteration_index >= known_count:
+                    # This is a dynamically added feature — check for stored instruction
+                    doc = svc._store.get(task_id) if hasattr(svc, '_store') else None
+                    propose_instr = ""
+                    if doc:
+                        for it_doc in doc.get("iterations", []):
+                            if it_doc["iterationIndex"] == it.iteration_index:
+                                propose_instr = it_doc.get("proposeInstruction", "")
+                                break
+                    if propose_instr:
+                        await self.run_incremental_feature_pipeline(
+                            task_id, it.iteration_index, propose_instr, user_id
+                        )
+
         # ── Archive ──────────────────────────────────────────────────
         await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
         await self._sandbox_exec(
@@ -554,6 +582,161 @@ class DevAgent:
         await svc.set_status(task_id, "completed")
         logger.info("OpenSpec pipeline COMPLETED for task %s", task_id)
 
+    # ── Incremental feature addition ─────────────────────────────
+
+    async def append_feature_iteration(
+        self,
+        task_id: str,
+        feature_name: str,
+        propose_instruction: str,
+        spec_id: str,
+        user_id: str = "default-user",
+    ) -> dict:
+        """Append a new feature iteration to an existing OpenSpec dev task.
+
+        Returns dict with 'extended' and 'pipeline_triggered' booleans.
+        """
+        svc = self._service.with_user(user_id)
+        task = await svc.get_by_id(task_id)
+        if not task:
+            return {"error": "Dev task not found", "extended": False, "pipeline_triggered": False}
+        if task.mode != "openspec":
+            return {"error": "Only openspec mode supports incremental features", "extended": False, "pipeline_triggered": False}
+
+        # Determine foundation status
+        foundation_completed = False
+        if task.iterations:
+            foundation = task.iterations[0]
+            foundation_completed = all(
+                s.status == "completed" for s in foundation.stages
+                if s.name in ("init", "propose", "apply")
+            )
+
+        # Create the new iteration
+        iteration_data = _default_iteration(0, f"Feature: {feature_name}", spec_id)
+        # Store the propose instruction in the iteration for later use
+        iteration_data["proposeInstruction"] = propose_instruction
+        new_index = await svc.add_iteration(task_id, iteration_data)
+        if new_index is None:
+            return {"error": "Failed to add iteration", "extended": False, "pipeline_triggered": False}
+
+        # Trigger pipeline if foundation is done
+        pipeline_triggered = False
+        if foundation_completed and task.status in ("completed", "running"):
+            pipeline_triggered = True
+            asyncio.create_task(
+                self.run_incremental_feature_pipeline(
+                    task_id, new_index, propose_instruction, user_id
+                )
+            )
+
+        logger.info(
+            "Appended feature iteration %d to task %s: %s (pipeline_triggered=%s)",
+            new_index, task_id, feature_name, pipeline_triggered,
+        )
+        return {"extended": True, "pipeline_triggered": pipeline_triggered, "iteration_index": new_index}
+
+    async def run_incremental_feature_pipeline(
+        self,
+        task_id: str,
+        iteration_index: int,
+        propose_instruction: str,
+        user_id: str = "default-user",
+    ) -> None:
+        """Run pipeline for a single incrementally-added feature in the existing workspace."""
+        svc = self._service.with_user(user_id)
+        model = await self._get_user_model(user_id)
+
+        # Initialize output buffer if not present
+        if task_id not in _pipeline_outputs:
+            _pipeline_outputs[task_id] = []
+
+        # Update task status to running if it was completed
+        task = await svc.get_by_id(task_id)
+        if task and task.status == "completed":
+            await svc.set_status(task_id, "running")
+
+        # Determine workspace from foundation iteration
+        work_dir = "/workspace"
+        if task and task.iterations:
+            foundation_ws = task.iterations[0].workspace_path
+            if foundation_ws:
+                work_dir = foundation_ws
+
+        try:
+            # Propose
+            await svc.set_iteration_stage_status(task_id, iteration_index, "propose", "running")
+            logger.info("Incremental feature propose: task=%s, iter=%d", task_id, iteration_index)
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Use the openspec-propose skill to create a proposal for "
+                    "adding this feature to the existing application.\n\n"
+                    f"{propose_instruction}"
+                ),
+                model=model,
+                stage_label=f"feature-{iteration_index}-propose",
+                work_dir=work_dir,
+            )
+            await svc.set_iteration_stage_status(task_id, iteration_index, "propose", "completed")
+
+            # Apply
+            await svc.set_iteration_stage_status(task_id, iteration_index, "apply", "running")
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Use the openspec-apply-change skill to implement all tasks "
+                    "from the latest proposal. Work through every task until done. "
+                    "Fix any build errors."
+                ),
+                model=model,
+                stage_label=f"feature-{iteration_index}-apply",
+                work_dir=work_dir,
+            )
+            await svc.set_iteration_stage_status(task_id, iteration_index, "apply", "completed")
+
+            # Screenshots
+            await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "running")
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Take screenshots of the updated application. "
+                    "Start the app in the background (e.g. npm run dev &). "
+                    "Wait for it to be ready, then use "
+                    "'npx playwright screenshot http://localhost:3000 "
+                    f"{work_dir}/screenshot-feature-{iteration_index}.png --full-page "
+                    "--wait-for-timeout=5000'. "
+                    "If the app uses a different port, adjust accordingly."
+                ),
+                model=model,
+                stage_label=f"feature-{iteration_index}-screenshots",
+                raise_on_error=False,
+                work_dir=work_dir,
+            )
+            await self._collect_screenshots(task_id, work_dir=work_dir)
+            await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "completed")
+
+            # Check if all iterations are done — if so, mark task completed
+            task = await svc.get_by_id(task_id)
+            if task:
+                all_done = all(
+                    all(s.status == "completed" for s in it.stages if s.name in ("propose", "apply"))
+                    for it in task.iterations
+                )
+                if all_done:
+                    await svc.set_status(task_id, "completed")
+
+            logger.info("Incremental feature pipeline COMPLETED: task=%s, iter=%d", task_id, iteration_index)
+
+        except Exception as e:
+            logger.exception("Incremental feature pipeline FAILED: task=%s, iter=%d", task_id, iteration_index)
+            try:
+                await svc.set_iteration_stage_status(
+                    task_id, iteration_index, "apply", "failed", error=str(e)
+                )
+            except Exception:
+                pass
+
     # ── Sandbox HTTP helpers ───────────────────────────────────────
 
     async def _sandbox_exec(
@@ -565,7 +748,7 @@ class DevAgent:
         args: list[str] | None = None,
         model: str = "claude-opus-4.6",
         stage_label: str = "",
-        timeout: float = 600,
+        timeout: float = 1200,
         raise_on_error: bool = True,
         work_dir: str = "/workspace",
     ) -> str:

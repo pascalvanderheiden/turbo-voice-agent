@@ -31,10 +31,16 @@ def _get_user(request: Request) -> tuple[str, dict]:
 
 
 def _todo_oauth_config() -> dict:
-    """Return OAuth config for Microsoft To-Do consent."""
+    """Return OAuth config for Microsoft To-Do consent.
+
+    Uses 'common' authority by default so both personal Microsoft accounts and
+    organizational accounts can consent.  Override with TODO_OAUTH_TENANT_ID if
+    you need to restrict to a specific tenant.
+    """
     return {
-        "client_id": os.environ.get("ENTRA_CLIENT_ID", ""),
-        "tenant_id": os.environ.get("ENTRA_TENANT_ID", "common"),
+        "client_id": os.environ.get("TODO_OAUTH_CLIENT_ID")
+        or os.environ.get("ENTRA_CLIENT_ID", ""),
+        "tenant_id": os.environ.get("TODO_OAUTH_TENANT_ID", "common"),
         "redirect_uri": os.environ.get(
             "TODO_OAUTH_REDIRECT_URI",
             "http://localhost:8000/api/auth/callback/microsoft-todo",
@@ -118,11 +124,11 @@ async def todo_oauth_callback(request: Request, code: str = "", error: str = "",
 
     if error or not code:
         logger.warning("Microsoft To-Do OAuth error: %s", error)
-        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+        return RedirectResponse(f"{frontend_url}/settings?todo_connected=error")
 
     user_id = state
     if not user_id:
-        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+        return RedirectResponse(f"{frontend_url}/settings?todo_connected=error")
 
     cfg = _todo_oauth_config()
 
@@ -144,12 +150,12 @@ async def todo_oauth_callback(request: Request, code: str = "", error: str = "",
                 if resp.status != 200:
                     body = await resp.text()
                     logger.error("Token exchange failed (%d): %s", resp.status, body)
-                    return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+                    return RedirectResponse(f"{frontend_url}/settings?todo_connected=error")
 
                 tokens = await resp.json()
     except Exception:
         logger.exception("Token exchange request failed")
-        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+        return RedirectResponse(f"{frontend_url}/settings?todo_connected=error")
 
     refresh_token = tokens.get("refresh_token", "")
     if not refresh_token:
@@ -165,7 +171,7 @@ async def todo_oauth_callback(request: Request, code: str = "", error: str = "",
     }
     logger.info("Microsoft To-Do connected for user %s", user_id)
 
-    return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=success")
+    return RedirectResponse(f"{frontend_url}/settings?todo_connected=success")
 
 
 @router.delete("/me/connections/microsoft-todo")
@@ -355,7 +361,7 @@ async def update_profile(request: Request):
 
 @router.get("/me/photo")
 async def get_profile_photo(request: Request):
-    """Get profile photo — check Blob Storage first, then local uploads, then proxy Microsoft Graph."""
+    """Get profile photo — check Blob Storage, local uploads, then MS Graph."""
     user_id, _ = _get_user(request)
 
     # Check if user has a custom uploaded photo in Blob Storage
@@ -417,10 +423,10 @@ async def get_profile_photo(request: Request):
                 }
                 return Response(content=photo_data, media_type=ct.get(ext, "image/jpeg"))
 
-    # Fallback to Microsoft Graph photo
+    # Fallback to Microsoft Graph photo (short timeout to avoid blocking UI)
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        return JSONResponse(status_code=401, content={"detail": "No token"})
+        return JSONResponse(status_code=404, content={"detail": "No photo available"})
 
     token = auth_header[7:]
 
@@ -429,7 +435,7 @@ async def get_profile_photo(request: Request):
             async with session.get(
                 "https://graph.microsoft.com/v1.0/me/photo/$value",
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=3),
             ) as resp:
                 if resp.status == 200:
                     photo_data = await resp.read()

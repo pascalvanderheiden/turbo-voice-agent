@@ -306,16 +306,15 @@ export default function SpecDetailPage() {
       {addFeature && (
         <AddFeatureDialog
           onClose={() => setAddFeature(false)}
-          onSubmit={async (title, content) => {
-            const created = await specsApi.create({
-              title,
-              content,
-              type: "feature",
-              parentId: id,
-              ideaId: foundation.ideaId || undefined,
-            });
-            setFeatures((prev) => [...prev, created]);
-            toast.success(t("specs.created"));
+          onSubmit={async (description) => {
+            const result = await specsApi.addFeature(id, description);
+            // Refresh the spec to show updated content
+            const updatedSpec = await specsApi.get(id);
+            if (updatedSpec) setFoundation(updatedSpec);
+            let msg = `Feature "${result.feature_name}" added`;
+            if (result.dev_task_extended) msg += " — dev task extended";
+            if (result.pipeline_triggered) msg += " & pipeline triggered";
+            toast.success(msg);
             setAddFeature(false);
           }}
         />
@@ -401,43 +400,39 @@ function AddFeatureDialog({
   onSubmit,
 }: {
   onClose: () => void;
-  onSubmit: (title: string, content: string) => Promise<void>;
+  onSubmit: (description: string) => Promise<void>;
 }) {
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
+  const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { t } = useI18n();
 
   const handleSubmit = async () => {
-    if (!title.trim()) return;
+    if (!description.trim()) return;
     setSubmitting(true);
-    try { await onSubmit(title, content); } catch { toast.error(t("specs.failed")); } finally { setSubmitting(false); }
+    try { await onSubmit(description); } catch { toast.error(t("specs.failed")); } finally { setSubmitting(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 w-full max-w-lg space-y-4">
         <h2 className="text-lg font-semibold">Add Feature</h2>
-        <input
-          type="text"
-          placeholder="Feature title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-cyan)] transition-colors"
-        />
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Describe the feature — AI will enhance it and add it to the spec automatically.
+        </p>
         <textarea
-          placeholder="Feature specification..."
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={8}
-          className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-cyan)] transition-colors resize-none font-mono"
+          placeholder="Describe the feature you want to add (e.g. 'dark mode support with system preference detection')..."
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={4}
+          className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-cyan)] transition-colors resize-none"
+          autoFocus
         />
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-[var(--radius-md)] border border-[var(--color-border-dark)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
             {t("specs.cancel")}
           </button>
-          <button onClick={handleSubmit} disabled={submitting || !title.trim()} className="px-4 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-cyan)] text-white hover:opacity-90 transition-opacity disabled:opacity-50">
-            {submitting ? t("specs.saving") : t("specs.save")}
+          <button onClick={handleSubmit} disabled={submitting || !description.trim()} className="px-4 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-cyan)] text-white hover:opacity-90 transition-opacity disabled:opacity-50">
+            {submitting ? "Enhancing with AI..." : "Add Feature"}
           </button>
         </div>
       </div>

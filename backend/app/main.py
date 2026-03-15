@@ -151,6 +151,8 @@ async def lifespan(app: FastAPI):
     research_agent = ResearchAgent(research_service)
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
     dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)
+    # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
+    spec_agent._dev_agent = dev_agent
     skills_agent = SkillsAgent(skills_service)
     marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
 
@@ -175,6 +177,7 @@ async def lifespan(app: FastAPI):
         spec_service,
         optimize_fn=spec_agent.optimize,
         generate_fn=spec_agent.generate_from_idea,
+        add_feature_fn=spec_agent.add_feature_to_spec,
         brainstorm_service=brainstorm_service,
     )
     voice_ws.set_supervisor(supervisor)

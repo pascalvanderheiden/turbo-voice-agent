@@ -43,6 +43,20 @@ export default function SettingsPage() {
 
   useEffect(() => setMounted(true), []);
 
+  // Handle OAuth callback query params (after redirect from Microsoft consent)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const todoResult = params.get("todo_connected");
+    if (todoResult === "success") {
+      toast.success("Microsoft To-Do connected!");
+      setTodoConnected(true);
+      window.history.replaceState({}, "", "/settings");
+    } else if (todoResult === "error") {
+      toast.error("Microsoft To-Do connection failed");
+      window.history.replaceState({}, "", "/settings");
+    }
+  }, []);
+
   const fetchProfile = useCallback(async () => {
     try {
       const profile = await profileApi.get();
@@ -51,11 +65,14 @@ export default function SettingsPage() {
     } catch {
       // ignore
     }
+  }, []);
+
+  const fetchPhoto = useCallback(async () => {
     try {
       const url = await userApi.getPhotoObjectUrl();
       if (url) setPhotoUrl(url);
     } catch {
-      // ignore
+      // ignore — no photo available
     }
   }, []);
 
@@ -76,8 +93,9 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchProfile();
+    fetchPhoto();
     fetchConnections();
-  }, [fetchProfile, fetchConnections]);
+  }, [fetchProfile, fetchPhoto, fetchConnections]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -210,7 +228,7 @@ export default function SettingsPage() {
               ref={fileInputRef}
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              className="hidden"
+              className="sr-only"
               onChange={handlePhotoUpload}
             />
             <button

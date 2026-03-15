@@ -556,4 +556,23 @@ class SpecAgent:
                 logger.exception("Failed to optimize spec %s", spec.id)
                 return json.dumps({"error": "Optimization failed"})
 
+        elif function_name == "add_feature_to_spec":
+            spec_id = args.get("spec_id")
+            description = args.get("description")
+            if not spec_id or not description:
+                return json.dumps({"error": "Both spec_id and description are required"})
+            try:
+                result = await self.add_feature_to_spec(spec_id, description, user_id=user_id)
+                if "error" in result:
+                    return json.dumps(result)
+                msg = f"Feature '{result['feature_name']}' added to spec."
+                if result.get("dev_task_extended"):
+                    msg += " Dev task extended with new feature iteration."
+                if result.get("pipeline_triggered"):
+                    msg += " Pipeline triggered for the new feature."
+                return json.dumps({**result, "message": msg})
+            except Exception:
+                logger.exception("Failed to add feature to spec %s", spec_id)
+                return json.dumps({"error": "Failed to add feature to spec"})
+
         return json.dumps({"error": f"Unknown function: {function_name}"})
