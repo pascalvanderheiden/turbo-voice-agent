@@ -72,6 +72,11 @@ jobs:
             --location "$AZURE_LOCATION" \
             --no-prompt 2>/dev/null || true
           azd env refresh -e "$AZURE_ENV_NAME" --no-prompt
+          # azd deploy expects AZURE_CONTAINER_REGISTRY_ENDPOINT; Bicep outputs AZURE_CONTAINER_REGISTRY
+          ACR=$(azd env get-value AZURE_CONTAINER_REGISTRY -e "$AZURE_ENV_NAME" 2>/dev/null || true)
+          if [ -n "$ACR" ]; then
+            azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR" -e "$AZURE_ENV_NAME"
+          fi
 
       - name: Set Bicep parameters
         if: needs.detect-changes.outputs.infra == 'true'
