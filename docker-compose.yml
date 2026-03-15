@@ -19,5 +19,28 @@ services:
       retries: 40
       start_period: 120s
 
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    container_name: copilot-sandbox
+    ports:
+      - "4000:3000"
+    environment:
+      - PORT=3000
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - COPILOT_MODEL=${COPILOT_MODEL:-claude-opus-4.6}
+    volumes:
+      - sandbox-workspace:/workspace
+    mem_limit: 4g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
 volumes:
   cosmos-data:
+  sandbox-workspace:

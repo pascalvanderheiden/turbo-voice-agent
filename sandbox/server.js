@@ -7,8 +7,22 @@ app.use(express.json());
 
 const tasks = new Map();
 
+// GitHub auth: if GITHUB_TOKEN is set, configure gh CLI on startup
+if (process.env.GITHUB_TOKEN) {
+  const { execSync } = require("child_process");
+  try {
+    execSync(`echo "${process.env.GITHUB_TOKEN}" | gh auth login --with-token`, {
+      stdio: "pipe",
+    });
+    console.log("GitHub CLI authenticated via GITHUB_TOKEN");
+  } catch (err) {
+    console.error("Failed to authenticate gh CLI:", err.message);
+  }
+}
+
 app.get("/health", (_req, res) => {
-  res.json({ status: "ready" });
+  const activeTasks = [...tasks.values()].filter((t) => t.exitCode() === null).length;
+  res.json({ status: "ready", activeTasks });
 });
 
 app.post("/tasks", (req, res) => {
