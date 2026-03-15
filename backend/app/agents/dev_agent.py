@@ -982,7 +982,7 @@ class DevAgent:
 
     async def _collect_screenshots(self, task_id: str, work_dir: str = "/workspace") -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
-        svc = self._dev_service
+        svc = self._service
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
@@ -994,7 +994,9 @@ class DevAgent:
                 logger.info("Found %d screenshot files in sandbox", len(files))
 
                 for file_path in files:
-                    rel = file_path.replace(f"{work_dir}/", "", 1)
+                    # file_path is absolute, e.g. /workspace/abc/screenshot.png
+                    # sandbox /files/* joins with /workspace, so strip that prefix
+                    rel = file_path.replace("/workspace/", "", 1)
                     try:
                         fresp = await client.get(f"{SANDBOX_URL}/files/{rel}")
                         fresp.raise_for_status()
