@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Paths that skip authentication
 SKIP_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
-SKIP_PREFIXES = ("/uploads/", "/static/", "/install-cert")
+SKIP_PREFIXES = ("/uploads/", "/static/", "/install-cert", "/api/auth/callback/")
 
 MOCK_USER = {
     "oid": "00000000-0000-0000-0000-000000000000",
