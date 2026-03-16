@@ -256,8 +256,10 @@ class TodoMcpClient:
                     "dateTime": f"{arguments['dueDate']}T00:00:00",
                     "timeZone": "UTC",
                 }
+            logger.info("Graph create_task: POST %s body=%s", base_path, body)
             result = await self._graph_post(access_token, base_path, body)
             if "error" in result:
+                logger.error("Graph create_task failed: %s", result["error"])
                 return result
             return {"task": self._normalize_task(result)}
 
