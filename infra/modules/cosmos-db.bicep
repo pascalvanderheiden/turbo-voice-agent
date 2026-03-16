@@ -14,6 +14,9 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name: name
   location: location
   kind: 'GlobalDocumentDB'
+  tags: {
+    SecurityControl: 'Ignore'
+  }
   properties: {
     databaseAccountOfferType: 'Standard'
     consistencyPolicy: {

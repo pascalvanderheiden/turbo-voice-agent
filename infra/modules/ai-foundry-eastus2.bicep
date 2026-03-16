@@ -11,6 +11,9 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: name
   location: location
   kind: 'AIServices'
+  tags: {
+    SecurityControl: 'Ignore'
+  }
   identity: {
     type: 'SystemAssigned'
   }
