@@ -41,6 +41,7 @@ app.post("/tasks", (req, res) => {
     args = [],
     model = DEFAULT_MODEL,
     workDir = "/workspace",
+    ghToken: perTaskToken,
   } = req.body;
 
   // Two modes: a) raw command, b) Copilot CLI prompt
@@ -55,6 +56,12 @@ app.post("/tasks", (req, res) => {
     spawnArgs = args;
   } else {
     return res.status(400).json({ error: "prompt or command is required" });
+  }
+
+  // Use per-task token if provided, fall back to container-level env
+  const effectiveToken = perTaskToken || ghToken;
+  if (prompt && !effectiveToken) {
+    return res.status(400).json({ error: "GitHub token required — set it in Settings → Connections" });
   }
 
   const id = crypto.randomUUID();
@@ -78,6 +85,7 @@ app.post("/tasks", (req, res) => {
         ...process.env,
         FORCE_COLOR: "0",
         COPILOT_MODEL: model,
+        ...(effectiveToken ? { GH_TOKEN: effectiveToken } : {}),
       },
     });
   } catch (err) {

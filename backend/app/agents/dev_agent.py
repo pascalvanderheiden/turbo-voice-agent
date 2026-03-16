@@ -268,6 +268,11 @@ class DevAgent:
         # Initialize pipeline output buffer for terminal streaming
         _pipeline_outputs[task_id] = []
 
+        # Resolve user's GitHub PAT for sandbox auth
+        from app.routes.user import get_sandbox_user_token
+
+        self._current_gh_token = await get_sandbox_user_token(user_id)
+
         if not USE_CLI_SANDBOX:
             logger.warning("CLI sandbox disabled — skipping pipeline for task %s", task_id)
             await service.set_status(task_id, "completed")
@@ -844,6 +849,11 @@ class DevAgent:
             payload["args"] = args or []
         else:
             raise ValueError("prompt or command is required")
+
+        # Inject per-user GitHub PAT if available
+        gh_token = getattr(self, "_current_gh_token", None)
+        if gh_token:
+            payload["ghToken"] = gh_token
 
         log_preview = prompt[:120] if prompt else f"{command} {args}"
         logger.info("Sandbox exec [%s]: %s", stage_label, log_preview)
