@@ -161,7 +161,11 @@ async def lifespan(app: FastAPI):
 
     todo_mcp_client = TodoMcpClient()
     await todo_mcp_client.start()
-    todo_agent = TodoAgent(todo_mcp_client, get_user_token=get_todo_user_token)
+
+    async def _todo_token_resolver(user_id: str) -> str | None:
+        return await get_todo_user_token(user_id, app_state=app.state)
+
+    todo_agent = TodoAgent(todo_mcp_client, get_user_token=_todo_token_resolver)
 
     supervisor = SupervisorAgent(
         notes_agent, brainstorm_agent, research_agent, spec_agent,

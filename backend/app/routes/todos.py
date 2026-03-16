@@ -27,11 +27,12 @@ def _get_agent() -> TodoAgent:
     return _todo_agent
 
 
-async def _check_connection(user_id: str) -> None:
+async def _check_connection(request: Request) -> None:
     """Raise 503 if the user hasn't connected Microsoft To-Do."""
     from app.routes.user import get_todo_user_token
 
-    token = await get_todo_user_token(user_id)
+    user_id = getattr(request.state, "user_id", "default-user")
+    token = await get_todo_user_token(user_id, app_state=request.app.state)
     if not token:
         raise HTTPException(
             status_code=503,
@@ -63,7 +64,7 @@ class TodoUpdate(BaseModel):
 async def list_todos(request: Request):
     """List all to-do tasks from Microsoft To-Do."""
     user_id = getattr(request.state, "user_id", "default-user")
-    await _check_connection(user_id)
+    await _check_connection(request)
     agent = _get_agent()
     result_json = await agent.handle_function_call("get_todos", "{}", user_id=user_id)
     result = json.loads(result_json)
@@ -76,7 +77,7 @@ async def list_todos(request: Request):
 async def get_todo(todo_id: str, request: Request):
     """Get a single to-do task by ID."""
     user_id = getattr(request.state, "user_id", "default-user")
-    await _check_connection(user_id)
+    await _check_connection(request)
     agent = _get_agent()
     result_json = await agent.handle_function_call(
         "get_todo", json.dumps({"todo_id": todo_id}), user_id=user_id
@@ -91,7 +92,7 @@ async def get_todo(todo_id: str, request: Request):
 async def create_todo(data: TodoCreate, request: Request):
     """Create a new to-do task."""
     user_id = getattr(request.state, "user_id", "default-user")
-    await _check_connection(user_id)
+    await _check_connection(request)
     agent = _get_agent()
     args = {"title": data.title}
     if data.notes:
@@ -109,7 +110,7 @@ async def create_todo(data: TodoCreate, request: Request):
 async def update_todo(todo_id: str, data: TodoUpdate, request: Request):
     """Update an existing to-do task."""
     user_id = getattr(request.state, "user_id", "default-user")
-    await _check_connection(user_id)
+    await _check_connection(request)
     agent = _get_agent()
     args: dict = {"todo_id": todo_id}
     if data.title is not None:
@@ -147,7 +148,7 @@ async def update_todo(todo_id: str, data: TodoUpdate, request: Request):
 async def delete_todo(todo_id: str, request: Request):
     """Delete a to-do task."""
     user_id = getattr(request.state, "user_id", "default-user")
-    await _check_connection(user_id)
+    await _check_connection(request)
     agent = _get_agent()
     result_json = await agent.handle_function_call(
         "delete_todo", json.dumps({"todo_id": todo_id}), user_id=user_id

@@ -332,14 +332,27 @@ async def get_sandbox_user_token(user_id: str) -> str | None:
     return None
 
 
-async def get_todo_user_token(user_id: str) -> str | None:
+async def get_todo_user_token(user_id: str, app_state=None) -> str | None:
     """Retrieve the stored Microsoft To-Do refresh token for a user.
 
     Called by the TodoAgent to get the user's delegated token for MCP calls.
+    Falls back to Cosmos DB if not in the in-memory cache.
     """
     conn = _connection_store.get(f"todo:{user_id}")
     if conn:
         return conn.get("refreshToken")
+
+    # Try Cosmos DB fallback
+    svc = getattr(app_state, "user_profile_service", None) if app_state else None
+    if svc:
+        profile = await svc.get_profile(user_id)
+        if profile and profile.get("todoRefreshToken"):
+            # Re-populate in-memory cache
+            _connection_store[f"todo:{user_id}"] = {
+                "refreshToken": profile["todoRefreshToken"],
+                "connectedAt": profile.get("todoConnectedAt", ""),
+            }
+            return profile["todoRefreshToken"]
     return None
 
 
