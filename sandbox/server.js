@@ -130,16 +130,27 @@ app.get("/tasks/:id/stream", (req, res) => {
   res.flushHeaders();
 
   let cursor = 0;
+  let keepAliveCounter = 0;
 
   const interval = setInterval(() => {
-    while (cursor < task.output.length) {
-      const entry = task.output[cursor++];
-      res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    if (cursor < task.output.length) {
+      while (cursor < task.output.length) {
+        const entry = task.output[cursor++];
+        res.write(`data: ${JSON.stringify(entry)}\n\n`);
 
-      if (entry.type === "exit") {
-        clearInterval(interval);
-        res.end();
-        return;
+        if (entry.type === "exit") {
+          clearInterval(interval);
+          res.end();
+          return;
+        }
+      }
+      keepAliveCounter = 0;
+    } else {
+      // Send SSE comment as keepalive every ~30s to prevent proxy/connection timeouts
+      keepAliveCounter++;
+      if (keepAliveCounter >= 300) {
+        res.write(`: keepalive\n\n`);
+        keepAliveCounter = 0;
       }
     }
   }, 100);

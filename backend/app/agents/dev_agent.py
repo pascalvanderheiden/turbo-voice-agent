@@ -378,7 +378,8 @@ class DevAgent:
             ),
             model=model,
             stage_label="apply",
-            stall_timeout=180,
+            stall_timeout=600,
+            timeout=2400,
             raise_on_error=False,
             work_dir=work_dir,
         )
@@ -920,6 +921,9 @@ class DevAgent:
                             )
 
                         if not raw_line.startswith("data: "):
+                            # Any SSE traffic (keepalive/comment) proves connection is alive
+                            if raw_line.strip():
+                                last_output_time = now
                             continue
 
                         try:
