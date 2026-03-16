@@ -74,7 +74,11 @@ async def validate_token(token: str) -> dict[str, Any]:
             token,
             rsa_key,
             algorithms=["RS256"],
-            audience=[f"api://{client_id}", client_id],
+            audience=[
+                f"api://{client_id}",
+                f"api://{client_id}/access",
+                client_id,
+            ],
             issuer=[
                 f"https://sts.windows.net/{tenant_id}/",
                 f"https://login.microsoftonline.com/{tenant_id}/v2.0",

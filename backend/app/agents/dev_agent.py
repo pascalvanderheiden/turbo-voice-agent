@@ -9,6 +9,7 @@ Supports two pipeline modes:
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -362,9 +363,11 @@ class DevAgent:
             ),
             model=model,
             stage_label="apply",
+            stall_timeout=180,
             raise_on_error=False,
             work_dir=work_dir,
         )
+        await self._checkpoint(task_id, "mockup-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
         # Stage: archive — Copilot CLI archives the completed change
@@ -458,19 +461,53 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
+        await self._checkpoint(task_id, "foundation-propose", work_dir)
+
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-apply-change skill to implement all tasks "
-                "from the foundation proposal. Work through every task until done. "
-                "Fix any build errors along the way."
-            ),
-            model=model,
-            stage_label="foundation-apply",
-            raise_on_error=False,
-            work_dir=work_dir,
-        )
+        # Try task-by-task apply: read tasks.md, apply individually with checkpoints
+        task_titles = await self._parse_openspec_tasks(work_dir)
+        if len(task_titles) > 1:
+            logger.info(
+                "Decomposed apply into %d tasks: %s",
+                len(task_titles),
+                [t[:50] for t in task_titles],
+            )
+            for t_idx, t_title in enumerate(task_titles):
+                logger.info(
+                    "Apply task %d/%d: %s", t_idx + 1, len(task_titles), t_title
+                )
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    prompt=(
+                        "Use the openspec-apply-change skill. Focus on completing "
+                        "the next incomplete task from the proposal. Do NOT skip "
+                        "ahead to other tasks. Once this task is done, stop.\n\n"
+                        f"Current task: {t_title}"
+                    ),
+                    model=model,
+                    stage_label=f"foundation-apply-{t_idx + 1}",
+                    timeout=600,
+                    stall_timeout=180,
+                    raise_on_error=False,
+                    work_dir=work_dir,
+                )
+                await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
+        else:
+            # Fallback: single apply if we couldn't parse tasks
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Use the openspec-apply-change skill to implement all tasks "
+                    "from the foundation proposal. Work through every task until done. "
+                    "Fix any build errors along the way."
+                ),
+                model=model,
+                stage_label="foundation-apply",
+                stall_timeout=180,
+                raise_on_error=False,
+                work_dir=work_dir,
+            )
+            await self._checkpoint(task_id, "foundation-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
         # ── Post-foundation hook: pick up any queued feature iterations ──
@@ -511,18 +548,45 @@ class DevAgent:
             await svc.set_iteration_stage_status(
                 task_id, iter_idx, "apply", "running"
             )
-            await self._sandbox_exec(
-                task_id=task_id,
-                prompt=(
-                    "Use the openspec-apply-change skill to implement all tasks "
-                    "from the latest proposal. Work through every task until done. "
-                    "Fix any build errors."
-                ),
-                model=model,
-                stage_label=f"feature-{iter_idx}-apply",
-                raise_on_error=False,
-                work_dir=work_dir,
-            )
+            # Try task-by-task apply for features too
+            feat_tasks = await self._parse_openspec_tasks(work_dir)
+            if len(feat_tasks) > 1:
+                for ft_idx, ft_title in enumerate(feat_tasks):
+                    await self._sandbox_exec(
+                        task_id=task_id,
+                        prompt=(
+                            "Use the openspec-apply-change skill. Focus on completing "
+                            "the next incomplete task from the latest proposal. Do NOT "
+                            "skip ahead to other tasks. Once this task is done, stop.\n\n"
+                            f"Current task: {ft_title}"
+                        ),
+                        model=model,
+                        stage_label=f"feature-{iter_idx}-apply-{ft_idx + 1}",
+                        timeout=600,
+                        stall_timeout=180,
+                        raise_on_error=False,
+                        work_dir=work_dir,
+                    )
+                    await self._checkpoint(
+                        task_id, f"feature-{iter_idx}-task-{ft_idx + 1}", work_dir
+                    )
+            else:
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    prompt=(
+                        "Use the openspec-apply-change skill to implement all tasks "
+                        "from the latest proposal. Work through every task until done. "
+                        "Fix any build errors."
+                    ),
+                    model=model,
+                    stage_label=f"feature-{iter_idx}-apply",
+                    stall_timeout=180,
+                    raise_on_error=False,
+                    work_dir=work_dir,
+                )
+                await self._checkpoint(
+                    task_id, f"feature-{iter_idx}-apply", work_dir
+                )
             await svc.set_iteration_stage_status(
                 task_id, iter_idx, "apply", "completed"
             )
@@ -757,6 +821,7 @@ class DevAgent:
         model: str = "claude-opus-4.6",
         stage_label: str = "",
         timeout: float = 1200,
+        stall_timeout: float = 180,
         raise_on_error: bool = True,
         work_dir: str = "/workspace",
     ) -> str:
@@ -765,6 +830,10 @@ class DevAgent:
         Streams real-time output into the pipeline buffer for the terminal view.
         Detects CLI questions and auto-answers them using the model.
         Returns combined stdout output.
+
+        Args:
+            stall_timeout: Seconds of silence (no stdout) before considering the
+                task stalled and killing it. Default 180s (3 minutes).
         """
         payload: dict = {"workDir": work_dir}
         if prompt:
@@ -798,6 +867,7 @@ class DevAgent:
 
         # Stream output via SSE
         start = time.monotonic()
+        last_output_time = time.monotonic()
         exit_code = -1
         output_lines: list[str] = []
         accumulated_text = ""
@@ -808,9 +878,16 @@ class DevAgent:
                     "GET", f"{SANDBOX_URL}/tasks/{sandbox_task_id}/stream"
                 ) as sse_resp:
                     async for raw_line in sse_resp.aiter_lines():
-                        if time.monotonic() - start > timeout:
+                        now = time.monotonic()
+                        if now - start > timeout:
                             raise RuntimeError(
                                 f"Sandbox task timed out: {stage_label}"
+                            )
+                        # Stall detection: no meaningful output for too long
+                        if now - last_output_time > stall_timeout:
+                            raise RuntimeError(
+                                f"Sandbox task stalled (no output for "
+                                f"{stall_timeout:.0f}s): {stage_label}"
                             )
 
                         if not raw_line.startswith("data: "):
@@ -832,6 +909,8 @@ class DevAgent:
                             data = entry.get("data", "")
                             output_lines.append(data)
                             accumulated_text += data
+                            if data.strip():
+                                last_output_time = now
 
                             # Detect questions and auto-answer
                             if _QUESTION_RE.search(accumulated_text.strip()):
@@ -846,8 +925,9 @@ class DevAgent:
                                 accumulated_text = ""
 
                         elif entry_type == "stderr":
-                            if task_id:
-                                pass  # already appended above
+                            data = entry.get("data", "")
+                            if data.strip():
+                                last_output_time = now
 
                         elif entry_type == "exit":
                             exit_code = entry.get("code", -1)
@@ -876,6 +956,78 @@ class DevAgent:
             )
 
         return combined
+
+    async def _checkpoint(
+        self,
+        task_id: str,
+        label: str,
+        work_dir: str,
+    ) -> None:
+        """Git commit all current work as a checkpoint (preserves progress)."""
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="bash",
+                args=[
+                    "-c",
+                    f"cd {work_dir} && git add -A && "
+                    f'git diff --cached --quiet || git commit -m "checkpoint: {label}"',
+                ],
+                stage_label=f"checkpoint-{label}",
+                timeout=30,
+                stall_timeout=20,
+                raise_on_error=False,
+            )
+        except Exception as e:
+            logger.debug("Checkpoint failed (non-critical): %s", e)
+
+    async def _read_sandbox_file(self, path: str) -> str | None:
+        """Read a text file from the sandbox container via HTTP."""
+        # The /files/* endpoint serves from /workspace, so strip the prefix
+        rel_path = path
+        if rel_path.startswith("/workspace/"):
+            rel_path = rel_path[len("/workspace/"):]
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{SANDBOX_URL}/files/{rel_path}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return base64.b64decode(data["data"]).decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.debug("Could not read sandbox file %s: %s", path, e)
+        return None
+
+    async def _parse_openspec_tasks(self, work_dir: str) -> list[str]:
+        """Read tasks.md from sandbox and extract individual task titles."""
+        content = await self._read_sandbox_file(f"{work_dir}/openspec/changes")
+        if not content:
+            return []
+        # Find the active change directory
+        # tasks.md lives at openspec/changes/<name>/tasks.md
+        # Try to find it via listing
+        try:
+            output = await self._sandbox_exec(
+                command="bash",
+                args=["-c", f"find {work_dir}/openspec/changes -name tasks.md 2>/dev/null | head -1"],
+                stage_label="find-tasks",
+                timeout=15,
+                stall_timeout=10,
+                raise_on_error=False,
+            )
+            tasks_path = output.strip()
+            if not tasks_path:
+                return []
+            tasks_content = await self._read_sandbox_file(tasks_path)
+            if not tasks_content:
+                return []
+            # Parse task titles from markdown: lines starting with "- [ ]" or "### "
+            tasks = re.findall(
+                r"^(?:- \[[ x]\] |### )(.+)$", tasks_content, re.MULTILINE
+            )
+            return tasks
+        except Exception as e:
+            logger.debug("Could not parse tasks: %s", e)
+            return []
 
     async def _auto_answer(
         self,

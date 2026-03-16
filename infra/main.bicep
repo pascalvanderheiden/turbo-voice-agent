@@ -31,6 +31,9 @@ param existingCertName string = ''
 @description('Principal ID of the deployer user for RBAC assignments (Cosmos + Storage data access)')
 param deployerPrincipalId string = ''
 
+@description('Deploy RBAC role assignments (requires User Access Administrator or Owner role)')
+param deployRbac bool = true
+
 // ──────────────────────────────────────────────
 // Resource Group
 // ──────────────────────────────────────────────
@@ -185,7 +188,7 @@ module frontend 'modules/container-app-frontend.bicep' = {
 // ──────────────────────────────────────────────
 // RBAC Role Assignments
 // ──────────────────────────────────────────────
-module rbac 'modules/rbac.bicep' = {
+module rbac 'modules/rbac.bicep' = if (deployRbac) {
   name: 'rbac'
   scope: rg
   params: {

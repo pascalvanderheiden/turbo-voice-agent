@@ -90,6 +90,7 @@ jobs:
           azd env set ENTRA_CLIENT_ID "${{ vars.ENTRA_CLIENT_ID }}" -e "$AZURE_ENV_NAME"
           azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}" -e "$AZURE_ENV_NAME"
           azd env set EXISTING_CERT_NAME "${{ vars.EXISTING_CERT_NAME }}" -e "$AZURE_ENV_NAME"
+          azd env set DEPLOY_RBAC "false" -e "$AZURE_ENV_NAME"
 
       - name: Provision infrastructure
         if: needs.detect-changes.outputs.infra == 'true'
