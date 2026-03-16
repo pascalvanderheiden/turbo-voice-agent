@@ -603,7 +603,7 @@ class DevAgent:
             for it in task.iterations:
                 if it.iteration_index >= known_count:
                     # This is a dynamically added feature — check for stored instruction
-                    doc = svc._store.get(task_id) if hasattr(svc, '_store') else None
+                    doc = await svc.get_raw(task_id) if hasattr(svc, 'get_raw') else None
                     propose_instr = ""
                     if doc:
                         for it_doc in doc.get("iterations", []):

@@ -169,7 +169,7 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
         )
 
     # Reset stage timestamps before re-running
-    raw_doc = service._store.get(task_id)
+    raw_doc = await service.get_raw(task_id)
     if raw_doc:
         for it in raw_doc.get("iterations", []):
             for stage in it.get("stages", []):
@@ -185,6 +185,7 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
             stage["output"] = None
             stage["error"] = None
         raw_doc["decisions"] = []
+        await service.save_raw(raw_doc)
 
     await service.set_status(task_id, "running")
     logger.info("Triggering pipeline for task %s (mode=%s, user=%s)", task_id, task.mode, user_id)

@@ -141,6 +141,25 @@ class DevService:
             logger.exception("Failed to get dev task %s", task_id)
             return None
 
+    async def get_raw(self, task_id: str) -> dict | None:
+        """Get the raw Cosmos document for a dev task (used for stage resets)."""
+        try:
+            container = await self._container()
+            return await container.read_item(item=task_id, partition_key=self._user_id)
+        except CosmosResourceNotFoundError:
+            return None
+        except Exception:
+            logger.exception("Failed to get raw dev task %s", task_id)
+            return None
+
+    async def save_raw(self, doc: dict) -> None:
+        """Upsert a raw Cosmos document (used after stage resets)."""
+        try:
+            container = await self._container()
+            await container.upsert_item(doc)
+        except Exception:
+            logger.exception("Failed to save raw dev task %s", doc.get("id"))
+
     async def delete(self, task_id: str) -> bool:
         """Delete a dev task by ID."""
         try:

@@ -112,6 +112,15 @@ class InMemoryDevService(JsonPersistenceMixin):
         doc = self._store.get(task_id)
         return self._doc_to_model(doc) if doc else None
 
+    async def get_raw(self, task_id: str) -> dict | None:
+        """Get the raw dict for a dev task (used for stage resets)."""
+        return self._store.get(task_id)
+
+    async def save_raw(self, doc: dict) -> None:
+        """Save a raw dict back (used after stage resets)."""
+        self._store[doc["id"]] = doc
+        self._save_to_disk()
+
     async def delete(self, task_id: str) -> bool:
         if task_id in self._store:
             del self._store[task_id]
