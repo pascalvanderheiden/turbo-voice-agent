@@ -38,6 +38,9 @@ param entraClientSecret string = ''
 @description('OAuth redirect URI for Microsoft To-Do callback')
 param todoOAuthRedirectUri string = ''
 
+@description('Frontend URL for OAuth redirects')
+param frontendUrl string = ''
+
 @description('Comma-separated allowed CORS origins')
 param allowedOrigins string = ''
 
@@ -105,6 +108,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ENTRA_TENANT_ID', value: entraTenantId }
             { name: 'ENTRA_CLIENT_ID', value: entraClientId }
             { name: 'TODO_OAUTH_REDIRECT_URI', value: todoOAuthRedirectUri }
+            { name: 'FRONTEND_URL', value: frontendUrl }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
           ], !empty(entraClientSecret) ? [

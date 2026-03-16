@@ -147,6 +147,7 @@ module backend 'modules/container-app-backend.bicep' = {
     entraClientId: entraClientId
     entraClientSecret: entraClientSecret
     todoOAuthRedirectUri: customDomainName != '' ? 'https://${customDomainName}/api/auth/callback/microsoft-todo' : 'https://ca-backend-${resourceToken}.${cae.outputs.defaultDomain}/api/auth/callback/microsoft-todo'
+    frontendUrl: customDomainName != '' ? 'https://${customDomainName}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
     allowedOrigins: customDomainName != '' ? 'https://${customDomainName},https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
     sandboxFqdn: 'ca-sandbox-${resourceToken}.${cae.outputs.defaultDomain}'
   }
