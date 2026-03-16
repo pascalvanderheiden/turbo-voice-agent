@@ -18,6 +18,13 @@ _sandbox_service = None
 
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 
+# Persistent premium-request tracking:
+# The sandbox reports a running count that resets on container restart.
+# We track the last value we saw and accumulate a baseline so the total
+# is never lost when the sandbox restarts or tasks are deleted.
+_premium_baseline: int = 0      # accumulated from previous sandbox lifecycles
+_last_sandbox_premium: int = 0  # last value seen from the sandbox /health
+
 
 def set_sandbox_service(service) -> None:
     global _sandbox_service
@@ -31,16 +38,29 @@ def _get_service():
 
 
 async def _probe_sandbox_health() -> tuple[bool, int, int]:
-    """Probe sandbox /health and return (reachable, activeTasks, premiumRequests)."""
+    """Probe sandbox /health and return (reachable, activeTasks, premiumRequests).
+
+    premiumRequests is a cumulative total that survives sandbox restarts:
+    if the sandbox counter drops (restart), we fold the previous value
+    into a baseline so nothing is lost.
+    """
+    global _premium_baseline, _last_sandbox_premium
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{SANDBOX_URL}/health")
             data = resp.json()
             active = data.get("activeTasks", 0)
-            premium = data.get("premiumRequests", 0)
-            return True, active, premium
+            sandbox_premium = data.get("premiumRequests", 0)
+
+            # Detect sandbox restart: its counter dropped below what we last saw
+            if sandbox_premium < _last_sandbox_premium:
+                _premium_baseline += _last_sandbox_premium
+            _last_sandbox_premium = sandbox_premium
+
+            total_premium = _premium_baseline + sandbox_premium
+            return True, active, total_premium
     except Exception:
-        return False, 0, 0
+        return False, 0, _premium_baseline + _last_sandbox_premium
 
 
 @router.get("/status")
