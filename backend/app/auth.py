@@ -69,23 +69,43 @@ async def validate_token(token: str) -> dict[str, Any]:
     if not rsa_key:
         raise ValueError("Token signing key not found in JWKS")
 
+    # Accepted audiences and issuers (v1 + v2 Entra ID token formats)
+    valid_audiences = {
+        f"api://{client_id}",
+        f"api://{client_id}/access",
+        client_id,
+    }
+    valid_issuers = {
+        f"https://sts.windows.net/{tenant_id}/",
+        f"https://login.microsoftonline.com/{tenant_id}/v2.0",
+    }
+
     try:
+        # Decode without audience/issuer checks (python-jose only accepts strings)
         claims = jwt.decode(
             token,
             rsa_key,
             algorithms=["RS256"],
-            audience=[
-                f"api://{client_id}",
-                f"api://{client_id}/access",
-                client_id,
-            ],
-            issuer=[
-                f"https://sts.windows.net/{tenant_id}/",
-                f"https://login.microsoftonline.com/{tenant_id}/v2.0",
-            ],
+            options={"verify_aud": False, "verify_iss": False},
         )
     except JWTError as e:
         raise ValueError(f"Token validation failed: {e}")
+
+    # Manual audience validation
+    token_aud = claims.get("aud", "")
+    if token_aud not in valid_audiences:
+        raise ValueError(
+            f"Invalid audience: {token_aud} "
+            f"(expected one of {valid_audiences})"
+        )
+
+    # Manual issuer validation
+    token_iss = claims.get("iss", "")
+    if token_iss not in valid_issuers:
+        raise ValueError(
+            f"Invalid issuer: {token_iss} "
+            f"(expected one of {valid_issuers})"
+        )
 
     # Validate tenant
     if claims.get("tid") != tenant_id:
