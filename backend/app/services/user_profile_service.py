@@ -99,5 +99,24 @@ class UserProfileService:
             logger.info("Updated profile photo for user %s", user_id)
             return profile
         except Exception:
-            logger.exception("Failed to update profile photo for user %s", user_id)
-            return None
+            # Profile may not exist yet — create it with the photo URL
+            try:
+                now = __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc
+                ).isoformat()
+                profile = {
+                    "id": user_id,
+                    "userId": user_id,
+                    "displayName": "",
+                    "email": "",
+                    "locale": "en",
+                    "avatarUrl": None,
+                    "profilePhotoUrl": photo_url,
+                    "lastLoginAt": now,
+                }
+                await self._container.upsert_item(profile)
+                logger.info("Created profile with photo for user %s", user_id)
+                return profile
+            except Exception:
+                logger.exception("Failed to update profile photo for user %s", user_id)
+                return None

@@ -419,8 +419,9 @@ async def get_profile_photo(request: Request):
         svc = request.app.state.user_profile_service
         if svc:
             profile = await svc.get_profile(user_id)
-            if profile and profile.get("profilePhotoUrl"):
-                photo_url = profile["profilePhotoUrl"]
+            photo_url = profile.get("profilePhotoUrl") if profile else None
+            logger.debug("Photo lookup user=%s profile=%s url=%s", user_id, bool(profile), photo_url)
+            if photo_url:
                 storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
                 if (
                     storage_account
@@ -561,7 +562,12 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...)):
             # Update profile with photo URL
             svc = request.app.state.user_profile_service
             if svc:
-                await svc.update_profile_photo_url(user_id, photo_url)
+                result = await svc.update_profile_photo_url(user_id, photo_url)
+                logger.info(
+                    "Profile photo URL saved to Cosmos: user=%s result=%s", user_id, bool(result)
+                )
+            else:
+                logger.warning("No user_profile_service — photo URL not persisted!")
 
             logger.info("Uploaded profile photo for user %s: %s", user_id, blob_name)
             return {"success": True, "photoUrl": photo_url}
