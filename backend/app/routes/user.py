@@ -63,6 +63,18 @@ async def get_todo_connection_status(request: Request):
     conn = _connection_store.get(f"todo:{user_id}")
     if conn:
         return {"connected": True, "connectedAt": conn.get("connectedAt", "")}
+
+    # Check Cosmos profile for persisted connection
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        profile = await svc.get_profile(user_id)
+        if profile and profile.get("todoRefreshToken"):
+            _connection_store[f"todo:{user_id}"] = {
+                "refreshToken": profile["todoRefreshToken"],
+                "connectedAt": profile.get("todoConnectedAt", ""),
+            }
+            return {"connected": True, "connectedAt": profile.get("todoConnectedAt", "")}
+
     return {"connected": False}
 
 
@@ -164,15 +176,23 @@ async def todo_oauth_callback(request: Request, code: str = "", error: str = "",
     refresh_token = tokens.get("refresh_token", "")
     if not refresh_token:
         logger.error("No refresh_token in token response")
-        return RedirectResponse(f"{frontend_url}/dashboard?todo_connected=error")
+        return RedirectResponse(f"{frontend_url}/settings?todo_connected=error")
 
-    # Store token (in-memory for now; Cosmos DB in production)
-    # TODO: encrypt the refresh_token before storing
+    # Store in-memory
     now = datetime.datetime.now(datetime.UTC).isoformat()
     _connection_store[f"todo:{user_id}"] = {
         "refreshToken": refresh_token,
         "connectedAt": now,
     }
+
+    # Persist to Cosmos DB
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        try:
+            await svc.update_todo_connection(user_id, refresh_token, now)
+        except Exception:
+            logger.exception("Failed to persist To-Do token to Cosmos for user %s", user_id)
+
     logger.info("Microsoft To-Do connected for user %s", user_id)
 
     return RedirectResponse(f"{frontend_url}/settings?todo_connected=success")
@@ -186,6 +206,14 @@ async def disconnect_todo(request: Request):
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
     _connection_store.pop(f"todo:{user_id}", None)
+
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        try:
+            await svc.update_todo_connection(user_id, None, None)
+        except Exception:
+            logger.exception("Failed to clear To-Do token in Cosmos for user %s", user_id)
+
     logger.info("Microsoft To-Do disconnected for user %s", user_id)
     return {"connected": False}
 

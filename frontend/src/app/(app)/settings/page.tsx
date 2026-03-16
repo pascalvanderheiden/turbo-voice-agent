@@ -50,6 +50,7 @@ export default function SettingsPage() {
     if (todoResult === "success") {
       toast.success("Microsoft To-Do connected!");
       setTodoConnected(true);
+      setTodoConnectedAt(new Date().toISOString());
       window.history.replaceState({}, "", "/settings");
     } else if (todoResult === "error") {
       toast.error("Microsoft To-Do connection failed");

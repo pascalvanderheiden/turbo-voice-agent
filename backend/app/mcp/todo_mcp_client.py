@@ -1,4 +1,4 @@
-"""Microsoft To-Do MCP client — communicates with the MCP server process."""
+"""Microsoft To-Do MCP client — calls Microsoft Graph API for task management."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import logging
 import uuid
 from typing import Any
 
+import aiohttp
+
 logger = logging.getLogger(__name__)
 
-# Seed data for local development
+# Seed data for local development (AUTH_DISABLED mode only)
 _SEED_TASKS: list[dict[str, Any]] = [
     {
         "id": "task-001",
@@ -40,19 +42,26 @@ _SEED_TASKS: list[dict[str, Any]] = [
     },
 ]
 
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
 
 class TodoMcpClient:
-    """Client that invokes tools on the Microsoft To-Do MCP server.
+    """Client that manages Microsoft To-Do tasks via Microsoft Graph API.
 
-    In production the MCP server is a sidecar process speaking JSON-RPC over stdio.
-    This implementation wraps tool calls so the TodoAgent stays decoupled from the
-    transport layer.  A ``user_token`` is passed per-request so the MCP server can
-    act on behalf of the authenticated user.
+    When a real user token (refresh token) is provided, it exchanges it for
+    an access token and calls the Graph API.  When ``user_token`` is a mock
+    value (local dev), falls back to an in-memory stub.
     """
 
     def __init__(self) -> None:
         self._healthy = True
         self._stub_tasks: dict[str, dict[str, Any]] = {t["id"]: dict(t) for t in _SEED_TASKS}
+        import os
+        self._client_id = os.environ.get("TODO_OAUTH_CLIENT_ID") or os.environ.get(
+            "ENTRA_CLIENT_ID", ""
+        )
+        self._client_secret = os.environ.get("ENTRA_CLIENT_SECRET", "")
+        self._tenant_id = os.environ.get("TODO_OAUTH_TENANT_ID", "common")
 
     # ------------------------------------------------------------------
     # Health
@@ -63,9 +72,128 @@ class TodoMcpClient:
         return self._healthy
 
     async def health_check(self) -> bool:
-        """Ping the MCP server to verify it is running."""
-        # TODO: implement real MCP server health check via JSON-RPC
         return self._healthy
+
+    # ------------------------------------------------------------------
+    # Token management
+    # ------------------------------------------------------------------
+
+    async def _get_access_token(self, refresh_token: str) -> str | None:
+        """Exchange a refresh token for a fresh access token."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"https://login.microsoftonline.com/{self._tenant_id}/oauth2/v2.0/token",
+                    data={
+                        "client_id": self._client_id,
+                        "client_secret": self._client_secret,
+                        "refresh_token": refresh_token,
+                        "grant_type": "refresh_token",
+                        "scope": "offline_access Tasks.ReadWrite",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error("Token refresh failed (%d): %s", resp.status, body)
+                        return None
+                    tokens = await resp.json()
+                    return tokens.get("access_token")
+        except Exception:
+            logger.exception("Token refresh request failed")
+            return None
+
+    async def _graph_get(self, access_token: str, path: str) -> dict[str, Any]:
+        """GET request to Microsoft Graph API."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{GRAPH_BASE}{path}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    return {"error": f"Graph API error ({resp.status}): {body}"}
+                return await resp.json()
+
+    async def _graph_post(
+        self, access_token: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST request to Microsoft Graph API."""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{GRAPH_BASE}{path}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    body_text = await resp.text()
+                    return {"error": f"Graph API error ({resp.status}): {body_text}"}
+                return await resp.json()
+
+    async def _graph_patch(
+        self, access_token: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PATCH request to Microsoft Graph API."""
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(
+                f"{GRAPH_BASE}{path}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    body_text = await resp.text()
+                    return {"error": f"Graph API error ({resp.status}): {body_text}"}
+                return await resp.json()
+
+    async def _graph_delete(self, access_token: str, path: str) -> dict[str, Any]:
+        """DELETE request to Microsoft Graph API."""
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                f"{GRAPH_BASE}{path}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 204:
+                    return {"success": True}
+                body_text = await resp.text()
+                return {"error": f"Graph API error ({resp.status}): {body_text}"}
+
+    # ------------------------------------------------------------------
+    # Graph task helpers
+    # ------------------------------------------------------------------
+
+    def _normalize_task(self, graph_task: dict[str, Any]) -> dict[str, Any]:
+        """Convert a Microsoft Graph task object to our normalized format."""
+        due = graph_task.get("dueDateTime")
+        return {
+            "id": graph_task["id"],
+            "title": graph_task.get("title", ""),
+            "isCompleted": graph_task.get("status") == "completed",
+            "dueDate": due.get("dateTime", "")[:10] if due else None,
+            "notes": (graph_task.get("body") or {}).get("content", ""),
+        }
+
+    async def _get_default_list_id(self, access_token: str) -> str | None:
+        """Get the user's default (Tasks) list ID."""
+        result = await self._graph_get(access_token, "/me/todo/lists")
+        if "error" in result:
+            logger.error("Failed to get todo lists: %s", result["error"])
+            return None
+        lists = result.get("value", [])
+        # Prefer the "defaultList" or the first list
+        for lst in lists:
+            if lst.get("isOwner") and lst.get("wellknownListName") == "defaultList":
+                return lst["id"]
+        return lists[0]["id"] if lists else None
 
     # ------------------------------------------------------------------
     # Tool invocation
@@ -77,21 +205,6 @@ class TodoMcpClient:
         arguments: dict[str, Any],
         user_token: str | None = None,
     ) -> dict[str, Any]:
-        """Invoke a tool on the Microsoft To-Do MCP server.
-
-        Parameters
-        ----------
-        tool_name:
-            MCP tool name, e.g. ``"create_task"``, ``"list_tasks"``.
-        arguments:
-            Tool arguments as a dict.
-        user_token:
-            The user's Microsoft OAuth refresh/access token for delegated access.
-
-        Returns
-        -------
-        dict with the tool result or an ``{"error": ...}`` payload.
-        """
         if not user_token:
             return {
                 "error": "Microsoft To-Do is not connected. "
@@ -100,11 +213,88 @@ class TodoMcpClient:
 
         logger.info("MCP call_tool: %s (has_token=%s)", tool_name, bool(user_token))
 
-        # TODO: Replace stub with real MCP JSON-RPC stdio transport.
-        return await self._stub_call(tool_name, arguments)
+        # Local dev mock mode
+        if user_token == "mock-token-auth-disabled":
+            return await self._stub_call(tool_name, arguments)
+
+        # Real Graph API mode
+        access_token = await self._get_access_token(user_token)
+        if not access_token:
+            return {"error": "Failed to refresh access token. Please reconnect Microsoft To-Do."}
+
+        return await self._graph_call(tool_name, arguments, access_token)
 
     # ------------------------------------------------------------------
-    # Stub implementation (to be replaced by real MCP transport)
+    # Real Graph API implementation
+    # ------------------------------------------------------------------
+
+    async def _graph_call(
+        self, tool_name: str, arguments: dict[str, Any], access_token: str
+    ) -> dict[str, Any]:
+        """Execute a tool call against the real Microsoft Graph API."""
+        list_id = await self._get_default_list_id(access_token)
+        if not list_id:
+            return {"error": "Could not find your default To-Do list."}
+
+        base_path = f"/me/todo/lists/{list_id}/tasks"
+
+        if tool_name == "list_tasks":
+            result = await self._graph_get(
+                access_token, f"{base_path}?$top=50&$orderby=createdDateTime desc"
+            )
+            if "error" in result:
+                return result
+            tasks = [self._normalize_task(t) for t in result.get("value", [])]
+            return {"tasks": tasks}
+
+        if tool_name == "create_task":
+            body: dict[str, Any] = {"title": arguments.get("title", "Untitled")}
+            if arguments.get("notes"):
+                body["body"] = {"content": arguments["notes"], "contentType": "text"}
+            if arguments.get("dueDate"):
+                body["dueDateTime"] = {
+                    "dateTime": f"{arguments['dueDate']}T00:00:00",
+                    "timeZone": "UTC",
+                }
+            result = await self._graph_post(access_token, base_path, body)
+            if "error" in result:
+                return result
+            return {"task": self._normalize_task(result)}
+
+        if tool_name == "get_task":
+            task_id = arguments.get("task_id", "")
+            result = await self._graph_get(access_token, f"{base_path}/{task_id}")
+            if "error" in result:
+                return result
+            return {"task": self._normalize_task(result)}
+
+        if tool_name == "update_task":
+            task_id = arguments.get("task_id", "")
+            body = {}
+            if "title" in arguments:
+                body["title"] = arguments["title"]
+            if "notes" in arguments:
+                body["body"] = {"content": arguments["notes"], "contentType": "text"}
+            if "dueDate" in arguments:
+                body["dueDateTime"] = {
+                    "dateTime": f"{arguments['dueDate']}T00:00:00",
+                    "timeZone": "UTC",
+                }
+            if "isCompleted" in arguments:
+                body["status"] = "completed" if arguments["isCompleted"] else "notStarted"
+            result = await self._graph_patch(access_token, f"{base_path}/{task_id}", body)
+            if "error" in result:
+                return result
+            return {"task": self._normalize_task(result)}
+
+        if tool_name == "delete_task":
+            task_id = arguments.get("task_id", "")
+            return await self._graph_delete(access_token, f"{base_path}/{task_id}")
+
+        return {"error": f"Unknown tool: {tool_name}"}
+
+    # ------------------------------------------------------------------
+    # Stub implementation (local dev with AUTH_DISABLED)
     # ------------------------------------------------------------------
 
     async def _stub_call(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -153,11 +343,9 @@ class TodoMcpClient:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the MCP server subprocess (no-op until wired)."""
-        logger.info("TodoMcpClient: start (stub — MCP server not yet connected)")
+        logger.info("TodoMcpClient: started (Graph API mode)")
         self._healthy = True
 
     async def stop(self) -> None:
-        """Stop the MCP server subprocess."""
         logger.info("TodoMcpClient: stop")
         self._healthy = False
