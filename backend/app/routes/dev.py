@@ -159,7 +159,7 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
     # Check sandbox availability before starting the pipeline
     from app.routes.sandbox import _probe_sandbox_health
 
-    reachable, _ = await _probe_sandbox_health()
+    reachable, _, _ = await _probe_sandbox_health()
     if not reachable:
         await service.set_status(task_id, "paused")
         logger.warning("Sandbox unreachable — task %s paused", task_id)

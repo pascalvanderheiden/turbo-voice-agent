@@ -30,16 +30,17 @@ def _get_service():
     return _sandbox_service
 
 
-async def _probe_sandbox_health() -> tuple[bool, int]:
-    """Probe sandbox /health and return (reachable, activeTasks)."""
+async def _probe_sandbox_health() -> tuple[bool, int, int]:
+    """Probe sandbox /health and return (reachable, activeTasks, premiumRequests)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{SANDBOX_URL}/health")
             data = resp.json()
             active = data.get("activeTasks", 0)
-            return True, active
+            premium = data.get("premiumRequests", 0)
+            return True, active, premium
     except Exception:
-        return False, 0
+        return False, 0, 0
 
 
 @router.get("/status")
@@ -49,7 +50,7 @@ async def get_sandbox_status(request: Request):
     svc = _get_service().with_user(user_id)
     state = await svc.get_state()
 
-    reachable, active_tasks = await _probe_sandbox_health()
+    reachable, active_tasks, premium_requests = await _probe_sandbox_health()
     live_status = "ready" if reachable else "stopped"
 
     # Check if user has a GitHub token stored in user connections
@@ -61,6 +62,7 @@ async def get_sandbox_status(request: Request):
         return {
             "status": live_status,
             "activeTasks": active_tasks,
+            "premiumRequests": premium_requests,
             "githubConnected": github_connected,
             "config": SandboxConfig().model_dump(),
         }
@@ -68,6 +70,7 @@ async def get_sandbox_status(request: Request):
     result = state if isinstance(state, dict) else state.model_dump()
     result["status"] = live_status
     result["activeTasks"] = active_tasks
+    result["premiumRequests"] = premium_requests
     result["githubConnected"] = github_connected
     return result
 

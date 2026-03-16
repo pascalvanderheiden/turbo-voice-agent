@@ -10,6 +10,9 @@ app.use(express.json());
 
 const tasks = new Map();
 
+// Track premium request consumption (each Copilot CLI invocation = 1 premium request)
+let premiumRequests = 0;
+
 // GitHub auth: accept GH_TOKEN or GITHUB_TOKEN (same as official Docker sandbox)
 // When GH_TOKEN env var is set, gh CLI uses it directly — no need to run `gh auth login`.
 const ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -25,6 +28,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ready",
     activeTasks,
+    premiumRequests,
     model: DEFAULT_MODEL,
     ghAuth: !!ghToken,
   });
@@ -45,6 +49,7 @@ app.post("/tasks", (req, res) => {
     // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
     spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
+    premiumRequests++;
   } else if (command) {
     spawnCmd = command;
     spawnArgs = args;

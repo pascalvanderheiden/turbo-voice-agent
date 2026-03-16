@@ -16,6 +16,7 @@ import {
   IconArchive,
   IconPhoto,
   IconChevronRight,
+  IconSparkles,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -331,6 +332,10 @@ export default function DevelopmentPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {tasks.map((task) => {
             const spec = specs.find((s) => s.id === task.specId);
+            // Each completed stage = 1 premium request (Copilot CLI invocation)
+            const premiumCount = task.iterations.length > 0
+              ? task.iterations.reduce((sum, it) => sum + it.stages.filter((s) => s.status === "completed" || s.status === "running").length, 0)
+              : task.stages.filter((s) => s.status === "completed" || s.status === "running").length;
             return (
               <div
                 key={task.id}
@@ -363,6 +368,12 @@ export default function DevelopmentPage() {
                   {task.mode === "openspec" && task.iterations.length > 1 && (
                     <span className="text-[10px] text-[var(--color-text-muted)]">
                       {task.iterations.filter(it => it.stages.every(s => s.status === "completed")).length}/{task.iterations.length} iterations
+                    </span>
+                  )}
+                  {premiumCount > 0 && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-pink-500/10 text-[var(--color-brand-pink)] border-pink-500/20">
+                      <IconSparkles size={10} stroke={1.5} />
+                      {premiumCount} premium
                     </span>
                   )}
                 </div>

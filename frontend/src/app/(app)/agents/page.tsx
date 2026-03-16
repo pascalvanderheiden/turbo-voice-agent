@@ -81,6 +81,7 @@ export default function AgentsPage() {
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sandboxStatus, setSandboxStatus] = useState<string>("loading");
   const [sandboxActiveTasks, setSandboxActiveTasks] = useState<number>(0);
+  const [sandboxPremiumRequests, setSandboxPremiumRequests] = useState<number>(0);
   const sandboxPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { t } = useI18n();
   const { addNotification } = useNotifications();
@@ -154,6 +155,7 @@ export default function AgentsPage() {
       const raw = data.status || "not_configured";
       const tasks = data.activeTasks ?? 0;
       setSandboxActiveTasks(tasks);
+      setSandboxPremiumRequests(data.premiumRequests ?? 0);
       setSandboxStatus(raw === "ready" && tasks > 0 ? "busy" : raw);
     } catch {
       setSandboxStatus("error");
@@ -266,6 +268,7 @@ export default function AgentsPage() {
           specialists={specialists}
           sandboxStatus={sandboxStatus}
           sandboxActiveTasks={sandboxActiveTasks}
+          sandboxPremiumRequests={sandboxPremiumRequests}
         />
       </div>
 
@@ -634,12 +637,14 @@ function ArchitectureDiagram({
   specialists,
   sandboxStatus,
   sandboxActiveTasks,
+  sandboxPremiumRequests,
 }: {
   gateways: AgentInfo[];
   orchestrator: AgentInfo | undefined;
   specialists: AgentInfo[];
   sandboxStatus: string;
   sandboxActiveTasks: number;
+  sandboxPremiumRequests: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -775,7 +780,7 @@ function ArchitectureDiagram({
               <AgentNode agent={s} compact />
               {s.id === "dev" && (
                 <div ref={setRef("sandbox")} className="mt-3">
-                  <SandboxNodeInline status={sandboxStatus} activeTasks={sandboxActiveTasks} />
+                  <SandboxNodeInline status={sandboxStatus} activeTasks={sandboxActiveTasks} premiumRequests={sandboxPremiumRequests} />
                 </div>
               )}
             </div>
@@ -809,7 +814,7 @@ const SANDBOX_STATUS: Record<string, { dot: string; pulse?: boolean }> = {
   loading:        { dot: "bg-[var(--color-text-muted)]" },
 };
 
-function SandboxNodeInline({ status, activeTasks }: { status: string; activeTasks: number }) {
+function SandboxNodeInline({ status, activeTasks, premiumRequests }: { status: string; activeTasks: number; premiumRequests: number }) {
   const cfg = SANDBOX_STATUS[status] || SANDBOX_STATUS.not_configured;
   const label = status === "not_configured"
     ? "Not Configured"
@@ -836,6 +841,11 @@ function SandboxNodeInline({ status, activeTasks }: { status: string; activeTask
           <IconBrandGithub size={10} stroke={1.5} />
           Copilot CLI Sandbox
         </p>
+        {premiumRequests > 0 && (
+          <p className="text-[9px] text-[var(--color-brand-pink)] font-medium">
+            {premiumRequests.toLocaleString()} premium req.
+          </p>
+        )}
       </div>
       <span className="relative flex h-2 w-2 shrink-0" title={label}>
         {cfg.pulse && (

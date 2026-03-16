@@ -61,12 +61,9 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: 8000
         transport: 'auto'
-        corsPolicy: {
-          allowedOrigins: allowedOrigins != '' ? split(allowedOrigins, ',') : ['*']
-          allowedMethods: ['*']
-          allowedHeaders: ['*']
-          allowCredentials: allowedOrigins != '' ? true : false
-        }
+        // CORS handled by FastAPI CORSMiddleware — do NOT duplicate here.
+        // Container Apps ingress + app-level CORS causes duplicate headers
+        // that browsers reject. See: https://learn.microsoft.com/azure/container-apps/cors
       }
       registries: [
         {

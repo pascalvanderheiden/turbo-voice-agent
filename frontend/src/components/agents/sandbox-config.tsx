@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { IconServer, IconRefresh, IconCheck, IconX, IconLoader2 } from "@tabler/icons-react";
+import { IconServer, IconRefresh, IconCheck, IconX, IconLoader2, IconSparkles } from "@tabler/icons-react";
 import { sandboxApi } from "@/lib/sandbox-api";
 
 const AVAILABLE_MODELS = [
@@ -27,6 +27,7 @@ interface SandboxConfigProps {
 export function SandboxConfig({ className }: SandboxConfigProps) {
   const [status, setStatus] = useState<string>("loading");
   const [activeTasks, setActiveTasks] = useState<number>(0);
+  const [premiumRequests, setPremiumRequests] = useState<number>(0);
   const [model, setModel] = useState<string>("claude-opus-4.6");
   const [githubConnected, setGithubConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -38,6 +39,7 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
       const rawStatus = data.status || "not_configured";
       const tasks = data.activeTasks ?? 0;
       setActiveTasks(tasks);
+      setPremiumRequests(data.premiumRequests ?? 0);
       setStatus(rawStatus === "ready" && tasks > 0 ? "busy" : rawStatus);
       setModel(data.config?.model || "claude-opus-4.6");
       setGithubConnected(data.githubConnected || false);
@@ -144,6 +146,17 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
               Manage
             </a>
           </div>
+        </div>
+
+        {/* Premium Requests Counter */}
+        <div className="flex items-center justify-between px-3 py-2.5 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
+          <div className="flex items-center gap-2">
+            <IconSparkles size={14} stroke={1.5} className="text-[var(--color-brand-pink)]" />
+            <span className="text-xs text-[var(--color-text-muted)]">Premium Requests</span>
+          </div>
+          <span className="text-sm font-semibold text-[var(--color-brand-pink)]">
+            {premiumRequests.toLocaleString()}
+          </span>
         </div>
 
         {/* Create / Recreate Button */}
