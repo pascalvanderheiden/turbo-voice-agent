@@ -102,11 +102,14 @@ export default function SettingsPage() {
     if (!file) return;
     setUploading(true);
     try {
+      // Show local preview immediately
+      const localPreview = URL.createObjectURL(file);
+      setPhotoUrl(localPreview);
       await userApi.uploadPhoto(file);
-      const objectUrl = await userApi.getPhotoObjectUrl();
-      if (objectUrl) setPhotoUrl(objectUrl);
       toast.success("Photo updated");
     } catch {
+      // Revert preview on failure
+      setPhotoUrl(null);
       toast.error("Photo upload failed");
     } finally {
       setUploading(false);

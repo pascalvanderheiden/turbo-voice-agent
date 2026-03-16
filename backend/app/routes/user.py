@@ -36,14 +36,18 @@ def _todo_oauth_config() -> dict:
     Uses 'common' authority by default so both personal Microsoft accounts and
     organizational accounts can consent.  Override with TODO_OAUTH_TENANT_ID if
     you need to restrict to a specific tenant.
+
+    The redirect_uri MUST point to the frontend domain (the Next.js API route
+    proxies the callback to the backend).
     """
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     return {
         "client_id": os.environ.get("TODO_OAUTH_CLIENT_ID")
         or os.environ.get("ENTRA_CLIENT_ID", ""),
         "tenant_id": os.environ.get("TODO_OAUTH_TENANT_ID", "common"),
         "redirect_uri": os.environ.get(
             "TODO_OAUTH_REDIRECT_URI",
-            "http://localhost:8000/api/auth/callback/microsoft-todo",
+            f"{frontend_url}/api/auth/callback/microsoft-todo",
         ),
         "scope": "offline_access Tasks.ReadWrite",
     }
@@ -376,7 +380,6 @@ async def get_profile_photo(request: Request):
             profile = await svc.get_profile(user_id)
             if profile and profile.get("profilePhotoUrl"):
                 photo_url = profile["profilePhotoUrl"]
-                # Extract blob path from URL and fetch via authenticated SDK
                 storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
                 if (
                     storage_account
@@ -399,12 +402,14 @@ async def get_profile_photo(request: Request):
                             download = await blob_client.download_blob()
                             photo_data = await download.readall()
                             props = await blob_client.get_blob_properties()
-                            content_type = props.content_settings.content_type or "image/jpeg"
+                            content_type = (
+                                props.content_settings.content_type or "image/jpeg"
+                            )
                         await credential.close()
                         return Response(content=photo_data, media_type=content_type)
                     except Exception:
-                        logger.warning(
-                            "Failed to fetch custom profile photo from Blob for user %s", user_id
+                        logger.exception(
+                            "Failed to fetch profile photo from Blob for user %s", user_id
                         )
 
         # Check for locally uploaded photo (local dev without Cosmos)
@@ -447,7 +452,9 @@ async def get_profile_photo(request: Request):
                     content_type = resp.headers.get("Content-Type", "image/jpeg")
                     return Response(content=photo_data, media_type=content_type)
                 else:
-                    return JSONResponse(status_code=404, content={"detail": "No photo available"})
+                    return JSONResponse(
+                        status_code=404, content={"detail": "No photo available"}
+                    )
     except Exception:
         return JSONResponse(status_code=404, content={"detail": "No photo available"})
 
