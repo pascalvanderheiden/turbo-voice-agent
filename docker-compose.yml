@@ -33,6 +33,7 @@ services:
       - COPILOT_MODEL=${COPILOT_MODEL:-claude-opus-4.6}
     volumes:
       - sandbox-workspace:/workspace
+      - ./.agents/skills:/home/agent/.copilot/skills:ro
     mem_limit: 4g
     cpus: 2.0
     healthcheck:

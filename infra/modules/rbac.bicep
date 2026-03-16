@@ -178,6 +178,20 @@ resource acrSandboxRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
 }
 
 // ──────────────────────────────────────────────
+// Storage Blob Data Reader — Sandbox (for skill sync from Blob Storage)
+// ──────────────────────────────────────────────
+var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+resource sandboxBlobReaderRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(sandboxPrincipalId)) {
+  name: guid(storageAccount.id, sandboxPrincipalId, storageBlobDataReader)
+  scope: storageAccount
+  properties: {
+    principalId: sandboxPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ──────────────────────────────────────────────
 // Deployer — Cosmos DB Data Contributor (for debugging/admin access)
 // ──────────────────────────────────────────────
 resource deployerCosmosRbac 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = if (!empty(deployerPrincipalId)) {

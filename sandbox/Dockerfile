@@ -8,7 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     chromium \
+    ca-certificates \
+    apt-transport-https \
+    lsb-release \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# Azure CLI (for downloading skills from Blob Storage in Azure)
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 # GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -40,7 +47,7 @@ RUN npx playwright install --with-deps chromium
 USER root
 
 # Configure Copilot CLI: trust /workspace, enable yolo mode
-RUN mkdir -p /home/agent/.copilot \
+RUN mkdir -p /home/agent/.copilot/skills \
     && echo '{ "trustedFolders": ["/workspace"], "yolo": true }' \
        > /home/agent/.copilot/config.json \
     && chown -R agent:agent /home/agent/.copilot

@@ -164,6 +164,7 @@ module sandbox 'modules/container-app-sandbox.bicep' = {
     location: location
     containerAppsEnvId: cae.outputs.id
     backendFqdn: backend.outputs.fqdn
+    storageAccountName: storage.outputs.name
   }
 }
 
