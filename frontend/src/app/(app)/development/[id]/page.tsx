@@ -24,7 +24,7 @@ import {
   IconTerminal2,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo } from "@/lib/api";
+import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, getAccessToken } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
@@ -159,11 +159,13 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
     }
 
     let cancelled = false;
-    const connect = () => {
+    const connect = async () => {
       if (cancelled || (esRef.current && esRef.current.readyState !== EventSource.CLOSED)) return;
 
-      // Connect directly to the dev task pipeline stream
-      const es = new EventSource(`${API_URL}/api/dev/${taskId}/stream`);
+      // Get auth token for Azure (EventSource can't send headers)
+      const token = await getAccessToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      const es = new EventSource(`${API_URL}/api/dev/${taskId}/stream${tokenParam}`);
       esRef.current = es;
       setConnected(true);
 
@@ -186,6 +188,7 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
       es.onerror = () => {
         setConnected(false);
         es.close();
+        esRef.current = null;
       };
     };
 

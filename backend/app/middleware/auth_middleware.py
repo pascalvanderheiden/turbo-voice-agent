@@ -49,14 +49,17 @@ class EntraAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/ws/"):
             return await call_next(request)
 
-        # Extract Bearer token
+        # Extract Bearer token (header or query param for SSE/EventSource)
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        elif request.query_params.get("token"):
+            token = request.query_params["token"]
+        else:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Missing or invalid Authorization header"},
             )
-        token = auth_header[7:]
 
         try:
             claims = await validate_token(token)
