@@ -43,13 +43,17 @@ function StageStatusIcon({ status }: { status: string }) {
   return <IconClock size={18} className="text-[var(--color-text-muted)]" />;
 }
 
-function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
+function IterationStages({ stages, taskFailed }: { stages: DevIteration["stages"]; taskFailed?: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  const effectiveStatus = (status: string) =>
+    taskFailed && status === "running" ? "failed" : status;
+
   const getStageColors = (status: string) => {
-    if (status === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)" };
-    if (status === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)" };
-    if (status === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)" };
+    const s = effectiveStatus(status);
+    if (s === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)" };
+    if (s === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)" };
+    if (s === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)" };
     return { stroke: "var(--color-border-dark)", fill: "var(--color-bg-tertiary)" };
   };
 
@@ -78,9 +82,9 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
                     fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5" />
                   <foreignObject x={2} y={2} width={40} height={40}>
                     <div className="w-full h-full flex items-center justify-center">
-                      {stage.status === "completed" ? <IconCircleCheck size={20} color="#4ADE80" />
-                      : stage.status === "running" ? <IconLoader2 size={20} color="#60A5FA" className="animate-spin" />
-                      : stage.status === "failed" ? <IconCircleX size={20} color="#F87171" />
+                      {effectiveStatus(stage.status) === "completed" ? <IconCircleCheck size={20} color="#4ADE80" />
+                      : effectiveStatus(stage.status) === "running" ? <IconLoader2 size={20} color="#60A5FA" className="animate-spin" />
+                      : effectiveStatus(stage.status) === "failed" ? <IconCircleX size={20} color="#F87171" />
                       : <meta.Icon size={20} style={{ color: meta.color }} />}
                     </div>
                   </foreignObject>
@@ -104,7 +108,7 @@ function IterationStages({ stages }: { stages: DevIteration["stages"] }) {
               {/* Label + status */}
               <div className="flex-1 flex items-center gap-3 pt-2.5">
                 <span className="font-medium">{meta.label}</span>
-                <StageStatusIcon status={stage.status} />
+                <StageStatusIcon status={effectiveStatus(stage.status)} />
                 {stage.startedAt && stage.completedAt && (
                   <span className="text-xs text-[var(--color-text-muted)]">
                     {Math.round((new Date(stage.completedAt).getTime() - new Date(stage.startedAt).getTime()) / 1000)}s
@@ -428,7 +432,7 @@ export default function DevTaskDetailPage() {
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-6">
           {isOpenSpec ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
         </h2>
-        <IterationStages stages={iterations[activeIteration]?.stages || task.stages} />
+        <IterationStages stages={iterations[activeIteration]?.stages || task.stages} taskFailed={task.status === "failed"} />
       </div>
 
       {/* Live Sandbox Terminal */}

@@ -298,6 +298,16 @@ class DevAgent:
                 })
             try:
                 await service.set_status(task_id, "failed")
+                # Mark any running/pending stages as failed so frontend stops spinning
+                failed_task = await service.get_by_id(task_id)
+                if failed_task:
+                    for it in failed_task.iterations:
+                        for stage in it.stages:
+                            if stage.status in ("running", "pending"):
+                                await service.set_iteration_stage_status(
+                                    task_id, it.iteration_index, stage.name,
+                                    "failed", error=str(e),
+                                )
             except Exception:
                 logger.exception(
                     "Failed to set error status on task %s after pipeline failure", task_id

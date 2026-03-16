@@ -50,7 +50,9 @@ app.post("/tasks", (req, res) => {
     // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
     spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
-    premiumRequests++;
+    // Premium request multiplier depends on model tier
+    const premiumMultiplier = /opus/i.test(model) ? 3 : 1;
+    premiumRequests += premiumMultiplier;
   } else if (command) {
     spawnCmd = command;
     spawnArgs = args;

@@ -78,6 +78,21 @@ async def get_sandbox_status(request: Request):
 
     github_connected = bool(_connection_store.get(f"sandbox:{user_id}"))
 
+    # Fallback: check Cosmos profile if in-memory cache is empty (e.g. after restart)
+    if not github_connected:
+        profile_svc = getattr(request.app.state, "user_profile_service", None)
+        if profile_svc:
+            try:
+                profile = await profile_svc.get_profile(user_id)
+                if profile and profile.get("githubSandboxToken"):
+                    _connection_store[f"sandbox:{user_id}"] = {
+                        "token": profile["githubSandboxToken"],
+                        "connectedAt": profile.get("githubSandboxConnectedAt", ""),
+                    }
+                    github_connected = True
+            except Exception:
+                pass
+
     if state is None:
         return {
             "status": live_status,
