@@ -205,6 +205,11 @@ async def get_sandbox_connection_status(request: Request):
     if svc:
         profile = await svc.get_profile(user_id)
         if profile and profile.get("githubSandboxToken"):
+            # Re-populate in-memory cache so sandbox routes can use it
+            _connection_store[f"sandbox:{user_id}"] = {
+                "token": profile["githubSandboxToken"],
+                "connectedAt": profile.get("githubSandboxConnectedAt", ""),
+            }
             return {"connected": True, "connectedAt": profile.get("githubSandboxConnectedAt", "")}
 
     return {"connected": False}
