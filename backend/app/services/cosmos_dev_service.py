@@ -76,6 +76,7 @@ class DevService:
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
         )
@@ -100,6 +101,7 @@ class DevService:
                 "iterations": iterations,
                 "stages": _default_stages(),
                 "artifacts": [],
+                "premiumRequests": 0,
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
             }
@@ -202,6 +204,17 @@ class DevService:
         except Exception:
             logger.exception("Failed to set status on dev task %s", task_id)
             return None
+
+    async def add_premium_requests(self, task_id: str, count: int) -> None:
+        """Increment the premium request counter for a task."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=task_id, partition_key=self._user_id)
+            doc["premiumRequests"] = doc.get("premiumRequests", 0) + count
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            await container.upsert_item(doc)
+        except Exception:
+            logger.exception("Failed to add premium requests on dev task %s", task_id)
 
     async def set_current_iteration(self, task_id: str, index: int) -> None:
         """Set the current iteration index."""

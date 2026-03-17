@@ -53,6 +53,23 @@ _QUESTION_PATTERNS = [
 ]
 _QUESTION_RE = re.compile("|".join(_QUESTION_PATTERNS), re.IGNORECASE)
 
+# Premium request multipliers per model tier.
+# Claude Opus models cost 3 premium requests per invocation.
+# GPT-5-class models (except mini/codex) cost 1 premium request.
+# Everything else costs 1 premium request.
+_PREMIUM_MULTIPLIERS: dict[str, int] = {
+    "opus": 3,
+}
+
+
+def _get_premium_multiplier(model: str) -> int:
+    """Return the premium request multiplier for a given model name."""
+    model_lower = model.lower()
+    for pattern, mult in _PREMIUM_MULTIPLIERS.items():
+        if pattern in model_lower:
+            return mult
+    return 1
+
 
 def get_pipeline_output(task_id: str) -> list[dict]:
     """Get the pipeline output buffer for a task (for SSE streaming)."""
@@ -864,6 +881,15 @@ class DevAgent:
         if prompt:
             payload["prompt"] = prompt
             payload["model"] = model
+            # Track premium request cost for this Copilot CLI invocation
+            premium_cost = _get_premium_multiplier(model)
+            if task_id:
+                try:
+                    svc = self._service
+                    if hasattr(svc, "add_premium_requests"):
+                        await svc.add_premium_requests(task_id, premium_cost)
+                except Exception:
+                    logger.debug("Failed to record premium for task %s", task_id)
         elif command:
             payload["command"] = command
             payload["args"] = args or []

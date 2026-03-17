@@ -65,6 +65,7 @@ class InMemoryDevService(JsonPersistenceMixin):
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
         )
@@ -86,6 +87,7 @@ class InMemoryDevService(JsonPersistenceMixin):
             "iterations": iterations,
             "stages": _default_stages(),  # legacy compat
             "artifacts": [],
+            "premiumRequests": 0,
             "createdAt": now.isoformat(),
             "updatedAt": now.isoformat(),
         }
@@ -146,6 +148,14 @@ class InMemoryDevService(JsonPersistenceMixin):
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
         return self._doc_to_model(doc)
+
+    async def add_premium_requests(self, task_id: str, count: int) -> None:
+        """Increment the premium request counter for a task."""
+        doc = self._store.get(task_id)
+        if doc:
+            doc["premiumRequests"] = doc.get("premiumRequests", 0) + count
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            self._save_to_disk()
 
     async def set_current_iteration(self, task_id: str, index: int) -> None:
         doc = self._store.get(task_id)

@@ -81,6 +81,7 @@ class DevTask(BaseModel):
     artifact_url: str | None = Field(None, alias="artifactUrl")
     sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")
     decisions: list[DevDecision] = Field(default_factory=list)
+    premium_requests: int = Field(0, alias="premiumRequests")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 

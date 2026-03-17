@@ -332,10 +332,8 @@ export default function DevelopmentPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {tasks.map((task) => {
             const spec = specs.find((s) => s.id === task.specId);
-            // Each completed stage = 1 premium request (Copilot CLI invocation)
-            const premiumCount = task.iterations.length > 0
-              ? task.iterations.reduce((sum, it) => sum + it.stages.filter((s) => s.status === "completed" || s.status === "running").length, 0)
-              : task.stages.filter((s) => s.status === "completed" || s.status === "running").length;
+            // Premium requests tracked by backend per Copilot CLI invocation
+            const premiumCount = task.premiumRequests ?? 0;
             return (
               <div
                 key={task.id}
@@ -456,11 +454,15 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
   const [mode, setMode] = useState("mockup");
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
+  const [sandboxModel, setSandboxModel] = useState("claude-opus-4.6");
   const { t } = useI18n();
 
-  // Load installed skills on mount
+  // Load installed skills and sandbox model on mount
   useEffect(() => {
     skillsApi.listInstalled().then((r) => setInstalledSkills(r.skills)).catch(() => {});
+    sandboxApi.status().then((data) => {
+      if (data?.config?.model) setSandboxModel(data.config.model);
+    }).catch(() => {});
   }, []);
 
   // Auto-suggest skills when spec changes
@@ -480,6 +482,30 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
       return next;
     });
   };
+
+  // Estimate premium requests based on mode, model, and spec features
+  const premiumMultiplier = /opus/i.test(sandboxModel) ? 3 : 1;
+  const modelLabel = sandboxModel.replace("claude-", "").replace("gpt-", "GPT ");
+  const selectedSpec = specs.find((s) => s.id === specId);
+  const featureCount = selectedSpec
+    ? (selectedSpec.content.match(/#### Feature:/g) || []).length
+    : 0;
+
+  let estimatedPremium: number;
+  let estimateBreakdown: string;
+  if (mode === "mockup") {
+    // Mockup: propose + apply + archive + screenshots = 4 CLI calls
+    estimatedPremium = 4 * premiumMultiplier;
+    estimateBreakdown = `4 stages × ${premiumMultiplier} = ${estimatedPremium}`;
+  } else {
+    // OpenSpec: foundation (propose + apply) + N features (propose + apply each) + archive + screenshots
+    const iterations = 1 + featureCount; // foundation + features
+    const cliCalls = iterations * 2 + 2; // 2 per iteration + archive + screenshots
+    estimatedPremium = cliCalls * premiumMultiplier;
+    estimateBreakdown = featureCount > 0
+      ? `(1 foundation + ${featureCount} features) × 2 stages + 2 final = ${cliCalls} calls × ${premiumMultiplier}`
+      : `1 foundation × 2 stages + 2 final = ${cliCalls} calls × ${premiumMultiplier}`;
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
@@ -557,6 +583,18 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
               </div>
             </div>
           )}
+          {/* Premium Request Estimate */}
+          <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
+            <div className="flex items-center gap-2 mb-1">
+              <IconSparkles size={14} className="text-[var(--color-brand-pink)]" />
+              <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                ~{estimatedPremium} premium requests
+              </span>
+            </div>
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              {estimateBreakdown} • Model: {modelLabel}
+            </p>
+          </div>
           <div className="flex gap-2 justify-end pt-2">
             <button onClick={onClose} className="px-3 py-1.5 rounded-[var(--radius-md)] text-sm bg-[var(--color-bg-tertiary)]">
               {t("dev.cancel")}

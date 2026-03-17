@@ -51,6 +51,7 @@ app.post("/tasks", (req, res) => {
     spawnCmd = "copilot";
     spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
     // Premium request multiplier depends on model tier
+    // Claude Opus = 3 premium, everything else = 1
     const premiumMultiplier = /opus/i.test(model) ? 3 : 1;
     premiumRequests += premiumMultiplier;
   } else if (command) {
