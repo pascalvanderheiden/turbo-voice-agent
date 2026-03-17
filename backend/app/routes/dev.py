@@ -228,7 +228,8 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
 @router.get("/{task_id}/download")
 async def download_archive(task_id: str, request: Request):
     """Download the generated code archive from the sandbox workspace."""
-    svc = _get_service()
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _get_service().with_user(user_id)
     task = await svc.get_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -268,12 +269,12 @@ async def stream_pipeline_output(task_id: str, request: Request):
     """
     from app.agents.dev_agent import get_pipeline_output
 
-    svc = _get_service()
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _get_service().with_user(user_id)
     task = await svc.get_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    user_id = getattr(request.state, "user_id", "unknown")
     logger.info(
         "[SSE-DIAG] Stream opened task=%s user=%s status=%s",
         task_id, user_id, task.status,
@@ -343,11 +344,12 @@ async def stream_pipeline_output(task_id: str, request: Request):
 
 
 @router.get("/{task_id}/stream-debug")
-async def stream_debug(task_id: str):
+async def stream_debug(task_id: str, request: Request):
     """Diagnostic endpoint: return pipeline buffer state without SSE."""
     from app.agents.dev_agent import get_pipeline_output
 
-    svc = _get_service()
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _get_service().with_user(user_id)
     task = await svc.get_by_id(task_id)
     buf = get_pipeline_output(task_id)
     return {
