@@ -67,6 +67,9 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
         // CORS handled by FastAPI CORSMiddleware — do NOT duplicate here.
         // Container Apps ingress + app-level CORS causes duplicate headers
         // that browsers reject. See: https://learn.microsoft.com/azure/container-apps/cors
+        stickySessions: {
+          affinity: 'sticky'  // Route same client to same replica — required for in-memory pipeline buffers
+        }
       }
       registries: [
         {
