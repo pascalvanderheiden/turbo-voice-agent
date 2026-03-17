@@ -28,6 +28,7 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
             title=doc["title"],
             description=doc.get("description", ""),
             images=doc.get("images", []),
+            attachments=doc.get("attachments", []),
             status=doc.get("status", "draft"),
             refinedDraft=doc.get("refinedDraft"),
             createdAt=doc["createdAt"],
@@ -43,6 +44,7 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
             "title": data.title,
             "description": data.description,
             "images": data.images,
+            "attachments": data.attachments,
             "status": "draft",
             "refinedDraft": None,
             "createdAt": now.isoformat(),
@@ -71,6 +73,8 @@ class InMemoryBrainstormService(JsonPersistenceMixin):
             doc["description"] = data.description
         if data.images is not None:
             doc["images"] = data.images
+        if data.attachments is not None:
+            doc["attachments"] = data.attachments
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
         logger.info("Updated idea %s (in-memory)", idea_id)

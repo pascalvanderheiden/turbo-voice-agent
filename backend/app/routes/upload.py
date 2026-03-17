@@ -13,7 +13,10 @@ UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
-ALLOWED_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+ALLOWED_TYPES = {
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "application/pdf",
+}
 
 
 @router.post("/upload")

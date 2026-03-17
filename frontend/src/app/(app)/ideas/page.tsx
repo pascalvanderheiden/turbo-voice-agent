@@ -270,7 +270,7 @@ export default function IdeasPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell text-[var(--color-text-muted)]">
-                    {idea.images?.length || 0}
+                    {(idea.images?.length || 0) + (idea.attachments?.length || 0)}
                   </td>
                   <td className="px-4 py-3 text-[var(--color-text-muted)] hidden lg:table-cell">
                     {new Date(idea.updatedAt).toLocaleDateString()}
@@ -314,8 +314,8 @@ export default function IdeasPage() {
         isMobile ? (
           <MobileBottomSheet open={showCreate} onClose={() => setShowCreate(false)} title={t("ideas.createDialog")}>
             <IdeaForm
-              onSubmit={async (title, description, images) => {
-                await ideasApi.create({ title, description, images });
+              onSubmit={async (title, description, images, attachments) => {
+                await ideasApi.create({ title, description, images, attachments });
                 toast.success(t("ideas.created"));
                 setShowCreate(false);
                 loadIdeas();
@@ -325,8 +325,8 @@ export default function IdeasPage() {
         ) : (
         <IdeaDialog
           onClose={() => setShowCreate(false)}
-          onSubmit={async (title, description, images) => {
-            await ideasApi.create({ title, description, images });
+          onSubmit={async (title, description, images, attachments) => {
+            await ideasApi.create({ title, description, images, attachments });
             toast.success(t("ideas.created"));
             setShowCreate(false);
             loadIdeas();
@@ -343,8 +343,9 @@ export default function IdeasPage() {
               initialTitle={editIdea.title}
               initialDescription={editIdea.description}
               initialImages={editIdea.images}
-              onSubmit={async (title, description, images) => {
-                await ideasApi.update(editIdea.id, { title, description, images });
+              initialAttachments={editIdea.attachments}
+              onSubmit={async (title, description, images, attachments) => {
+                await ideasApi.update(editIdea.id, { title, description, images, attachments });
                 toast.success(t("ideas.updated"));
                 setEditIdea(null);
                 loadIdeas();
@@ -356,9 +357,10 @@ export default function IdeasPage() {
           initialTitle={editIdea.title}
           initialDescription={editIdea.description}
           initialImages={editIdea.images}
+          initialAttachments={editIdea.attachments}
           onClose={() => setEditIdea(null)}
-          onSubmit={async (title, description, images) => {
-            await ideasApi.update(editIdea.id, { title, description, images });
+          onSubmit={async (title, description, images, attachments) => {
+            await ideasApi.update(editIdea.id, { title, description, images, attachments });
             toast.success(t("ideas.updated"));
             setEditIdea(null);
             loadIdeas();
@@ -416,23 +418,26 @@ function IdeaForm({
   initialTitle = "",
   initialDescription = "",
   initialImages = [],
+  initialAttachments = [],
   onSubmit,
 }: {
   initialTitle?: string;
   initialDescription?: string;
   initialImages?: string[];
-  onSubmit: (title: string, description: string, images: string[]) => Promise<void>;
+  initialAttachments?: string[];
+  onSubmit: (title: string, description: string, images: string[], attachments: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
   const [images, setImages] = useState<string[]>(initialImages);
+  const [attachments, setAttachments] = useState<string[]>(initialAttachments);
   const [submitting, setSubmitting] = useState(false);
   const { t } = useI18n();
 
   const handleSubmit = async () => {
     if (!title.trim()) return;
     setSubmitting(true);
-    try { await onSubmit(title, description, images); }
+    try { await onSubmit(title, description, images, attachments); }
     catch { toast.error(t("ideas.failed")); }
     finally { setSubmitting(false); }
   };
@@ -443,7 +448,13 @@ function IdeaForm({
         className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors min-h-[44px]" />
       <textarea placeholder={t("ideas.descriptionPlaceholder")} value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
         className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none" />
-      <ImageUpload images={images} onChange={setImages} />
+      <ImageUpload
+        images={images}
+        onChange={setImages}
+        attachments={attachments}
+        onAttachmentsChange={setAttachments}
+        acceptPdf
+      />
       <button onClick={handleSubmit} disabled={submitting || !title.trim()}
         className="w-full px-4 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
         {submitting ? t("ideas.saving") : t("ideas.save")}
@@ -456,18 +467,21 @@ function IdeaDialog({
   initialTitle = "",
   initialDescription = "",
   initialImages = [],
+  initialAttachments = [],
   onClose,
   onSubmit,
 }: {
   initialTitle?: string;
   initialDescription?: string;
   initialImages?: string[];
+  initialAttachments?: string[];
   onClose: () => void;
-  onSubmit: (title: string, description: string, images: string[]) => Promise<void>;
+  onSubmit: (title: string, description: string, images: string[], attachments: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
   const [images, setImages] = useState<string[]>(initialImages);
+  const [attachments, setAttachments] = useState<string[]>(initialAttachments);
   const [submitting, setSubmitting] = useState(false);
   const { t } = useI18n();
   const isEdit = !!initialTitle;
@@ -476,7 +490,7 @@ function IdeaDialog({
     if (!title.trim()) return;
     setSubmitting(true);
     try {
-      await onSubmit(title, description, images);
+      await onSubmit(title, description, images, attachments);
     } catch {
       toast.error(t("ideas.failed"));
     } finally {
@@ -503,7 +517,13 @@ function IdeaDialog({
             rows={4}
             className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none"
           />
-          <ImageUpload images={images} onChange={setImages} />
+          <ImageUpload
+            images={images}
+            onChange={setImages}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            acceptPdf
+          />
         </div>
         <div className="flex justify-end gap-2">
           <button

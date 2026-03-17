@@ -25,7 +25,7 @@ class BrainstormService:
         self._client = client
         self._user_id = user_id
 
-    def with_user(self, user_id: str) -> "BrainstormService":
+    def with_user(self, user_id: str) -> BrainstormService:
         """Return a view of this service scoped to a specific user."""
         return self.__class__(self._client, user_id)
 
@@ -39,6 +39,7 @@ class BrainstormService:
             title=doc["title"],
             description=doc.get("description", ""),
             images=doc.get("images", []),
+            attachments=doc.get("attachments", []),
             status=doc.get("status", "draft"),
             refinedDraft=doc.get("refinedDraft"),
             createdAt=doc["createdAt"],
@@ -56,6 +57,7 @@ class BrainstormService:
                 "title": data.title,
                 "description": data.description,
                 "images": data.images,
+                "attachments": data.attachments,
                 "status": "draft",
                 "refinedDraft": None,
                 "docType": "idea",
@@ -105,6 +107,8 @@ class BrainstormService:
                 doc["description"] = data.description
             if data.images is not None:
                 doc["images"] = data.images
+            if data.attachments is not None:
+                doc["attachments"] = data.attachments
             doc["updatedAt"] = datetime.now(UTC).isoformat()
             result = await container.replace_item(item=idea_id, body=doc)
             return self._doc_to_model(result)

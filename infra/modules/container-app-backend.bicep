@@ -103,6 +103,8 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'VOICE_TRANSCRIBE_DEPLOYMENT', value: 'gpt-4o-transcribe' }
             { name: 'SORA_ENDPOINT', value: aiEastUs2Endpoint }
             { name: 'SORA_DEPLOYMENT', value: 'sora-2' }
+            { name: 'MISTRAL_DOCUMENT_AI_ENDPOINT', value: aiEastUs2Endpoint }
+            { name: 'MISTRAL_DOCUMENT_AI_DEPLOYMENT', value: 'mistral-document-ai-2512' }
             { name: 'DATA_DIR', value: '/mnt/data' }
             { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
             { name: 'ENTRA_TENANT_ID', value: entraTenantId }

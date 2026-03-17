@@ -10,19 +10,24 @@ from openai import AsyncAzureOpenAI
 
 from app.models.idea import IdeaCreate, IdeaUpdate
 from app.services.memory_brainstorm_service import InMemoryBrainstormService
+from app.utils.extraction import extract_attachment_context, extract_image_context
 
 logger = logging.getLogger(__name__)
 
-REFINE_SYSTEM_PROMPT = """You are an expert product development advisor. The user will share a raw idea with optional images.
-
-Your job is to produce a structured, development-ready draft with:
-1. **Summary** — A clear one-paragraph summary of the idea
-2. **Key Features** — Bullet list of concrete features
-3. **Gaps & Questions** — Things that are unclear or need decisions
-4. **Technical Considerations** — Implementation notes, architecture hints
-5. **Next Steps** — Actionable items to move forward
-
-Be specific and constructive. Use markdown formatting."""
+REFINE_SYSTEM_PROMPT = (
+    "You are an expert product development advisor. "
+    "The user will share a raw idea with optional images, "
+    "PDF documents, and research findings.\n\n"
+    "Your job is to produce a structured, development-ready draft with:\n"
+    "1. **Summary** — A clear one-paragraph summary of the idea\n"
+    "2. **Key Features** — Bullet list of concrete features\n"
+    "3. **Gaps & Questions** — Things that are unclear or need decisions\n"
+    "4. **Technical Considerations** — Implementation notes, architecture hints\n"
+    "5. **Next Steps** — Actionable items to move forward\n\n"
+    "When PDF content or image descriptions are provided, "
+    "incorporate relevant details into your analysis.\n"
+    "Be specific and constructive. Use markdown formatting."
+)
 
 
 class BrainstormAgent:
@@ -36,6 +41,7 @@ class BrainstormAgent:
     def _get_openai(self) -> AsyncAzureOpenAI:
         if self._openai is None:
             from urllib.parse import urlparse
+
             from app.agents.config import _get_token_provider
 
             endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
@@ -168,34 +174,54 @@ class BrainstormAgent:
             logger.warning("Failed to load research for idea %s", idea_id)
             return ""
 
+    async def _extract_content(self, idea) -> tuple[str, str]:
+        """Extract text from PDF attachments and AI descriptions from images.
+
+        Returns (attachment_text, image_text) — both may be empty.
+        """
+        import asyncio
+
+        attachment_task = extract_attachment_context(getattr(idea, "attachments", None) or [])
+        image_task = extract_image_context(getattr(idea, "images", None) or [])
+        attachment_text, image_text = await asyncio.gather(attachment_task, image_task)
+        return attachment_text, image_text
+
     async def refine(self, idea) -> str:
-        """Refine an idea using GPT-5.2 chat completions with optional vision."""
+        """Refine an idea using GPT-5.2 chat completions with PDF/image extraction."""
         client = self._get_openai()
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
 
         # Gather linked research for richer context
         research_text = await self._gather_research_context(getattr(idea, "id", None))
 
+        # Extract content from PDF attachments and images in parallel
+        attachment_text, image_text = await self._extract_content(idea)
+
         # Build user message content
         idea_text = f"**Idea: {idea.title}**\n\n{idea.description}"
         if research_text:
             idea_text += research_text
+        if attachment_text:
+            idea_text += attachment_text
+        if image_text:
+            idea_text += image_text
 
         content_parts: list[dict] = [{"type": "text", "text": idea_text}]
 
-        # Add images if available (base64 vision)
-        upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
-        for img_url in (idea.images or []):
-            filename = img_url.split("/")[-1]
-            img_path = upload_dir / filename
-            if img_path.exists():
-                data = base64.b64encode(img_path.read_bytes()).decode()
-                ext = filename.rsplit(".", 1)[-1].lower()
-                mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{data}"},
-                })
+        # Still include raw images for vision if Mistral descriptions weren't available
+        if not image_text:
+            upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
+            for img_url in (idea.images or []):
+                filename = img_url.split("/")[-1]
+                img_path = upload_dir / filename
+                if img_path.exists():
+                    data = base64.b64encode(img_path.read_bytes()).decode()
+                    ext = filename.rsplit(".", 1)[-1].lower()
+                    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{data}"},
+                    })
 
         response = await client.chat.completions.create(
             model=deployment,
@@ -217,20 +243,30 @@ class BrainstormAgent:
         # Gather linked research for richer context
         research_text = await self._gather_research_context(getattr(idea, "id", None))
 
+        # Extract content from PDF attachments and images in parallel
+        attachment_text, image_text = await self._extract_content(idea)
+
         idea_text = f"**Idea: {idea.title}**\n\n{idea.description}"
         if research_text:
             idea_text += research_text
+        if attachment_text:
+            idea_text += attachment_text
+        if image_text:
+            idea_text += image_text
 
         content_parts: list[dict] = [{"type": "text", "text": idea_text}]
-        upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
-        for img_url in (idea.images or []):
-            filename = img_url.split("/")[-1]
-            img_path = upload_dir / filename
-            if img_path.exists():
-                data = base64.b64encode(img_path.read_bytes()).decode()
-                ext = filename.rsplit(".", 1)[-1].lower()
-                mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
-                content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
+
+        # Fallback: raw base64 images if Mistral descriptions weren't available
+        if not image_text:
+            upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
+            for img_url in (idea.images or []):
+                filename = img_url.split("/")[-1]
+                img_path = upload_dir / filename
+                if img_path.exists():
+                    data = base64.b64encode(img_path.read_bytes()).decode()
+                    ext = filename.rsplit(".", 1)[-1].lower()
+                    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+                    content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
 
         stream = await client.chat.completions.create(
             model=deployment,

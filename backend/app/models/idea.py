@@ -11,6 +11,7 @@ class IdeaBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="")
     images: list[str] = Field(default_factory=list)
+    attachments: list[str] = Field(default_factory=list)
 
 
 class IdeaCreate(IdeaBase):
@@ -25,6 +26,7 @@ class IdeaUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=500)
     description: str | None = None
     images: list[str] | None = None
+    attachments: list[str] | None = None
 
 
 class Idea(IdeaBase):

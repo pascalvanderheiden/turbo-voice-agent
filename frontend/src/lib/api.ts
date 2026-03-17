@@ -56,6 +56,7 @@ export interface Idea {
   title: string;
   description: string;
   images: string[];
+  attachments: string[];
   status: "draft" | "refined";
   refinedDraft: string | null;
   createdAt: string;
@@ -66,12 +67,14 @@ export interface IdeaCreate {
   title: string;
   description?: string;
   images?: string[];
+  attachments?: string[];
 }
 
 export interface IdeaUpdate {
   title?: string;
   description?: string;
   images?: string[];
+  attachments?: string[];
 }
 
 export interface Citation {
