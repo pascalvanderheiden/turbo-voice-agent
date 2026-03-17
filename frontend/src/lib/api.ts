@@ -177,6 +177,16 @@ export const researchApi = {
       body: JSON.stringify({ query, mode: "deep_research", idea_id: ideaId }),
     }),
   listByIdea: (ideaId: string) => fetchApi<Research[]>(`/api/ideas/${ideaId}/research`),
+  linkToIdea: (researchId: string, ideaId: string) =>
+    fetchApi<Research>(`/api/research/${researchId}/link`, {
+      method: "PATCH",
+      body: JSON.stringify({ ideaId }),
+    }),
+  unlinkFromIdea: (researchId: string) =>
+    fetchApi<Research>(`/api/research/${researchId}/link`, {
+      method: "PATCH",
+      body: JSON.stringify({ ideaId: null }),
+    }),
 };
 
 export interface AgentInfo {

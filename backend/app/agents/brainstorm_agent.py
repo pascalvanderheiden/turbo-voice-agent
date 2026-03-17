@@ -28,8 +28,9 @@ Be specific and constructive. Use markdown formatting."""
 class BrainstormAgent:
     """Agent that handles brainstorm operations."""
 
-    def __init__(self, brainstorm_service: InMemoryBrainstormService):
+    def __init__(self, brainstorm_service: InMemoryBrainstormService, research_service=None):
         self._service = brainstorm_service
+        self._research_service = research_service
         self._openai: AsyncAzureOpenAI | None = None
 
     def _get_openai(self) -> AsyncAzureOpenAI:
@@ -141,18 +142,46 @@ class BrainstormAgent:
             },
         ]
 
+    async def _gather_research_context(self, idea_id: str | None) -> str:
+        """Gather completed research linked to an idea for use in refinement."""
+        if not idea_id or not self._research_service:
+            return ""
+        try:
+            items = await self._research_service.list_by_idea(idea_id)
+            completed = [r for r in items if r.status == "completed" and r.result]
+            if not completed:
+                return ""
+            parts = []
+            for r in completed[:5]:
+                entry = f"### Research: {r.title}\n{r.result[:2000]}"
+                if r.citations:
+                    refs = ", ".join(c.url for c in r.citations[:5])
+                    entry += f"\nSources: {refs}"
+                parts.append(entry)
+            logger.info(
+                "Including %d research item(s) in refinement for idea %s",
+                len(completed), idea_id,
+            )
+            context = "\n\n---\nResearch findings (use these to inform your refinement):\n"
+            return context + "\n\n".join(parts)
+        except Exception:
+            logger.warning("Failed to load research for idea %s", idea_id)
+            return ""
+
     async def refine(self, idea) -> str:
         """Refine an idea using GPT-5.2 chat completions with optional vision."""
         client = self._get_openai()
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
 
+        # Gather linked research for richer context
+        research_text = await self._gather_research_context(getattr(idea, "id", None))
+
         # Build user message content
-        content_parts: list[dict] = [
-            {
-                "type": "text",
-                "text": f"**Idea: {idea.title}**\n\n{idea.description}",
-            }
-        ]
+        idea_text = f"**Idea: {idea.title}**\n\n{idea.description}"
+        if research_text:
+            idea_text += research_text
+
+        content_parts: list[dict] = [{"type": "text", "text": idea_text}]
 
         # Add images if available (base64 vision)
         upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
@@ -185,9 +214,14 @@ class BrainstormAgent:
         client = self._get_openai()
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
 
-        content_parts: list[dict] = [
-            {"type": "text", "text": f"**Idea: {idea.title}**\n\n{idea.description}"}
-        ]
+        # Gather linked research for richer context
+        research_text = await self._gather_research_context(getattr(idea, "id", None))
+
+        idea_text = f"**Idea: {idea.title}**\n\n{idea.description}"
+        if research_text:
+            idea_text += research_text
+
+        content_parts: list[dict] = [{"type": "text", "text": idea_text}]
         upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
         for img_url in (idea.images or []):
             filename = img_url.split("/")[-1]

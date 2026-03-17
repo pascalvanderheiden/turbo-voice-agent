@@ -98,3 +98,13 @@ class InMemoryResearchService(JsonPersistenceMixin):
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
         return self._doc_to_model(doc)
+
+    async def link_to_idea(self, rid: str, idea_id: str | None) -> Research | None:
+        """Link (or unlink) a research entry to an idea."""
+        doc = self._store.get(rid)
+        if not doc:
+            return None
+        doc["ideaId"] = idea_id
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
+        return self._doc_to_model(doc)

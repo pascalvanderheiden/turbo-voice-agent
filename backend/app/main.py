@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize agents
     notes_agent = NotesAgent(notes_service)
-    brainstorm_agent = BrainstormAgent(brainstorm_service)
+    brainstorm_agent = BrainstormAgent(brainstorm_service, research_service=research_service)
     research_agent = ResearchAgent(research_service)
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
     dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)

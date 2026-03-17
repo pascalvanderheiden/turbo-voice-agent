@@ -154,3 +154,18 @@ class ResearchService:
         except Exception:
             logger.exception("Failed to set failed for research %s", rid)
             return None
+
+    async def link_to_idea(self, rid: str, idea_id: str | None) -> Research | None:
+        """Link (or unlink) a research entry to an idea."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=rid, partition_key=self._user_id)
+            doc["ideaId"] = idea_id
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            updated = await container.replace_item(item=rid, body=doc)
+            return self._doc_to_model(updated)
+        except CosmosResourceNotFoundError:
+            return None
+        except Exception:
+            logger.exception("Failed to link research %s to idea %s", rid, idea_id)
+            return None

@@ -79,6 +79,18 @@ async def trigger_web_search(data: ResearchCreate, request: Request):
     return entry
 
 
+@router.patch("/{research_id}/link", response_model=Research)
+async def link_research_to_idea(research_id: str, request: Request):
+    """Link or unlink a research entry to an idea."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    body = await request.json()
+    idea_id = body.get("ideaId") or body.get("idea_id")
+    entry = await _get_service().with_user(user_id).link_to_idea(research_id, idea_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Research not found")
+    return entry
+
+
 @router.post("/deep", response_model=Research)
 async def trigger_deep_research(data: ResearchCreate, request: Request):
     """Trigger deep research (runs in background, returns immediately)."""

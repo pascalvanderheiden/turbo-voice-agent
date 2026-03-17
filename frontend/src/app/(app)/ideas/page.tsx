@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconSearch, IconFileCode } from "@tabler/icons-react";
+import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconSearch, IconFileCode, IconLink, IconX } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { ideasApi, researchApi, specsApi, type Idea, type Research, type Spec } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -541,6 +541,9 @@ function IdeaResearchSection({
   t: (k: string) => string;
 }) {
   const [searching, setSearching] = useState(false);
+  const [showLinkPicker, setShowLinkPicker] = useState(false);
+  const [allResearch, setAllResearch] = useState<Research[]>([]);
+  const [loadingLink, setLoadingLink] = useState(false);
 
   useEffect(() => {
     researchApi.listByIdea(ideaId).then(setLinkedResearch).catch(() => {});
@@ -565,31 +568,120 @@ function IdeaResearchSection({
     }
   };
 
+  const handleOpenLinkPicker = async () => {
+    try {
+      const all = await researchApi.list();
+      setAllResearch(all);
+      setShowLinkPicker(true);
+    } catch {
+      toast.error("Failed to load research");
+    }
+  };
+
+  const handleLinkResearch = async (researchId: string) => {
+    setLoadingLink(true);
+    try {
+      const updated = await researchApi.linkToIdea(researchId, ideaId);
+      setLinkedResearch((prev) => [updated, ...prev]);
+      setAllResearch((prev) => prev.filter((r) => r.id !== researchId));
+      toast.success("Research linked to idea");
+    } catch {
+      toast.error("Failed to link research");
+    } finally {
+      setLoadingLink(false);
+    }
+  };
+
+  const handleUnlinkResearch = async (researchId: string) => {
+    try {
+      await researchApi.unlinkFromIdea(researchId);
+      setLinkedResearch((prev) => prev.filter((r) => r.id !== researchId));
+      toast.success("Research unlinked");
+    } catch {
+      toast.error("Failed to unlink research");
+    }
+  };
+
+  const linkedIds = new Set(linkedResearch.map((r) => r.id));
+  const unlinkableResearch = allResearch.filter((r) => !linkedIds.has(r.id) && r.status === "completed");
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">{t("research.linkedResearch")}</h3>
-        <button
-          onClick={handleResearch}
-          disabled={searching}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-xs bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 disabled:opacity-50"
-        >
-          <IconSearch size={14} /> {searching ? t("research.searching") : t("research.researchIdea")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenLinkPicker}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-xs bg-[var(--color-brand-purple)]/10 text-[var(--color-brand-purple)] hover:bg-[var(--color-brand-purple)]/20"
+          >
+            <IconLink size={14} /> {t("research.linkExisting") || "Link Existing"}
+          </button>
+          <button
+            onClick={handleResearch}
+            disabled={searching}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-xs bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 disabled:opacity-50"
+          >
+            <IconSearch size={14} /> {searching ? t("research.searching") : t("research.researchIdea")}
+          </button>
+        </div>
       </div>
+
+      {/* Link picker dropdown */}
+      {showLinkPicker && (
+        <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+              {t("research.selectToLink") || "Select research to link"}
+            </span>
+            <button onClick={() => setShowLinkPicker(false)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">
+              <IconX size={14} />
+            </button>
+          </div>
+          {unlinkableResearch.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {t("research.noUnlinked") || "No completed research available to link"}
+            </p>
+          ) : (
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {unlinkableResearch.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => handleLinkResearch(r.id)}
+                  disabled={loadingLink}
+                  className="w-full text-left p-2 rounded-[var(--radius-sm)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-brand-purple)]/10 text-sm disabled:opacity-50"
+                >
+                  <div className="font-medium truncate">{r.title}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">
+                    {r.mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch")}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {linkedResearch.length > 0 && (
         <div className="space-y-2">
           {linkedResearch.map((r) => (
-            <a
+            <div
               key={r.id}
-              href="/research"
-              className="block p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] hover:border-[var(--color-brand-cyan)]/30 text-sm"
+              className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] hover:border-[var(--color-brand-cyan)]/30 text-sm"
             >
-              <div className="font-medium">{r.title}</div>
-              <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                {r.mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch")} · {r.status === "completed" ? t("research.statusCompleted") : r.status === "failed" ? t("research.statusFailed") : t("research.statusPending")}
-              </div>
-            </a>
+              <a href="/research" className="flex-1 min-w-0">
+                <div className="font-medium truncate">{r.title}</div>
+                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                  {r.mode === "deep_research" ? t("research.deepResearch") : t("research.webSearch")} · {r.status === "completed" ? t("research.statusCompleted") : r.status === "failed" ? t("research.statusFailed") : t("research.statusPending")}
+                </div>
+              </a>
+              <button
+                onClick={(e) => { e.preventDefault(); handleUnlinkResearch(r.id); }}
+                className="shrink-0 p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-400/10"
+                title={t("research.unlink") || "Unlink"}
+              >
+                <IconX size={14} />
+              </button>
+            </div>
           ))}
         </div>
       )}
