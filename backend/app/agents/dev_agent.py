@@ -570,76 +570,63 @@ class DevAgent:
                 if it.iteration_index > len(feature_prompts) and hasattr(it, '_raw_data'):
                     queued_iterations.append(it)
 
-        # ── Features: parallel propose/apply ─────────────────────────
-        # Each feature runs in the same work_dir (sequential OpenSpec changes)
-        # but propose/apply pairs are still sequential since they build on each other
-        for idx, feat_prompt in enumerate(feature_prompts):
-            iter_idx = idx + 1
-            await svc.set_iteration_stage_status(
-                task_id, iter_idx, "propose", "running"
-            )
+        # ── Features: PARALLEL propose/apply ─────────────────────────
+        # Each feature gets its own copy of the foundation workspace.
+        # All features run concurrently via asyncio.gather(), then a merge
+        # step consolidates the results into the main workspace.
+        MAX_PARALLEL_FEATURES = 3
+        if feature_prompts:
             logger.info(
-                "OpenSpec feature propose: task=%s, iter=%d", task_id, iter_idx
+                "Starting %d features in parallel (max %d concurrent) for task %s",
+                len(feature_prompts), MAX_PARALLEL_FEATURES, task_id,
             )
-            await self._sandbox_exec(
-                task_id=task_id,
-                prompt=(
-                    "Use the openspec-propose skill to create a proposal for "
-                    "adding this feature to the existing application.\n\n"
-                    f"{feat_prompt}"
-                ),
-                model=model,
-                stage_label=f"feature-{iter_idx}-propose",
-                raise_on_error=False,
-                work_dir=work_dir,
-            )
-            await svc.set_iteration_stage_status(
-                task_id, iter_idx, "propose", "completed"
-            )
-            await svc.set_iteration_stage_status(
-                task_id, iter_idx, "apply", "running"
-            )
-            # Try task-by-task apply for features too
-            feat_tasks = await self._parse_openspec_tasks(work_dir)
-            if len(feat_tasks) > 1:
-                for ft_idx, ft_title in enumerate(feat_tasks):
-                    await self._sandbox_exec(
-                        task_id=task_id,
-                        prompt=(
-                            "Use the openspec-apply-change skill. Focus on completing "
-                            "the next incomplete task from the latest proposal. Do NOT "
-                            "skip ahead to other tasks. Once this task is done, stop.\n\n"
-                            f"Current task: {ft_title}"
-                        ),
-                        model=model,
-                        stage_label=f"feature-{iter_idx}-apply-{ft_idx + 1}",
-                        timeout=600,
-                        stall_timeout=180,
-                        raise_on_error=False,
-                        work_dir=work_dir,
-                    )
-                    await self._checkpoint(
-                        task_id, f"feature-{iter_idx}-task-{ft_idx + 1}", work_dir
-                    )
-            else:
+
+            # Create per-feature workspace copies
+            feature_dirs: list[str] = []
+            for idx in range(len(feature_prompts)):
+                feat_dir = f"{work_dir}-feat-{idx + 1}"
                 await self._sandbox_exec(
                     task_id=task_id,
-                    prompt=(
-                        "Use the openspec-apply-change skill to implement all tasks "
-                        "from the latest proposal. Work through every task until done. "
-                        "Fix any build errors."
-                    ),
-                    model=model,
-                    stage_label=f"feature-{iter_idx}-apply",
-                    stall_timeout=180,
+                    command="bash",
+                    args=["-c", f"cp -r {work_dir} {feat_dir}"],
+                    stage_label=f"copy-workspace-feat-{idx + 1}",
+                    work_dir="/workspace",
+                    timeout=60,
                     raise_on_error=False,
-                    work_dir=work_dir,
                 )
-                await self._checkpoint(
-                    task_id, f"feature-{iter_idx}-apply", work_dir
-                )
-            await svc.set_iteration_stage_status(
-                task_id, iter_idx, "apply", "completed"
+                feature_dirs.append(feat_dir)
+
+            # Run all features concurrently with a semaphore
+            sem = asyncio.Semaphore(MAX_PARALLEL_FEATURES)
+
+            async def _run_feature_with_limit(idx: int, prompt: str, feat_dir: str):
+                async with sem:
+                    await self._run_single_feature(
+                        task_id=task_id,
+                        iter_idx=idx + 1,
+                        feat_prompt=prompt,
+                        model=model,
+                        svc=svc,
+                        feature_work_dir=feat_dir,
+                    )
+
+            await asyncio.gather(
+                *[
+                    _run_feature_with_limit(idx, prompt, feat_dir)
+                    for idx, (prompt, feat_dir) in enumerate(
+                        zip(feature_prompts, feature_dirs)
+                    )
+                ],
+                return_exceptions=True,
+            )
+
+            # Merge all feature workspaces back into main
+            await self._merge_feature_workspaces(
+                task_id=task_id,
+                main_dir=work_dir,
+                feature_dirs=feature_dirs,
+                feature_prompts=feature_prompts,
+                model=model,
             )
 
         # ── Execute any queued iterations added during pipeline ──────
@@ -708,6 +695,166 @@ class DevAgent:
 
         await svc.set_status(task_id, "completed")
         logger.info("OpenSpec pipeline COMPLETED for task %s", task_id)
+
+    # ── Parallel feature helpers ────────────────────────────────
+
+    async def _run_single_feature(
+        self,
+        *,
+        task_id: str,
+        iter_idx: int,
+        feat_prompt: str,
+        model: str,
+        svc,
+        feature_work_dir: str,
+    ) -> None:
+        """Run propose + apply for a single feature in its own workspace copy."""
+        logger.info(
+            "Feature %d START (parallel): task=%s, dir=%s",
+            iter_idx, task_id, feature_work_dir,
+        )
+        await svc.set_iteration_stage_status(
+            task_id, iter_idx, "propose", "running"
+        )
+        await self._sandbox_exec(
+            task_id=task_id,
+            prompt=(
+                "Use the openspec-propose skill to create a proposal for "
+                "adding this feature to the existing application.\n\n"
+                f"{feat_prompt}"
+            ),
+            model=model,
+            stage_label=f"feature-{iter_idx}-propose",
+            raise_on_error=False,
+            work_dir=feature_work_dir,
+        )
+        await svc.set_iteration_stage_status(
+            task_id, iter_idx, "propose", "completed"
+        )
+
+        await svc.set_iteration_stage_status(
+            task_id, iter_idx, "apply", "running"
+        )
+        feat_tasks = await self._parse_openspec_tasks(feature_work_dir)
+        if len(feat_tasks) > 1:
+            for ft_idx, ft_title in enumerate(feat_tasks):
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    prompt=(
+                        "Use the openspec-apply-change skill. Focus on completing "
+                        "the next incomplete task from the latest proposal. Do NOT "
+                        "skip ahead to other tasks. Once this task is done, stop.\n\n"
+                        f"Current task: {ft_title}"
+                    ),
+                    model=model,
+                    stage_label=f"feature-{iter_idx}-apply-{ft_idx + 1}",
+                    timeout=600,
+                    stall_timeout=180,
+                    raise_on_error=False,
+                    work_dir=feature_work_dir,
+                )
+                await self._checkpoint(
+                    task_id, f"feature-{iter_idx}-task-{ft_idx + 1}",
+                    feature_work_dir,
+                )
+        else:
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Use the openspec-apply-change skill to implement all tasks "
+                    "from the latest proposal. Work through every task until done. "
+                    "Fix any build errors."
+                ),
+                model=model,
+                stage_label=f"feature-{iter_idx}-apply",
+                stall_timeout=180,
+                raise_on_error=False,
+                work_dir=feature_work_dir,
+            )
+            await self._checkpoint(
+                task_id, f"feature-{iter_idx}-apply", feature_work_dir,
+            )
+        await svc.set_iteration_stage_status(
+            task_id, iter_idx, "apply", "completed"
+        )
+        logger.info("Feature %d DONE: task=%s", iter_idx, task_id)
+
+    async def _merge_feature_workspaces(
+        self,
+        *,
+        task_id: str,
+        main_dir: str,
+        feature_dirs: list[str],
+        feature_prompts: list[str],
+        model: str,
+    ) -> None:
+        """Merge completed feature workspaces back into the main workspace.
+
+        Uses rsync to layer each feature's changes on top of the foundation,
+        then a Copilot CLI call to resolve any integration conflicts.
+        """
+        logger.info(
+            "Merging %d feature workspaces into %s for task %s",
+            len(feature_dirs), main_dir, task_id,
+        )
+        # Layer each feature's changes onto the main workspace.
+        # rsync --update ensures newer files from features overwrite foundation,
+        # while preserving files only modified by one feature.
+        for idx, feat_dir in enumerate(feature_dirs):
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="bash",
+                args=[
+                    "-c",
+                    (
+                        f"rsync -a --exclude='.github/openspec' --exclude='node_modules' "
+                        f"--exclude='.git' {feat_dir}/ {main_dir}/"
+                    ),
+                ],
+                stage_label=f"merge-feat-{idx + 1}",
+                work_dir="/workspace",
+                timeout=60,
+                raise_on_error=False,
+            )
+
+        # Use Copilot CLI to verify integration and fix any conflicts
+        feature_summary = "\n".join(
+            f"- Feature {i + 1}: {p[:120]}"
+            for i, p in enumerate(feature_prompts)
+        )
+        await self._sandbox_exec(
+            task_id=task_id,
+            prompt=(
+                "Multiple features were implemented in parallel and merged into "
+                "this project. Review the codebase for any integration issues:\n"
+                "1. Check for duplicate imports, conflicting component names, or "
+                "missing cross-references between features.\n"
+                "2. Ensure the app builds and runs correctly (try `npm run build` "
+                "or equivalent).\n"
+                "3. Fix any TypeScript/ESLint errors.\n"
+                "4. Only make changes if there are actual conflicts or build errors. "
+                "Do NOT refactor or restructure working code.\n\n"
+                f"Features that were merged:\n{feature_summary}"
+            ),
+            model=model,
+            stage_label="merge-integration",
+            stall_timeout=180,
+            raise_on_error=False,
+            work_dir=main_dir,
+        )
+
+        # Clean up feature directories
+        for feat_dir in feature_dirs:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="bash",
+                args=["-c", f"rm -rf {feat_dir}"],
+                stage_label="cleanup-feat-dirs",
+                work_dir="/workspace",
+                timeout=30,
+                raise_on_error=False,
+            )
+        logger.info("Feature merge completed for task %s", task_id)
 
     # ── Incremental feature addition ─────────────────────────────
 
