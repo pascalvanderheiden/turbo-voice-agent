@@ -26,18 +26,6 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
     }
-    workloadProfiles: [
-      {
-        name: 'Consumption'
-        workloadProfileType: 'Consumption'
-      }
-      {
-        name: 'Dedicated-D4'
-        workloadProfileType: 'D4'
-        minimumCount: 0
-        maximumCount: 1
-      }
-    ]
   }
 }
 
