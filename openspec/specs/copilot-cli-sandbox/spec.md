@@ -23,15 +23,15 @@ The system SHALL manage sandbox container lifecycle including creation, health m
 - **THEN** it SHALL first verify sandbox health via a `/health` endpoint and recreate the sandbox if unhealthy
 
 ### Requirement: Skills synchronization
-The system SHALL synchronize the user's activated skills to the sandbox's `/.copilot/skills` directory, ensuring the Copilot CLI has access to the same skills as the user's profile.
+The system SHALL make the user's installed skills available inside the sandbox container at `/home/agent/.copilot/skills/`. Skills are synchronized at container build/restart time, not at runtime.
 
 #### Scenario: Skills copied at sandbox creation
-- **WHEN** a new sandbox container is provisioned for a user
-- **THEN** all skills from the user's activated skills list SHALL be copied to `/.copilot/skills` in the sandbox filesystem
+- **WHEN** a new sandbox container is started
+- **THEN** all skills from the host `.agents/skills/` directory (local) or Blob Storage (Azure) SHALL be available at `/home/agent/.copilot/skills/`
 
-#### Scenario: Skills match verification
-- **WHEN** a dev task is triggered
-- **THEN** the system SHALL compare the user's current skill set with the sandbox's skill set and recreate the sandbox if they differ
+#### Scenario: Skills refreshed on rebuild
+- **WHEN** the sandbox container is rebuilt or restarted after new skills are installed
+- **THEN** the updated skill set SHALL be available inside the container
 
 ### Requirement: Real-time CLI output streaming
 The system SHALL stream GitHub Copilot CLI output from the sandbox to the frontend in real-time so users can observe the CLI processing their requests.
