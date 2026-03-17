@@ -192,7 +192,9 @@ async def stream_sandbox_task(task_id: str, request: Request):
 
     async def event_stream():
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, read=None),
+            ) as client:
                 async with client.stream(
                     "GET", f"{SANDBOX_URL}/tasks/{task_id}/stream"
                 ) as resp:
@@ -203,4 +205,12 @@ async def stream_sandbox_task(task_id: str, request: Request):
             logger.error("Sandbox SSE stream error: %s", exc)
             yield 'data: {"type": "error", "message": "Sandbox connection lost"}\n\n'
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

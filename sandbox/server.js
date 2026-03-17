@@ -127,6 +127,7 @@ app.get("/tasks/:id/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
   let cursor = 0;
@@ -146,9 +147,9 @@ app.get("/tasks/:id/stream", (req, res) => {
       }
       keepAliveCounter = 0;
     } else {
-      // Send SSE comment as keepalive every ~30s to prevent proxy/connection timeouts
+      // Send SSE comment as keepalive every ~15s to prevent Azure proxy idle timeouts
       keepAliveCounter++;
-      if (keepAliveCounter >= 300) {
+      if (keepAliveCounter >= 150) {
         res.write(`: keepalive\n\n`);
         keepAliveCounter = 0;
       }

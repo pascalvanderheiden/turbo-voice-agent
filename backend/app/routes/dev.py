@@ -276,6 +276,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
     async def event_stream():
         cursor = 0
         idle_count = 0
+        keepalive_counter = 0
         while True:
             buf = get_pipeline_output(task_id)
             if cursor < len(buf):
@@ -286,8 +287,14 @@ async def stream_pipeline_output(task_id: str, request: Request):
                     if entry.get("type") == "exit":
                         return
                 idle_count = 0
+                keepalive_counter = 0
             else:
                 idle_count += 1
+                keepalive_counter += 1
+                # Send SSE keepalive every ~15s to prevent Azure proxy idle timeout
+                if keepalive_counter >= 30:
+                    yield ": keepalive\n\n"
+                    keepalive_counter = 0
                 # Check if the task is done (no buffer = never started or already cleaned up)
                 if idle_count > 10 and not buf:
                     # Check task status to decide whether to keep waiting
@@ -299,4 +306,12 @@ async def stream_pipeline_output(task_id: str, request: Request):
                     return
             await asyncio.sleep(0.5)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

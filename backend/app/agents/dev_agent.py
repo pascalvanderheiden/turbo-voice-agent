@@ -896,6 +896,9 @@ class DevAgent:
             sandbox_task_id = task_data["id"]
 
         # Stream output via SSE
+        # Use per-line async timeout to detect silently dropped connections
+        # (Azure Container Apps proxy may kill idle connections without TCP RST)
+        SSE_LINE_TIMEOUT = 60  # no line (incl. keepalive) for 60s → dead connection
         start = time.monotonic()
         last_output_time = time.monotonic()
         exit_code = -1
@@ -903,11 +906,28 @@ class DevAgent:
         accumulated_text = ""
 
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, read=None),
+            ) as client:
                 async with client.stream(
                     "GET", f"{SANDBOX_URL}/tasks/{sandbox_task_id}/stream"
                 ) as sse_resp:
-                    async for raw_line in sse_resp.aiter_lines():
+                    lines_iter = sse_resp.aiter_lines()
+                    while True:
+                        try:
+                            raw_line = await asyncio.wait_for(
+                                lines_iter.__anext__(), timeout=SSE_LINE_TIMEOUT,
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "SSE line timeout (%ds, no data) [%s], "
+                                "falling back to polling",
+                                SSE_LINE_TIMEOUT, stage_label,
+                            )
+                            raise
+
                         now = time.monotonic()
                         if now - start > timeout:
                             raise RuntimeError(
@@ -966,7 +986,7 @@ class DevAgent:
                             exit_code = entry.get("code", -1)
                             break
 
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, asyncio.TimeoutError) as e:
             logger.warning(
                 "SSE stream error [%s], falling back to polling: %s",
                 stage_label, e,

@@ -63,7 +63,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
       ingress: {
         external: true
         targetPort: 8000
-        transport: 'auto'
+        transport: 'http'  // Force HTTP/1.1 — required for reliable SSE streaming
         // CORS handled by FastAPI CORSMiddleware — do NOT duplicate here.
         // Container Apps ingress + app-level CORS causes duplicate headers
         // that browsers reject. See: https://learn.microsoft.com/azure/container-apps/cors

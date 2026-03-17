@@ -32,7 +32,7 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
       ingress: {
         external: false
         targetPort: 3000
-        transport: 'auto'
+        transport: 'http'  // Force HTTP/1.1 — required for reliable SSE streaming
       }
       // Note: registries are NOT configured here because during initial creation
       // the system identity doesn't have AcrPull yet (RBAC runs after this module).
