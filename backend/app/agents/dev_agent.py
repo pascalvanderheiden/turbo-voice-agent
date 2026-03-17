@@ -16,6 +16,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -365,6 +366,12 @@ class DevAgent:
             stage_label="init",
             work_dir=work_dir,
         )
+        # Install user-selected skills into the sandbox workspace
+        n_skills = await self._install_skills_in_sandbox(
+            task_id, task, work_dir,
+        )
+        if n_skills:
+            logger.info("Installed %d user skills for task %s", n_skills, task_id)
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
         # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
@@ -481,6 +488,12 @@ class DevAgent:
             stage_label="init",
             work_dir=work_dir,
         )
+        # Install user-selected skills into the sandbox workspace
+        n_skills = await self._install_skills_in_sandbox(
+            task_id, task, work_dir,
+        )
+        if n_skills:
+            logger.info("Installed %d user skills for task %s", n_skills, task_id)
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
@@ -1321,6 +1334,67 @@ class DevAgent:
         if not parts:
             return ""
         return "\n\nRelevant skill context (use these guidelines for code generation):\n" + "\n\n".join(parts)
+
+    async def _install_skills_in_sandbox(
+        self, task_id: str, task, work_dir: str,
+    ) -> int:
+        """Copy user-selected skills into the sandbox workspace .github/skills/.
+
+        Uses base64-encoded file content to avoid shell escaping issues.
+        Returns the number of skills installed.
+        """
+        if not self._skills_service or not task.skill_ids:
+            return 0
+
+        installed = 0
+        for skill_id in task.skill_ids:
+            skill_dir = self._skills_service.get_skill_dir(skill_id)
+            if not skill_dir:
+                logger.debug("Skill %s not found on disk, skipping", skill_id)
+                continue
+
+            # Collect all files in the skill directory
+            files: list[tuple[str, bytes]] = []
+            for p in sorted(skill_dir.rglob("*")):
+                if p.is_file() and not p.name.startswith("."):
+                    try:
+                        raw = p.read_bytes()
+                        rel = p.relative_to(skill_dir)
+                        files.append((str(rel), raw))
+                    except Exception:
+                        continue
+
+            if not files:
+                continue
+
+            # Build a shell script using base64 for safe content transfer
+            dest = f"{work_dir}/.github/skills/{skill_id}"
+            cmds = [f"mkdir -p {dest}"]
+            for rel_path, raw in files:
+                parent = str(Path(rel_path).parent)
+                if parent != ".":
+                    cmds.append(f"mkdir -p {dest}/{parent}")
+                b64 = base64.b64encode(raw).decode()
+                cmds.append(
+                    f"echo '{b64}' | base64 -d > {dest}/{rel_path}"
+                )
+
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="bash",
+                args=["-c", " && ".join(cmds)],
+                stage_label=f"install-skill-{skill_id}",
+                work_dir=work_dir,
+                timeout=30,
+                raise_on_error=False,
+            )
+            installed += 1
+            logger.info(
+                "Installed skill %s in sandbox (%d files)",
+                skill_id, len(files),
+            )
+
+        return installed
 
     # ── Spec content helpers ────────────────────────────────────────
 

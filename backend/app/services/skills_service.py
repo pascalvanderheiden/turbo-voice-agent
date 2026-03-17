@@ -66,6 +66,11 @@ class SkillsService:
                 skills.append(_parse_skill_md(entry))
         return skills
 
+    def get_skill_dir(self, name: str) -> Path | None:
+        """Return the filesystem path for a skill, or None if it doesn't exist."""
+        skill_path = self._dir / name
+        return skill_path if skill_path.exists() else None
+
     # ── Install from marketplace ──────────────────────────────────────
 
     async def install_from_marketplace(self, repo: str, skill_name: str) -> dict:

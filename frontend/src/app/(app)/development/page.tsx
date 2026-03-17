@@ -484,6 +484,8 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
   };
 
   // Estimate premium requests based on mode, model, and spec features
+  // Each pipeline = 4 Copilot CLI calls (propose, apply, archive, screenshots)
+  // Multiplier: Claude Opus = 3 premium per call, others = 1
   const premiumMultiplier = /opus/i.test(sandboxModel) ? 3 : 1;
   const modelLabel = sandboxModel.replace("claude-", "").replace("gpt-", "GPT ");
   const selectedSpec = specs.find((s) => s.id === specId);
@@ -491,20 +493,19 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
     ? (selectedSpec.content.match(/#### Feature:/g) || []).length
     : 0;
 
+  const stagesPerPipeline = 4; // propose + apply + archive + screenshots
+  const premiumPerPipeline = stagesPerPipeline * premiumMultiplier;
   let estimatedPremium: number;
   let estimateBreakdown: string;
   if (mode === "mockup") {
-    // Mockup: propose + apply + archive + screenshots = 4 CLI calls
-    estimatedPremium = 4 * premiumMultiplier;
-    estimateBreakdown = `4 stages × ${premiumMultiplier} = ${estimatedPremium}`;
+    // Mockup: 1 pipeline
+    estimatedPremium = premiumPerPipeline;
+    estimateBreakdown = `1 pipeline × ${stagesPerPipeline} stages × ${premiumMultiplier} = ${estimatedPremium}`;
   } else {
-    // OpenSpec: foundation (propose + apply) + N features (propose + apply each) + archive + screenshots
-    const iterations = 1 + featureCount; // foundation + features
-    const cliCalls = iterations * 2 + 2; // 2 per iteration + archive + screenshots
-    estimatedPremium = cliCalls * premiumMultiplier;
-    estimateBreakdown = featureCount > 0
-      ? `(1 foundation + ${featureCount} features) × 2 stages + 2 final = ${cliCalls} calls × ${premiumMultiplier}`
-      : `1 foundation × 2 stages + 2 final = ${cliCalls} calls × ${premiumMultiplier}`;
+    // OpenSpec: 1 pipeline per iteration (foundation + each feature)
+    const pipelineCount = 1 + featureCount;
+    estimatedPremium = premiumPerPipeline * pipelineCount;
+    estimateBreakdown = `${pipelineCount} pipeline${pipelineCount > 1 ? "s" : ""} × ${stagesPerPipeline} stages × ${premiumMultiplier} = ${estimatedPremium}`;
   }
 
   return (
