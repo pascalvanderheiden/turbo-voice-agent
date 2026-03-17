@@ -34,8 +34,10 @@ export function ImageUpload({
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
       const fileArray = Array.from(files);
+      const isPdf = (f: File) =>
+        f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
       const imageFiles = fileArray.filter((f) => f.type.startsWith("image/"));
-      const pdfFiles = acceptPdf ? fileArray.filter((f) => f.type === "application/pdf") : [];
+      const pdfFiles = acceptPdf ? fileArray.filter((f) => isPdf(f) && !f.type.startsWith("image/")) : [];
 
       const imagesToUpload = imageFiles.slice(0, maxImages - images.length);
       const pdfsToUpload = pdfFiles.slice(0, maxAttachments - attachments.length);
@@ -84,7 +86,7 @@ export function ImageUpload({
     }
   };
 
-  const acceptTypes = acceptPdf ? "image/*,.pdf" : "image/*";
+  const acceptTypes = acceptPdf ? "image/*,application/pdf,.pdf" : "image/*";
   const totalSlots = images.length + attachments.length;
   const maxTotal = maxImages + maxAttachments;
 
