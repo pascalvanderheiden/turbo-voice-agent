@@ -1487,7 +1487,8 @@ class DevAgent:
     ) -> int:
         """Copy user-selected skills into the sandbox workspace .github/skills/.
 
-        Uses base64-encoded file content to avoid shell escaping issues.
+        Only installs SKILL.md per skill (the file Copilot CLI reads).
+        Each skill is a separate sandbox exec call to avoid payload size limits.
         Returns the number of skills installed.
         """
         if not self._skills_service or not task.skill_ids:
@@ -1500,46 +1501,30 @@ class DevAgent:
                 logger.debug("Skill %s not found on disk, skipping", skill_id)
                 continue
 
-            # Collect all files in the skill directory
-            files: list[tuple[str, bytes]] = []
-            for p in sorted(skill_dir.rglob("*")):
-                if p.is_file() and not p.name.startswith("."):
-                    try:
-                        raw = p.read_bytes()
-                        rel = p.relative_to(skill_dir)
-                        files.append((str(rel), raw))
-                    except Exception:
-                        continue
-
-            if not files:
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                logger.debug("Skill %s has no SKILL.md, skipping", skill_id)
                 continue
 
-            # Build a shell script using base64 for safe content transfer
+            # Read and truncate to 50KB to stay within payload limits
+            raw = skill_md.read_bytes()[:50_000]
+            b64 = base64.b64encode(raw).decode()
             dest = f"{work_dir}/.github/skills/{skill_id}"
-            cmds = [f"mkdir -p {dest}"]
-            for rel_path, raw in files:
-                parent = str(Path(rel_path).parent)
-                if parent != ".":
-                    cmds.append(f"mkdir -p {dest}/{parent}")
-                b64 = base64.b64encode(raw).decode()
-                cmds.append(
-                    f"echo '{b64}' | base64 -d > {dest}/{rel_path}"
-                )
 
             await self._sandbox_exec(
                 task_id=task_id,
                 command="bash",
-                args=["-c", " && ".join(cmds)],
+                args=[
+                    "-c",
+                    f"mkdir -p {dest} && echo '{b64}' | base64 -d > {dest}/SKILL.md",
+                ],
                 stage_label=f"install-skill-{skill_id}",
                 work_dir=work_dir,
                 timeout=30,
                 raise_on_error=False,
             )
             installed += 1
-            logger.info(
-                "Installed skill %s in sandbox (%d files)",
-                skill_id, len(files),
-            )
+            logger.info("Installed skill %s SKILL.md (%d bytes)", skill_id, len(raw))
 
         return installed
 
