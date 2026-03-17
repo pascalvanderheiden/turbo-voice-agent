@@ -6,7 +6,7 @@ const fs = require("fs");
 const { execSync } = require("child_process");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 const tasks = new Map();
 

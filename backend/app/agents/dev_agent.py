@@ -1487,12 +1487,18 @@ class DevAgent:
     ) -> int:
         """Copy user-selected skills into the sandbox workspace .github/skills/.
 
-        Only installs SKILL.md per skill (the file Copilot CLI reads).
-        Each skill is a separate sandbox exec call to avoid payload size limits.
+        Sends each file individually to avoid payload size limits.
+        Skips binary files (images, compiled artifacts).
         Returns the number of skills installed.
         """
         if not self._skills_service or not task.skill_ids:
             return 0
+
+        TEXT_EXTS = {
+            ".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".yml",
+            ".toml", ".cfg", ".sh", ".css", ".html", ".jsx", ".tsx",
+        }
+        MAX_FILE_SIZE = 60_000  # 60KB per file (base64 → ~80KB in payload)
 
         installed = 0
         for skill_id in task.skill_ids:
@@ -1501,30 +1507,53 @@ class DevAgent:
                 logger.debug("Skill %s not found on disk, skipping", skill_id)
                 continue
 
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.exists():
-                logger.debug("Skill %s has no SKILL.md, skipping", skill_id)
-                continue
-
-            # Read and truncate to 50KB to stay within payload limits
-            raw = skill_md.read_bytes()[:50_000]
-            b64 = base64.b64encode(raw).decode()
+            # Create the skill directory first
             dest = f"{work_dir}/.github/skills/{skill_id}"
-
             await self._sandbox_exec(
                 task_id=task_id,
                 command="bash",
-                args=[
-                    "-c",
-                    f"mkdir -p {dest} && echo '{b64}' | base64 -d > {dest}/SKILL.md",
-                ],
+                args=["-c", f"mkdir -p {dest}"],
                 stage_label=f"install-skill-{skill_id}",
                 work_dir=work_dir,
-                timeout=30,
+                timeout=15,
                 raise_on_error=False,
             )
-            installed += 1
-            logger.info("Installed skill %s SKILL.md (%d bytes)", skill_id, len(raw))
+
+            # Send each text file individually
+            file_count = 0
+            for p in sorted(skill_dir.rglob("*")):
+                if not p.is_file() or p.name.startswith("."):
+                    continue
+                if p.suffix.lower() not in TEXT_EXTS:
+                    continue
+                raw = p.read_bytes()
+                if len(raw) > MAX_FILE_SIZE:
+                    raw = raw[:MAX_FILE_SIZE]
+                rel = str(p.relative_to(skill_dir))
+                b64 = base64.b64encode(raw).decode()
+
+                # Ensure subdirectory exists and write file
+                parent = str(Path(rel).parent)
+                mkdir_cmd = f"mkdir -p {dest}/{parent} && " if parent != "." else ""
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    command="bash",
+                    args=[
+                        "-c",
+                        f"{mkdir_cmd}echo '{b64}' | base64 -d > {dest}/{rel}",
+                    ],
+                    stage_label=f"install-skill-{skill_id}",
+                    work_dir=work_dir,
+                    timeout=15,
+                    raise_on_error=False,
+                )
+                file_count += 1
+
+            if file_count:
+                installed += 1
+                logger.info(
+                    "Installed skill %s (%d files)", skill_id, file_count,
+                )
 
         return installed
 
