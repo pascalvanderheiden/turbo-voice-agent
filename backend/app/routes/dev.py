@@ -273,24 +273,44 @@ async def stream_pipeline_output(task_id: str, request: Request):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    user_id = getattr(request.state, "user_id", "unknown")
+    logger.info(
+        "[SSE-DIAG] Stream opened task=%s user=%s status=%s",
+        task_id, user_id, task.status,
+    )
+
     async def event_stream():
         cursor = 0
         idle_count = 0
         keepalive_counter = 0
+        first_data_sent = False
         while True:
             buf = get_pipeline_output(task_id)
             if cursor < len(buf):
+                if not first_data_sent:
+                    logger.info(
+                        "[SSE-DIAG] First data for task=%s buf_size=%d",
+                        task_id, len(buf),
+                    )
+                    first_data_sent = True
                 while cursor < len(buf):
                     entry = buf[cursor]
                     cursor += 1
                     yield f"data: {__import__('json').dumps(entry)}\n\n"
                     if entry.get("type") == "exit":
+                        logger.info("[SSE-DIAG] Exit event, closing task=%s", task_id)
                         return
                 idle_count = 0
                 keepalive_counter = 0
             else:
                 idle_count += 1
                 keepalive_counter += 1
+                # Log buffer state periodically (every ~30s)
+                if idle_count % 60 == 0:
+                    logger.info(
+                        "[SSE-DIAG] Idle task=%s idle_count=%d buf_size=%d cursor=%d",
+                        task_id, idle_count, len(buf), cursor,
+                    )
                 # Send SSE keepalive every ~15s to prevent Azure proxy idle timeout
                 if keepalive_counter >= 30:
                     yield ": keepalive\n\n"
@@ -300,9 +320,14 @@ async def stream_pipeline_output(task_id: str, request: Request):
                     # Check task status to decide whether to keep waiting
                     t = await svc.get_by_id(task_id)
                     if not t or t.status not in ("running", "pending"):
+                        logger.info(
+                            "[SSE-DIAG] Task gone/done, closing stream task=%s status=%s",
+                            task_id, t.status if t else "None",
+                        )
                         return
                 # Stop after 10 min of no new output
                 if idle_count > 1200:
+                    logger.info("[SSE-DIAG] 10min idle timeout task=%s", task_id)
                     return
             await asyncio.sleep(0.5)
 
@@ -315,3 +340,25 @@ async def stream_pipeline_output(task_id: str, request: Request):
             "Connection": "keep-alive",
         },
     )
+
+
+@router.get("/{task_id}/stream-debug")
+async def stream_debug(task_id: str):
+    """Diagnostic endpoint: return pipeline buffer state without SSE."""
+    from app.agents.dev_agent import get_pipeline_output
+
+    svc = _get_service()
+    task = await svc.get_by_id(task_id)
+    buf = get_pipeline_output(task_id)
+    return {
+        "task_id": task_id,
+        "task_exists": task is not None,
+        "task_status": task.status if task else None,
+        "buffer_size": len(buf),
+        "buffer_has_data": len(buf) > 0,
+        "last_5_types": [e.get("type") for e in buf[-5:]] if buf else [],
+        "pipeline_output_keys": list(
+            __import__("app.agents.dev_agent", fromlist=["_pipeline_outputs"])
+            ._pipeline_outputs.keys()
+        ),
+    }

@@ -883,6 +883,12 @@ class DevAgent:
             _pipeline_outputs[task_id] = []
         output_buf = _pipeline_outputs.get(task_id, [])
 
+        logger.info(
+            "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s "
+            "sandbox_url=%s buf_id=%s",
+            stage_label, task_id, SANDBOX_URL, id(output_buf),
+        )
+
         # Emit stage marker
         if task_id:
             output_buf.append({
@@ -895,6 +901,12 @@ class DevAgent:
             task_data = resp.json()
             sandbox_task_id = task_data["id"]
 
+        logger.info(
+            "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, "
+            "connecting SSE to %s/tasks/%s/stream",
+            sandbox_task_id, stage_label, SANDBOX_URL, sandbox_task_id,
+        )
+
         # Stream output via SSE
         # Use per-line async timeout to detect silently dropped connections
         # (Azure Container Apps proxy may kill idle connections without TCP RST)
@@ -904,6 +916,7 @@ class DevAgent:
         exit_code = -1
         output_lines: list[str] = []
         accumulated_text = ""
+        line_count = 0
 
         try:
             async with httpx.AsyncClient(
@@ -912,6 +925,10 @@ class DevAgent:
                 async with client.stream(
                     "GET", f"{SANDBOX_URL}/tasks/{sandbox_task_id}/stream"
                 ) as sse_resp:
+                    logger.info(
+                        "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
+                        sse_resp.status_code, stage_label,
+                    )
                     lines_iter = sse_resp.aiter_lines()
                     while True:
                         try:
@@ -945,6 +962,13 @@ class DevAgent:
                             if raw_line.strip():
                                 last_output_time = now
                             continue
+
+                        line_count += 1
+                        if line_count <= 3 or line_count % 50 == 0:
+                            logger.info(
+                                "[SANDBOX-DIAG] SSE line #%d stage=%s buf=%d",
+                                line_count, stage_label, len(output_buf),
+                            )
 
                         try:
                             entry = json.loads(raw_line[6:])
@@ -988,8 +1012,9 @@ class DevAgent:
 
         except (httpx.HTTPError, asyncio.TimeoutError) as e:
             logger.warning(
-                "SSE stream error [%s], falling back to polling: %s",
-                stage_label, e,
+                "[SANDBOX-DIAG] SSE stream error [%s] type=%s, "
+                "lines_received=%d buf_size=%d, falling back to polling: %s",
+                stage_label, type(e).__name__, line_count, len(output_buf), e,
             )
             # Fallback: poll for completion
             exit_code = await self._poll_until_done(
@@ -999,8 +1024,10 @@ class DevAgent:
 
         combined = "".join(output_lines)
         logger.info(
-            "Sandbox exec [%s] exit=%d (%d chars output)",
+            "[SANDBOX-DIAG] Sandbox exec [%s] exit=%d chars=%d "
+            "lines=%d buf_size=%d elapsed=%.0fs",
             stage_label, exit_code, len(combined),
+            line_count, len(output_buf), time.monotonic() - start,
         )
 
         if exit_code != 0 and raise_on_error:

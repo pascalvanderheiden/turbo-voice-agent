@@ -165,9 +165,15 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
       // Get auth token for Azure (EventSource can't send headers)
       const token = await getAccessToken();
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
-      const es = new EventSource(`${API_URL}/api/dev/${taskId}/stream${tokenParam}`);
+      const url = `${API_URL}/api/dev/${taskId}/stream${tokenParam}`;
+      console.log(`[SSE-DIAG] Connecting to ${url.replace(/token=[^&]+/, "token=***")}`);
+      const es = new EventSource(url);
       esRef.current = es;
       setConnected(true);
+
+      es.onopen = () => {
+        console.log(`[SSE-DIAG] EventSource OPEN for task=${taskId}`);
+      };
 
       es.onmessage = (ev) => {
         try {
@@ -179,13 +185,15 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
             });
           }
           if (entry.type === "exit") {
+            console.log(`[SSE-DIAG] Exit event for task=${taskId}`);
             setConnected(false);
             es.close();
           }
         } catch { /* ignore parse errors */ }
       };
 
-      es.onerror = () => {
+      es.onerror = (err) => {
+        console.error(`[SSE-DIAG] EventSource ERROR for task=${taskId} readyState=${es.readyState}`, err);
         setConnected(false);
         es.close();
         esRef.current = null;
