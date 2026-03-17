@@ -27,6 +27,7 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
   }
   properties: {
     managedEnvironmentId: containerAppsEnvId
+    workloadProfileName: 'Dedicated-D4'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -44,8 +45,8 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'sandbox'
           image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
-            cpu: json('2.0')
-            memory: '4Gi'
+            cpu: json('4.0')
+            memory: '8Gi'
           }
           env: [
             { name: 'PORT', value: '3000' }
