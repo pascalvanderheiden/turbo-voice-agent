@@ -31,7 +31,7 @@
 
 ## 6. Testing & Verification
 
-- [ ] 6.1 Test PDF upload via API (verify file stored and URL returned)
-- [ ] 6.2 Test idea creation with PDF attachments (verify Cosmos DB persistence)
-- [ ] 6.3 Test refinement with PDF — verify extracted text appears in refined output
-- [ ] 6.4 Test refinement with images — verify Mistral description included (or fallback)
+- [x] 6.1 Test PDF upload via API (verify file stored and URL returned)
+- [x] 6.2 Test idea creation with PDF attachments (verify Cosmos DB persistence)
+- [x] 6.3 Test refinement with PDF — verify extracted text appears in refined output
+- [x] 6.4 Test refinement with images — verify Mistral description included (or fallback)
