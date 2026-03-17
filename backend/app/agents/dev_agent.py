@@ -574,7 +574,7 @@ class DevAgent:
         # Each feature gets its own copy of the foundation workspace.
         # All features run concurrently via asyncio.gather(), then a merge
         # step consolidates the results into the main workspace.
-        MAX_PARALLEL_FEATURES = 3
+        MAX_PARALLEL_FEATURES = 2  # Consumption plan: 2 CPU / 4GB max
         if feature_prompts:
             logger.info(
                 "Starting %d features in parallel (max %d concurrent) for task %s",

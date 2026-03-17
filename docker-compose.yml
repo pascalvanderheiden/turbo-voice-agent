@@ -34,8 +34,8 @@ services:
     volumes:
       - sandbox-workspace:/workspace
       - ./.agents/skills:/home/agent/.copilot/skills:ro
-    mem_limit: 8g
-    cpus: 4.0
+    mem_limit: 4g
+    cpus: 2.0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
