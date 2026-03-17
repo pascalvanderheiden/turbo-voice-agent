@@ -409,6 +409,20 @@ async def update_profile(request: Request):
     return profile
 
 
+@router.get("/me/premium-usage")
+async def get_premium_usage(request: Request):
+    """Get monthly premium request usage for the authenticated user."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=401, content={"detail": "Not authenticated"}
+        )
+    svc = request.app.state.user_profile_service
+    if svc is None:
+        return {"total": 0, "usage": {}}
+    return await svc.get_premium_usage(user_id)
+
+
 @router.get("/me/photo")
 async def get_profile_photo(request: Request):
     """Get profile photo — check Blob Storage, local uploads, then MS Graph."""

@@ -93,6 +93,26 @@ async def get_sandbox_status(request: Request):
             except Exception:
                 pass
 
+    # Restore premium baseline from Cosmos on first request after deploy
+    global _premium_baseline, _last_sandbox_premium
+    profile_svc = getattr(request.app.state, "user_profile_service", None)
+    if profile_svc and _premium_baseline == 0 and _last_sandbox_premium == 0:
+        try:
+            usage = await profile_svc.get_premium_usage(user_id)
+            stored_total = usage.get("total", 0)
+            if stored_total > premium_requests:
+                _premium_baseline = stored_total - _last_sandbox_premium
+                premium_requests = _premium_baseline + _last_sandbox_premium
+        except Exception:
+            pass
+
+    # Persist premium count to profile (async, non-blocking)
+    if profile_svc and premium_requests > 0:
+        try:
+            await profile_svc.record_premium_usage(user_id, premium_requests)
+        except Exception:
+            pass
+
     if state is None:
         return {
             "status": live_status,

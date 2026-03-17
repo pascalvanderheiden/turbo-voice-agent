@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from azure.cosmos.aio import ContainerProxy
@@ -39,6 +39,8 @@ class UserProfileService:
                 "avatarUrl": None,
                 "profilePhotoUrl": None,
                 "lastLoginAt": now,
+                "premiumUsage": {},
+                "premiumTotal": 0,
             }
             await self._container.upsert_item(profile)
             return profile
@@ -90,7 +92,9 @@ class UserProfileService:
             logger.exception("Failed to update To-Do connection for user %s", user_id)
             return None
 
-    async def update_profile_photo_url(self, user_id: str, photo_url: str) -> dict[str, Any] | None:
+    async def update_profile_photo_url(
+        self, user_id: str, photo_url: str
+    ) -> dict[str, Any] | None:
         """Update the user's profile photo URL."""
         try:
             profile = await self._container.read_item(item=user_id, partition_key=user_id)
@@ -101,9 +105,7 @@ class UserProfileService:
         except Exception:
             # Profile may not exist yet — create it with the photo URL
             try:
-                now = __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat()
+                now = datetime.now(UTC).isoformat()
                 profile = {
                     "id": user_id,
                     "userId": user_id,
@@ -113,10 +115,57 @@ class UserProfileService:
                     "avatarUrl": None,
                     "profilePhotoUrl": photo_url,
                     "lastLoginAt": now,
+                    "premiumUsage": {},
+                    "premiumTotal": 0,
                 }
                 await self._container.upsert_item(profile)
                 logger.info("Created profile with photo for user %s", user_id)
                 return profile
             except Exception:
-                logger.exception("Failed to update profile photo for user %s", user_id)
+                logger.exception(
+                    "Failed to update profile photo for user %s", user_id
+                )
                 return None
+
+    async def record_premium_usage(
+        self, user_id: str, count: int
+    ) -> dict[str, Any] | None:
+        """Persist the premium request total, updating per-month usage.
+
+        *count* is the new cumulative total.  We compute the delta from the
+        stored ``premiumTotal`` and add it to the current month bucket.
+        """
+        month_key = datetime.now(UTC).strftime("%Y-%m")
+        try:
+            profile = await self._container.read_item(
+                item=user_id, partition_key=user_id
+            )
+            usage: dict = profile.get("premiumUsage") or {}
+            prev_total: int = profile.get("premiumTotal") or 0
+            delta = max(0, count - prev_total)
+            if delta > 0:
+                usage[month_key] = usage.get(month_key, 0) + delta
+            profile["premiumUsage"] = usage
+            profile["premiumTotal"] = count
+            await self._container.upsert_item(profile)
+            return profile
+        except Exception:
+            logger.exception(
+                "Failed to record premium usage for user %s", user_id
+            )
+            return None
+
+    async def get_premium_usage(
+        self, user_id: str
+    ) -> dict[str, Any]:
+        """Return ``{total, usage: {month: count}}``."""
+        try:
+            profile = await self._container.read_item(
+                item=user_id, partition_key=user_id
+            )
+            return {
+                "total": profile.get("premiumTotal", 0),
+                "usage": profile.get("premiumUsage", {}),
+            }
+        except Exception:
+            return {"total": 0, "usage": {}}

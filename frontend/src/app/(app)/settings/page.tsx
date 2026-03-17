@@ -13,6 +13,7 @@ import {
   IconSun,
   IconMoon,
   IconUser,
+  IconSparkles,
 } from "@tabler/icons-react";
 import { useTheme } from "next-themes";
 import { useI18n, type Locale } from "@/lib/i18n";
@@ -40,6 +41,10 @@ export default function SettingsPage() {
   const [tokenInput, setTokenInput] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connectingTodo, setConnectingTodo] = useState(false);
+
+  // Premium usage
+  const [premiumTotal, setPremiumTotal] = useState(0);
+  const [premiumUsage, setPremiumUsage] = useState<Record<string, number>>({});
 
   useEffect(() => setMounted(true), []);
 
@@ -92,11 +97,22 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchPremiumUsage = useCallback(async () => {
+    try {
+      const data = await profileApi.getPremiumUsage();
+      setPremiumTotal(data.total || 0);
+      setPremiumUsage(data.usage || {});
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchProfile();
     fetchPhoto();
     fetchConnections();
-  }, [fetchProfile, fetchPhoto, fetchConnections]);
+    fetchPremiumUsage();
+  }, [fetchProfile, fetchPhoto, fetchConnections, fetchPremiumUsage]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -396,6 +412,86 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Premium Usage Section */}
+      <PremiumUsageChart total={premiumTotal} usage={premiumUsage} />
+    </div>
+  );
+}
+
+
+function PremiumUsageChart({
+  total,
+  usage,
+}: {
+  total: number;
+  usage: Record<string, number>;
+}) {
+  // Build last 6 months of data
+  const months: { key: string; label: string; count: number }[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    months.push({ key, label, count: usage[key] || 0 });
+  }
+
+  const maxCount = Math.max(...months.map((m) => m.count), 1);
+
+  return (
+    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)]/15">
+          <IconSparkles size={16} stroke={1.5} className="text-[var(--color-brand-purple)]" />
+        </div>
+        <div className="flex-1">
+          <h2 className="text-sm font-medium text-[var(--color-text-muted)]">
+            Premium Requests
+          </h2>
+        </div>
+        <div className="text-right">
+          <span className="text-2xl font-bold gradient-brand-text">
+            {total.toLocaleString()}
+          </span>
+          <span className="text-xs text-[var(--color-text-muted)] ml-1">total</span>
+        </div>
+      </div>
+
+      {/* Bar chart */}
+      <div className="flex items-end gap-2 h-40">
+        {months.map((m) => {
+          const heightPct = maxCount > 0 ? (m.count / maxCount) * 100 : 0;
+          return (
+            <div key={m.key} className="flex-1 flex flex-col items-center gap-1.5">
+              <span className="text-[10px] font-medium text-[var(--color-text-secondary)] tabular-nums">
+                {m.count > 0 ? m.count.toLocaleString() : ""}
+              </span>
+              <div className="w-full flex-1 flex items-end">
+                <div
+                  className="w-full rounded-t-[var(--radius-sm)] transition-all duration-500 ease-out"
+                  style={{
+                    height: `${Math.max(heightPct, m.count > 0 ? 4 : 0)}%`,
+                    background:
+                      m.count > 0
+                        ? "linear-gradient(to top, var(--color-brand-pink), var(--color-brand-purple))"
+                        : "var(--color-bg-tertiary)",
+                    minHeight: m.count > 0 ? "4px" : "2px",
+                  }}
+                />
+              </div>
+              <span className="text-[10px] text-[var(--color-text-muted)]">
+                {m.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-xs text-[var(--color-text-muted)] mt-4">
+        Monthly premium request usage from sandbox Copilot CLI tasks.
+        Opus models count as 3× per request.
+      </p>
     </div>
   );
 }

@@ -459,6 +459,8 @@ export const profileApi = {
     fetchApi<UserProfile>("/api/me", { method: "PATCH", body: JSON.stringify({ locale }) }),
   updateProfile: (data: Record<string, unknown>) =>
     fetchApi<UserProfile>("/api/me", { method: "PATCH", body: JSON.stringify(data) }),
+  getPremiumUsage: () =>
+    fetchApi<{ total: number; usage: Record<string, number> }>("/api/me/premium-usage"),
 };
 
 export const userApi = {
