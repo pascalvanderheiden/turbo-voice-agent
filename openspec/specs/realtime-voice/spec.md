@@ -22,22 +22,26 @@ The backend SHALL accept WebSocket connections at `/ws/voice` and proxy audio be
 - **AND** reconnect to `/ws/voice` with the new token
 
 ### Requirement: Voice Live Function Calling Bridge
-The voice session SHALL expose all supervisor tools including spec operations. The system instructions SHALL mention spec creation, viewing, and idea-to-spec conversion as available capabilities.
+The voice session SHALL expose all supervisor tools including spec operations and the new `add_feature_to_spec` operation. The system instructions SHALL mention adding features to existing specs as an available capability.
 
-#### Scenario: Spec via voice
-- **WHEN** a user says "create a spec from my last idea"
-- **THEN** the voice agent triggers the generate_spec function through the supervisor
+#### Scenario: Add feature to spec via voice
+- **WHEN** a user says "add a feature to my spec" or "add dark mode to my app spec"
+- **THEN** the voice agent SHALL resolve the target spec (via `get_specs` or conversation context)
+- **AND** call `add_feature_to_spec(spec_id, description)` through the supervisor
+- **AND** inform the user that the feature is being enhanced and added
 
-#### Scenario: List specs via voice
-- **WHEN** a user asks "what specs do I have?"
-- **THEN** the voice agent triggers get_specs and reads back the list
+#### Scenario: Voice agent confirms feature addition
+- **WHEN** the `add_feature_to_spec` background task completes
+- **THEN** the voice agent SHALL notify the user that the feature was added
+- **AND** if a dev pipeline was triggered, inform the user that development has started
 
 ### Requirement: Voice Session Configuration
-The voice greeting and system instructions SHALL mention all available capabilities including notes, ideas, research, and specs.
+The voice greeting and system instructions SHALL mention all available capabilities including adding features to existing specs.
 
-#### Scenario: Updated greeting
+#### Scenario: Updated instructions include feature addition
 - **WHEN** a voice session starts
-- **THEN** the greeting mentions the ability to manage notes, ideas, research, and development specs
+- **THEN** the system instructions SHALL include guidance that the user can add features to existing specs by describing the feature
+- **AND** the instructions SHALL mention that added features are automatically enhanced with AI and can trigger development if a dev task exists
 
 ### Requirement: Client Audio Protocol
 Clients (web and iOS) SHALL implement a consistent audio protocol for communicating with the voice WebSocket.
