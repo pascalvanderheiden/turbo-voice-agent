@@ -587,8 +587,8 @@ class DevAgent:
                 feat_dir = f"{work_dir}-feat-{idx + 1}"
                 await self._sandbox_exec(
                     task_id=task_id,
-                    command="bash",
-                    args=["-c", f"cp -r {work_dir} {feat_dir}"],
+                    command=f"cp -r {work_dir} {feat_dir}",
+                    args=[],
                     stage_label=f"copy-workspace-feat-{idx + 1}",
                     work_dir="/workspace",
                     timeout=60,
@@ -803,14 +803,11 @@ class DevAgent:
         for idx, feat_dir in enumerate(feature_dirs):
             await self._sandbox_exec(
                 task_id=task_id,
-                command="bash",
-                args=[
-                    "-c",
-                    (
-                        f"rsync -a --exclude='.github/openspec' --exclude='node_modules' "
-                        f"--exclude='.git' {feat_dir}/ {main_dir}/"
-                    ),
-                ],
+                command=(
+                    f"rsync -a --exclude='.github/openspec' --exclude='node_modules' "
+                    f"--exclude='.git' {feat_dir}/ {main_dir}/"
+                ),
+                args=[],
                 stage_label=f"merge-feat-{idx + 1}",
                 work_dir="/workspace",
                 timeout=60,
@@ -847,8 +844,8 @@ class DevAgent:
         for feat_dir in feature_dirs:
             await self._sandbox_exec(
                 task_id=task_id,
-                command="bash",
-                args=["-c", f"rm -rf {feat_dir}"],
+                command=f"rm -rf {feat_dir}",
+                args=[],
                 stage_label="cleanup-feat-dirs",
                 work_dir="/workspace",
                 timeout=30,
@@ -1233,12 +1230,11 @@ class DevAgent:
         try:
             await self._sandbox_exec(
                 task_id=task_id,
-                command="bash",
-                args=[
-                    "-c",
+                command=(
                     f"cd {work_dir} && git add -A && "
-                    f'git diff --cached --quiet || git commit -m "checkpoint: {label}"',
-                ],
+                    f'git diff --cached --quiet || git commit -m "checkpoint: {label}"'
+                ),
+                args=[],
                 stage_label=f"checkpoint-{label}",
                 timeout=30,
                 stall_timeout=20,
@@ -1273,8 +1269,8 @@ class DevAgent:
         # Try to find it via listing
         try:
             output = await self._sandbox_exec(
-                command="bash",
-                args=["-c", f"find {work_dir}/openspec/changes -name tasks.md 2>/dev/null | head -1"],
+                command=f"find {work_dir}/openspec/changes -name tasks.md 2>/dev/null | head -1",
+                args=[],
                 stage_label="find-tasks",
                 timeout=15,
                 stall_timeout=10,
@@ -1525,16 +1521,18 @@ class DevAgent:
                 continue
 
             # Create the full directory tree in one call
+            # Note: command is passed directly to shell (sandbox uses shell:true
+            # for non-prompt commands), so no "bash -c" wrapper needed.
             dest = f"{work_dir}/.github/skills/{skill_id}"
-            subdirs = {str(Path(rel).parent) for rel, _ in files}
-            subdirs.discard(".")
-            dirs_cmd = f"mkdir -p {dest}"
-            for sd in sorted(subdirs):
-                dirs_cmd += f" {dest}/{sd}"
+            subdirs = sorted(
+                {str(Path(rel).parent) for rel, _ in files} - {"."}
+            )
+            dir_paths = " ".join(f"{dest}/{sd}" for sd in subdirs)
+            dirs_cmd = f"mkdir -p {dest} {dir_paths}".strip()
             await self._sandbox_exec(
                 task_id=task_id,
-                command="bash",
-                args=["-c", dirs_cmd],
+                command=dirs_cmd,
+                args=[],
                 stage_label=f"install-skill-{skill_id}",
                 work_dir=work_dir,
                 timeout=15,
@@ -1544,13 +1542,11 @@ class DevAgent:
             # Send each file individually
             for rel, raw in files:
                 b64 = base64.b64encode(raw).decode()
+                write_cmd = f"echo '{b64}' | base64 -d > {dest}/{rel}"
                 await self._sandbox_exec(
                     task_id=task_id,
-                    command="bash",
-                    args=[
-                        "-c",
-                        f"echo '{b64}' | base64 -d > {dest}/{rel}",
-                    ],
+                    command=write_cmd,
+                    args=[],
                     stage_label=f"install-skill-{skill_id}",
                     work_dir=work_dir,
                     timeout=15,
