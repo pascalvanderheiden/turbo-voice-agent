@@ -18,4 +18,4 @@
 ## 4. Verification
 
 - [x] 4.1 Local: rebuild sandbox (`docker compose build sandbox`), start, verify skills at `/home/agent/.copilot/skills/`
-- [ ] 4.2 Azure: deploy, verify sandbox entrypoint downloads skills from Blob Storage
+- [x] 4.2 Azure: deploy, verify sandbox entrypoint downloads skills from Blob Storage
