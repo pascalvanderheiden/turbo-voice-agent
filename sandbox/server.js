@@ -240,28 +240,6 @@ app.get("/files/*", (req, res) => {
   res.json({ name: path.basename(resolved), data: data.toString("base64") });
 });
 
-// Upload a tar.gz archive and extract to target directory
-app.put("/files/upload", express.raw({ type: "application/gzip", limit: "5mb" }), (req, res) => {
-  const targetDir = req.query.dir;
-  if (!targetDir) {
-    return res.status(400).json({ error: "dir query param required" });
-  }
-  const safeDir = path.resolve(targetDir);
-  if (!safeDir.startsWith("/workspace")) {
-    return res.status(403).json({ error: "Access denied" });
-  }
-  try {
-    fs.mkdirSync(safeDir, { recursive: true });
-    const tmpFile = `/tmp/upload-${crypto.randomUUID()}.tar.gz`;
-    fs.writeFileSync(tmpFile, req.body);
-    execSync(`tar xzf ${tmpFile} -C ${safeDir}`, { timeout: 15000 });
-    fs.unlinkSync(tmpFile);
-    res.json({ ok: true, dir: safeDir });
-  } catch (err) {
-    res.status(500).json({ error: "Extract failed", details: String(err) });
-  }
-});
-
 // Download workspace as tar.gz archive
 app.get("/workspace/archive", (req, res) => {
   const baseDir = req.query.dir || "/workspace";

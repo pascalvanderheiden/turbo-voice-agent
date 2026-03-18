@@ -367,29 +367,17 @@ export interface InstalledSkill {
   name: string;
   description: string;
   source: string;
-  version?: string;
-  fileCount?: number;
+  npxCommand?: string;
+  activatedAt?: string;
 }
 
 export const skillsApi = {
   listInstalled: (): Promise<{ skills: InstalledSkill[] }> => fetchApi("/api/agents/skills"),
-  search: (q: string): Promise<{ results: { name: string; description: string; url: string; repo: string }[] }> =>
+  search: (q: string): Promise<{ results: { name: string; description: string; url: string; repo: string; skillDir?: string }[] }> =>
     fetchApi(`/api/agents/skills/search?q=${encodeURIComponent(q)}`),
-  install: (repo: string, skillName: string): Promise<{ name: string; status: string; error?: string }> =>
-    fetchApi("/api/agents/skills/install", { method: "POST", body: JSON.stringify({ repo, skillName }) }),
-  installLocal: (sourcePath: string, name: string): Promise<{ name: string; status: string; error?: string }> =>
-    fetchApi("/api/agents/skills/install-local", { method: "POST", body: JSON.stringify({ sourcePath, name }) }),
-  uploadLocal: async (name: string, files: FileList): Promise<{ name: string; status: string; error?: string }> => {
-    const formData = new FormData();
-    formData.append("name", name);
-    for (let i = 0; i < files.length; i++) {
-      formData.append("files", files[i], (files[i] as unknown as { webkitRelativePath?: string }).webkitRelativePath || files[i].name);
-    }
-    const res = await authFetch(`${API_BASE}/api/agents/skills/upload-local`, { method: "POST", body: formData });
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-    return res.json();
-  },
-  delete: (name: string): Promise<{ name: string; success: boolean }> =>
+  activate: (repo: string, skillName: string, npxCommand: string, description: string): Promise<{ name: string; status: string; error?: string }> =>
+    fetchApi("/api/agents/skills/install", { method: "POST", body: JSON.stringify({ repo, skillName, npxCommand, description }) }),
+  deactivate: (name: string): Promise<{ name: string; success: boolean }> =>
     fetchApi(`/api/agents/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
   suggestForSpec: (specId: string): Promise<{ skillIds: string[] }> =>
     fetchApi(`/api/dev/suggest-skills?specId=${encodeURIComponent(specId)}`),

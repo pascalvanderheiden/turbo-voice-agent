@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,26 +22,26 @@ from app.agents.todo_agent import TodoAgent
 from app.db.cosmos import close_cosmos_client, get_cosmos_client
 from app.db.init import ensure_database_and_containers
 from app.mcp.todo_mcp_client import TodoMcpClient
-from app.routes import chat, dev, ideas, marketing, notes, research, sandbox as sandbox_routes, specs, todos, upload, voice_ws
+from app.middleware.auth_middleware import EntraAuthMiddleware
+from app.routes import chat, dev, ideas, marketing, notes, research, specs, todos, upload, voice_ws
+from app.routes import sandbox as sandbox_routes
+from app.routes.user import router as user_router
+from app.services.brainstorm_service import BrainstormService
+from app.services.cosmos_dev_service import DevService
+from app.services.cosmos_marketing_service import MarketingService
+from app.services.cosmos_skills_service import CosmosSkillsService
+from app.services.dev_service import InMemoryDevService
+from app.services.inmemory_sandbox_service import InMemorySandboxService
 from app.services.memory_brainstorm_service import InMemoryBrainstormService
 from app.services.memory_marketing_service import InMemoryMarketingService
 from app.services.memory_research_service import InMemoryResearchService
 from app.services.memory_spec_service import InMemorySpecService
-from app.services.dev_service import InMemoryDevService
 from app.services.notes_service import NotesService
-from app.services.brainstorm_service import BrainstormService
-from app.services.research_service import ResearchService
-from app.services.spec_service import SpecService
-from app.services.cosmos_dev_service import DevService
-from app.services.cosmos_marketing_service import MarketingService
-from app.services.cosmos_skills_service import CosmosSkillsService
-from app.services.blob_skills_storage import BlobSkillsStorage
-from app.services.sandbox_service import SandboxService as CosmosSandboxService
-from app.services.inmemory_sandbox_service import InMemorySandboxService
 from app.services.research_client import run_deep_research, run_web_search
-from app.middleware.auth_middleware import EntraAuthMiddleware
-from app.routes.user import router as user_router
+from app.services.research_service import ResearchService
+from app.services.sandbox_service import SandboxService as CosmosSandboxService
 from app.services.skills_service import SkillsService
+from app.services.spec_service import SpecService
 from app.services.user_profile_service import UserProfileService
 
 load_dotenv()
@@ -64,7 +64,6 @@ async def lifespan(app: FastAPI):
     spec_service = None
     dev_service = None
     marketing_service = None
-    blob_skills = None
     try:
         client = await get_cosmos_client()
         await ensure_database_and_containers(client)
@@ -79,21 +78,15 @@ async def lifespan(app: FastAPI):
         logger.warning("Cosmos DB unavailable — using in-memory storage. Error: %s", exc)
         client = None
 
-    # Initialize Blob-backed skills service when storage account is configured
-    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-    if client and storage_account:
+    # Initialize skills services
+    cosmos_skills = None
+    skills_service = SkillsService()
+    if client:
         try:
-            blob_skills = BlobSkillsStorage(storage_account)
-            skills_service = CosmosSkillsService(client, blob_skills)
-            await skills_service.sync_from_blob()
-            logger.info("Cosmos + Blob skills service initialized.")
+            cosmos_skills = CosmosSkillsService(client)
+            logger.info("Cosmos skills service initialized.")
         except Exception:
-            logger.exception("Failed to init Blob skills — falling back to filesystem.")
-            blob_skills = None
-            skills_service = SkillsService()
-    else:
-        skills_service = SkillsService()
-        logger.info("Filesystem skills service initialized.")
+            logger.exception("Failed to init Cosmos skills service.")
 
     # User profile service
     app.state.user_profile_service = None
@@ -150,10 +143,10 @@ async def lifespan(app: FastAPI):
     brainstorm_agent = BrainstormAgent(brainstorm_service, research_service=research_service)
     research_agent = ResearchAgent(research_service)
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
-    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service)
+    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills)
     # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
     spec_agent._dev_agent = dev_agent
-    skills_agent = SkillsAgent(skills_service)
+    skills_agent = SkillsAgent(skills_service, cosmos_skills=cosmos_skills)
     marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
 
     # Initialize MCP client and Todo Agent
@@ -186,12 +179,13 @@ async def lifespan(app: FastAPI):
     )
     voice_ws.set_supervisor(supervisor)
     chat.set_supervisor(supervisor)
-    dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, spec_service=spec_service, dev_agent=dev_agent)
+    dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, cosmos_skills=cosmos_skills, spec_service=spec_service, dev_agent=dev_agent)
     sandbox_routes.set_sandbox_service(sandbox_service)
     marketing.set_marketing_service(marketing_service, agent=marketing_agent)
     todos.set_todo_agent(todo_agent)
-    global _skills_service
+    global _skills_service, _cosmos_skills
     _skills_service = skills_service
+    _cosmos_skills = cosmos_skills
     logger.info("Services and agents initialized.")
 
     # Seed demo data when running with in-memory services (no Cosmos DB)
@@ -211,8 +205,6 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await todo_mcp_client.stop()
-    if blob_skills:
-        await blob_skills.close()
     await close_cosmos_client()
     logger.info("Backend shut down.")
 
@@ -225,6 +217,7 @@ app = FastAPI(
 
 # Request logging middleware (innermost — runs after auth sets user_id)
 from app.middleware.logging_middleware import RequestLoggingMiddleware
+
 app.add_middleware(RequestLoggingMiddleware)
 
 # Auth middleware (before CORS)
@@ -249,6 +242,7 @@ app.mount("/uploads", StaticFiles(directory=str(upload.UPLOAD_DIR)), name="uploa
 
 # Static file serving for mobile assets
 from pathlib import Path
+
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
@@ -419,27 +413,23 @@ async def agent_status():
 
 
 _skills_service: SkillsService | None = None
+_cosmos_skills: CosmosSkillsService | None = None
 
 
 @app.get("/api/agents/skills")
 async def list_installed_skills(request: Request):
-    """List installed skills with rich metadata via SkillsService."""
+    """List activated skills for the current user."""
     user_id = getattr(request.state, "user_id", "default-user")
-    logger.info("Listing skills for user=%s", user_id)
-    svc = _skills_service or SkillsService()
-    if hasattr(svc, "with_user"):
-        svc = svc.with_user(user_id)
-    # Prefer Cosmos DB listing (user-scoped) over filesystem
-    if hasattr(svc, "list_from_cosmos"):
-        skills = await svc.list_from_cosmos()
-        logger.info("Listed %d skills from Cosmos for user=%s", len(skills), user_id)
+    if _cosmos_skills:
+        svc = _cosmos_skills.with_user(user_id)
+        skills = await svc.list_activated()
         return {"skills": skills}
-    return {"skills": svc.list_installed()}
+    return {"skills": []}
 
 
 @app.get("/api/agents/skills/search")
 async def search_marketplace_skills(q: str = ""):
-    """Proxy to `npx skills find` — avoids CORS issues with skills.sh."""
+    """Proxy to skills.sh marketplace search."""
     svc = _skills_service or SkillsService()
     results = await svc.search_marketplace(q)
     return {"results": results}
@@ -448,76 +438,34 @@ async def search_marketplace_skills(q: str = ""):
 class SkillInstallRequest(BaseModel):
     repo: str
     skillName: str
-
-
-class SkillLocalInstallRequest(BaseModel):
-    sourcePath: str
-    name: str
+    npxCommand: str | None = None
+    description: str | None = None
 
 
 @app.post("/api/agents/skills/install")
-async def install_marketplace_skill(body: SkillInstallRequest, request: Request):
-    """Install a skill from skills.sh marketplace via npx."""
+async def activate_skill(body: SkillInstallRequest, request: Request):
+    """Activate a skill — store metadata and npx command in Cosmos DB."""
     user_id = getattr(request.state, "user_id", "default-user")
-    logger.info("Installing skill %s/%s for user=%s", body.repo, body.skillName, user_id)
-    svc = _skills_service or SkillsService()
-    if hasattr(svc, "with_user"):
-        svc = svc.with_user(user_id)
-    result = await svc.install_from_marketplace(body.repo, body.skillName)
-    logger.info("Skill install result: %s (user=%s)", result.get("status", "unknown"), user_id)
-    return result
-
-
-@app.post("/api/agents/skills/install-local")
-async def install_local_skill(body: SkillLocalInstallRequest, request: Request):
-    """Install a skill from a local directory path."""
-    user_id = getattr(request.state, "user_id", "default-user")
-    svc = _skills_service or SkillsService()
-    if hasattr(svc, "with_user"):
-        svc = svc.with_user(user_id)
-    result = svc.install_from_local(body.sourcePath, body.name)
-    if isinstance(svc, CosmosSkillsService) and result.get("status") == "installed":
-        await svc.persist_skill(body.name)
-    return result
-
-
-@app.post("/api/agents/skills/upload-local")
-async def upload_local_skill(request: Request, name: str = Form(...), files: list[UploadFile] = File(...)):
-    """Install a skill from uploaded files (browser folder picker)."""
-    user_id = getattr(request.state, "user_id", "default-user")
-    logger.info("Uploading local skill '%s' (%d files) for user=%s", name, len(files), user_id)
-    svc = _skills_service or SkillsService()
-    if hasattr(svc, "with_user"):
-        svc = svc.with_user(user_id)
-    file_map: dict[str, bytes] = {}
-    for f in files:
-        rel_path = f.filename or "unknown"
-        parts = rel_path.replace("\\", "/").split("/")
-        if len(parts) > 1:
-            rel_path = "/".join(parts[1:])
-        content = await f.read()
-        file_map[rel_path] = content
-    result = svc.install_from_upload(name, file_map)
-    if isinstance(svc, CosmosSkillsService) and result.get("status") == "installed":
-        await svc.persist_skill(name)
-    return result
+    if not _cosmos_skills:
+        return {"error": "Skills service not available"}
+    svc = _cosmos_skills.with_user(user_id)
+    npx_cmd = body.npxCommand or f"npx -y @anthropic/skills install {body.repo}/{body.skillName}"
+    result = await svc.activate_skill(body.skillName, body.description or "", body.repo, npx_cmd)
+    logger.info("Activated skill '%s' for user=%s", body.skillName, user_id)
+    return {"name": result["name"], "success": True}
 
 
 @app.delete("/api/agents/skills/{name}")
-async def delete_skill(name: str, request: Request):
-    """Uninstall a skill by name."""
+async def deactivate_skill(name: str, request: Request):
+    """Deactivate a skill by name."""
     user_id = getattr(request.state, "user_id", "default-user")
-    logger.info("Deleting skill '%s' for user=%s", name, user_id)
-    svc = _skills_service or SkillsService()
-    if hasattr(svc, "with_user"):
-        svc = svc.with_user(user_id)
-    result = svc.uninstall(name)
-    if not result.get("success"):
+    if not _cosmos_skills:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=result.get("error", "Skill not found"))
-    if isinstance(svc, CosmosSkillsService):
-        await svc.remove_skill_data(name)
-    return result
+        raise HTTPException(status_code=500, detail="Skills service not available")
+    svc = _cosmos_skills.with_user(user_id)
+    await svc.deactivate_skill(name)
+    logger.info("Deactivated skill '%s' for user=%s", name, user_id)
+    return {"name": name, "success": True}
 
 
 @app.get("/api/specs/{spec_id}/dev-task")

@@ -15,8 +15,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import httpx
 
@@ -86,11 +85,13 @@ class DevAgent:
         spec_service=None,
         skills_service=None,
         sandbox_service=None,
+        cosmos_skills=None,
     ):
         self._service = dev_service
         self._spec_service = spec_service
         self._skills_service = skills_service
         self._sandbox_service = sandbox_service
+        self._cosmos_skills = cosmos_skills
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -368,7 +369,7 @@ class DevAgent:
         )
         # Install user-selected skills into the sandbox workspace
         n_skills = await self._install_skills_in_sandbox(
-            task_id, task, work_dir,
+            task_id, task, work_dir, user_id=user_id,
         )
         if n_skills:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
@@ -490,7 +491,7 @@ class DevAgent:
         )
         # Install user-selected skills into the sandbox workspace
         n_skills = await self._install_skills_in_sandbox(
-            task_id, task, work_dir,
+            task_id, task, work_dir, user_id=user_id,
         )
         if n_skills:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
@@ -1120,7 +1121,7 @@ class DevAgent:
                             )
                         except StopAsyncIteration:
                             break
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             logger.warning(
                                 "SSE line timeout (%ds, no data) [%s], "
                                 "falling back to polling",
@@ -1193,7 +1194,7 @@ class DevAgent:
                             exit_code = entry.get("code", -1)
                             break
 
-        except (httpx.HTTPError, asyncio.TimeoutError) as e:
+        except (TimeoutError, httpx.HTTPError) as e:
             logger.warning(
                 "[SANDBOX-DIAG] SSE stream error [%s] type=%s, "
                 "lines_received=%d buf_size=%d, falling back to polling: %s",
@@ -1338,7 +1339,7 @@ class DevAgent:
                         question=question[-500:],
                         answer=answer,
                         stage=stage_label,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=datetime.now(UTC).isoformat(),
                     )
                     task.decisions.append(decision)
             except Exception as e:
@@ -1450,7 +1451,7 @@ class DevAgent:
 
     async def _auto_attach_skills(self, task_id: str, title: str, spec_id: str | None = None, user_id: str | None = None) -> None:
         """Auto-suggest and attach relevant skills to a task based on title + spec content."""
-        if not self._skills_service:
+        if not self._cosmos_skills:
             return
         content = title
         if spec_id and self._spec_service:
@@ -1458,98 +1459,65 @@ class DevAgent:
             spec = await spec_svc.get_by_id(spec_id)
             if spec:
                 content = f"{spec.title} {spec.content} {title}"
-        suggested = self._skills_service.suggest_skills_for_content(content)
-        # Fallback: if no keyword match, include all installed skills (user installed them for a reason)
+        svc = self._cosmos_skills.with_user(user_id) if user_id else self._cosmos_skills
+        activated = await svc.list_activated()
+        suggested = self._skills_service.suggest_skills_for_content(content, activated)
+        # Fallback: if no keyword match, include all activated skills
         if not suggested:
-            all_skills = self._skills_service.list_installed()
-            suggested = [s["name"] for s in all_skills[:3]]
+            suggested = [s["name"] for s in activated[:3]]
         if suggested:
             await self._service.set_skill_ids(task_id, suggested)
             logger.info("Auto-attached skills %s to task %s", suggested, task_id)
 
-    def _get_skill_context(self, task) -> str:
-        """Load and concatenate skill content for a task's selected skills."""
-        if not self._skills_service or not hasattr(task, 'skill_ids') or not task.skill_ids:
-            return ""
-        parts = []
-        for skill_id in task.skill_ids[:3]:  # max 3 skills
-            content = self._skills_service.get_skill_content(skill_id, max_tokens=2000)
-            if content:
-                parts.append(f"=== Skill: {skill_id} ===\n{content}")
-        if not parts:
-            return ""
-        return "\n\nRelevant skill context (use these guidelines for code generation):\n" + "\n\n".join(parts)
-
     async def _install_skills_in_sandbox(
-        self, task_id: str, task, work_dir: str,
+        self, task_id: str, task, work_dir: str, user_id: str | None = None,
     ) -> int:
-        """Copy user-selected skills into the sandbox workspace .github/skills/.
+        """Install activated skills in sandbox by running their npx commands.
 
-        Creates a tar.gz of each skill directory and uploads via the sandbox
-        /files/upload endpoint — one HTTP request per skill.
-        Returns the number of skills installed.
+        For each skill attached to the task, fetches the npxCommand from
+        Cosmos DB and executes it in the sandbox via _sandbox_exec().
+        Returns the number of skills successfully installed.
         """
-        if not self._skills_service or not task.skill_ids:
+        if not self._cosmos_skills or not task.skill_ids:
             return 0
 
-        import io
-        import tarfile
-
-        SKIP_NAMES = {"__pycache__"}
-        SKIP_EXTS = {".pyc", ".pyo"}
+        svc = self._cosmos_skills.with_user(user_id) if user_id else self._cosmos_skills
+        npx_map = await svc.get_npx_commands(task.skill_ids)
+        if not npx_map:
+            return 0
 
         installed = 0
-        for skill_id in task.skill_ids:
-            skill_dir = self._skills_service.get_skill_dir(skill_id)
-            if not skill_dir:
-                logger.debug("Skill %s not found on disk, skipping", skill_id)
-                continue
-
-            # Build an in-memory tar.gz of the skill directory
-            buf = io.BytesIO()
+        for skill_name, npx_cmd in npx_map.items():
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "stdout",
+                    "data": f"── install-skill-{skill_name} ──\n",
+                    "stage": "install-skills",
+                })
             try:
-                with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-                    for p in sorted(skill_dir.rglob("*")):
-                        if not p.is_file() or p.name.startswith("."):
-                            continue
-                        if p.suffix.lower() in SKIP_EXTS:
-                            continue
-                        if any(skip in p.parts for skip in SKIP_NAMES):
-                            continue
-                        arcname = str(p.relative_to(skill_dir))
-                        tar.add(str(p), arcname=arcname)
-            except Exception as exc:
-                logger.warning("Failed to tar skill %s: %s", skill_id, exc)
-                continue
-
-            tar_data = buf.getvalue()
-            dest = f"{work_dir}/.github/skills/{skill_id}"
-
-            # Upload tar.gz to sandbox in one request
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.put(
-                        f"{SANDBOX_URL}/files/upload",
-                        params={"dir": dest},
-                        content=tar_data,
-                        headers={"Content-Type": "application/gzip"},
-                    )
-                    resp.raise_for_status()
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    command=npx_cmd,
+                    args=[],
+                    stage_label=f"install-skill-{skill_name}",
+                    work_dir=work_dir,
+                    timeout=120,
+                )
                 installed += 1
-                logger.info(
-                    "Installed skill %s (%d KB tar.gz) to %s",
-                    skill_id, len(tar_data) // 1024, dest,
-                )
+                logger.info("Installed skill '%s' in sandbox via npx", skill_name)
             except Exception as exc:
-                logger.warning(
-                    "Failed to upload skill %s: %s", skill_id, exc,
-                )
+                logger.warning("Failed to install skill '%s': %s", skill_name, exc)
+                if task_id in _pipeline_outputs:
+                    _pipeline_outputs[task_id].append({
+                        "type": "stderr",
+                        "data": f"Skill install failed for {skill_name}: {exc}\n",
+                        "stage": "install-skills",
+                    })
 
-        # Log to pipeline output so it shows in the terminal
         if installed and task_id in _pipeline_outputs:
             _pipeline_outputs[task_id].append({
                 "type": "stdout",
-                "data": f"Installed {installed} skills into workspace\n",
+                "data": f"Activated {installed} skills in workspace\n",
                 "stage": "install-skills",
             })
 

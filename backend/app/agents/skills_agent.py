@@ -1,18 +1,20 @@
-"""Skills Agent — specialist agent for managing installed and marketplace skills."""
+"""Skills Agent — specialist agent for managing activated and marketplace skills."""
 
 import json
 import logging
 
+from app.services.cosmos_skills_service import CosmosSkillsService
 from app.services.skills_service import SkillsService
 
 logger = logging.getLogger(__name__)
 
 
 class SkillsAgent:
-    """Agent that handles skill installation, uninstallation, search, and listing."""
+    """Agent that handles skill activation, deactivation, search, and listing."""
 
-    def __init__(self, skills_service: SkillsService):
+    def __init__(self, skills_service: SkillsService, cosmos_skills: CosmosSkillsService | None = None):
         self._service = skills_service
+        self._cosmos_skills = cosmos_skills
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -22,7 +24,7 @@ class SkillsAgent:
                 "type": "function",
                 "function": {
                     "name": "list_skills",
-                    "description": "List all installed agent skills with their metadata",
+                    "description": "List all activated agent skills",
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
@@ -43,13 +45,14 @@ class SkillsAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "install_skill",
-                    "description": "Install a skill from the skills.sh marketplace (e.g. repo='vercel-labs/skills', name='find-skills')",
+                    "name": "activate_skill",
+                    "description": "Activate a skill from the skills.sh marketplace",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "repo": {"type": "string", "description": "GitHub repo (owner/repo) containing the skill"},
-                            "skill_name": {"type": "string", "description": "Name of the skill to install"},
+                            "skill_name": {"type": "string", "description": "Name of the skill to activate"},
+                            "description": {"type": "string", "description": "Skill description"},
                         },
                         "required": ["repo", "skill_name"],
                     },
@@ -58,12 +61,12 @@ class SkillsAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "uninstall_skill",
-                    "description": "Uninstall (delete) an installed skill by name",
+                    "name": "deactivate_skill",
+                    "description": "Deactivate an activated skill by name",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "description": "Name of the skill to uninstall"},
+                            "name": {"type": "string", "description": "Name of the skill to deactivate"},
                         },
                         "required": ["name"],
                     },
@@ -79,21 +82,32 @@ class SkillsAgent:
             return json.dumps({"error": "Invalid arguments"})
 
         if function_name == "list_skills":
-            skills = self._service.list_installed()
-            return json.dumps({"skills": skills, "count": len(skills)})
+            if self._cosmos_skills:
+                svc = self._cosmos_skills.with_user(user_id)
+                skills = await svc.list_activated()
+                return json.dumps({"skills": skills, "count": len(skills)})
+            return json.dumps({"skills": [], "count": 0})
 
         elif function_name == "search_skills":
             results = await self._service.search_marketplace(args.get("query", ""))
             return json.dumps({"results": results, "count": len(results)})
 
-        elif function_name == "install_skill":
-            result = await self._service.install_from_marketplace(
-                args["repo"], args["skill_name"]
-            )
-            return json.dumps(result)
+        elif function_name == "activate_skill":
+            if not self._cosmos_skills:
+                return json.dumps({"error": "Skills service not available"})
+            svc = self._cosmos_skills.with_user(user_id)
+            repo = args["repo"]
+            skill_name = args["skill_name"]
+            desc = args.get("description", "")
+            npx_cmd = f"npx -y @anthropic/skills install {repo}/{skill_name}"
+            result = await svc.activate_skill(skill_name, desc, repo, npx_cmd)
+            return json.dumps({"name": result["name"], "success": True})
 
-        elif function_name == "uninstall_skill":
-            result = self._service.uninstall(args["name"])
-            return json.dumps(result)
+        elif function_name == "deactivate_skill":
+            if not self._cosmos_skills:
+                return json.dumps({"error": "Skills service not available"})
+            svc = self._cosmos_skills.with_user(user_id)
+            await svc.deactivate_skill(args["name"])
+            return json.dumps({"name": args["name"], "success": True})
 
         return json.dumps({"error": f"Unknown function: {function_name}"})

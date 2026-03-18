@@ -6,7 +6,7 @@ import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.models.dev_task import DevTask, DevTaskCreate
@@ -21,15 +21,17 @@ router = APIRouter(prefix="/api/dev", tags=["development"])
 _dev_service: InMemoryDevService | None = None
 _pipeline_fn = None
 _skills_service = None
+_cosmos_skills = None
 _spec_service = None
 _dev_agent = None
 
 
-def set_dev_service(service: InMemoryDevService, pipeline_fn=None, skills_service=None, spec_service=None, dev_agent=None) -> None:
-    global _dev_service, _pipeline_fn, _skills_service, _spec_service, _dev_agent
+def set_dev_service(service: InMemoryDevService, pipeline_fn=None, skills_service=None, cosmos_skills=None, spec_service=None, dev_agent=None) -> None:
+    global _dev_service, _pipeline_fn, _skills_service, _cosmos_skills, _spec_service, _dev_agent
     _dev_service = service
     _pipeline_fn = pipeline_fn
     _skills_service = skills_service
+    _cosmos_skills = cosmos_skills
     _spec_service = spec_service
     _dev_agent = dev_agent
 
@@ -48,12 +50,11 @@ async def list_dev_tasks(request: Request):
 
 @router.get("/suggest-skills")
 async def suggest_skills(request: Request, specId: str = ""):
-    """Suggest skills for a spec based on keyword matching."""
+    """Suggest skills for a spec based on keyword matching against activated skills."""
     from app.services.skills_service import SkillsService
     svc = _skills_service or SkillsService()
     if not specId:
         return {"skillIds": []}
-    # Access spec service from specs routes module
     user_id = getattr(request.state, "user_id", "default-user")
     from app.routes import specs as specs_mod
     spec_svc = specs_mod._spec_service
@@ -63,7 +64,11 @@ async def suggest_skills(request: Request, specId: str = ""):
     if not spec:
         return {"skillIds": []}
     content = f"{spec.title} {spec.content}"
-    suggested = svc.suggest_skills_for_content(content)
+    # Get activated skills for matching
+    activated = []
+    if _cosmos_skills:
+        activated = await _cosmos_skills.with_user(user_id).list_activated()
+    suggested = svc.suggest_skills_for_content(content, activated)
     return {"skillIds": suggested}
 
 
@@ -90,17 +95,17 @@ async def create_dev_task(data: DevTaskCreate, request: Request):
         except Exception:
             logger.exception("Failed to populate iterations / link spec for task %s", task.id)
     # Auto-attach skills if none were explicitly provided
-    if not data.skill_ids and _skills_service:
+    if not data.skill_ids and _cosmos_skills:
         try:
             content = data.title
             if data.spec_id and _spec_service:
                 spec = await _spec_service.with_user(user_id).get_by_id(data.spec_id)
                 if spec:
                     content = f"{spec.title} {spec.content} {data.title}"
-            suggested = _skills_service.suggest_skills_for_content(content)
+            activated = await _cosmos_skills.with_user(user_id).list_activated()
+            suggested = _skills_service.suggest_skills_for_content(content, activated) if _skills_service else []
             if not suggested:
-                all_skills = _skills_service.list_installed()
-                suggested = [s["name"] for s in all_skills[:3]]
+                suggested = [s["name"] for s in activated[:3]]
             if suggested:
                 task = await svc.set_skill_ids(task.id, suggested)
                 logger.info("Auto-attached skills %s to task %s", suggested, task.id)

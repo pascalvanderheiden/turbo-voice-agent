@@ -17,7 +17,6 @@ import {
   IconTrash,
   IconDownload,
   IconPlus,
-  IconFolderPlus,
   IconX,
   IconSettings,
   IconBrandGithub,
@@ -73,10 +72,6 @@ export default function AgentsPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [showLocalDialog, setShowLocalDialog] = useState(false);
-  const [localFiles, setLocalFiles] = useState<FileList | null>(null);
-  const [localName, setLocalName] = useState("");
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sandboxStatus, setSandboxStatus] = useState<string>("loading");
@@ -170,61 +165,43 @@ export default function AgentsPage() {
     };
   }, [fetchSandboxStatus]);
 
-  const handleInstall = async (skill: MarketplaceSkill) => {
+  const handleActivate = async (skill: MarketplaceSkill) => {
     const repo = skill.repo || "";
     if (!repo) {
-      addNotification("Install failed: No repository info for this skill");
+      addNotification("Activate failed: No repository info for this skill");
       return;
     }
+    const skillDir = skill.skillDir || skill.name;
+    const npxCommand = `npx @anthropic/skills install ${repo}/${skillDir}`;
     setInstalling((prev) => new Set(prev).add(skill.name));
-    addNotification(`Installing ${skill.name} from ${repo}...`);
+    addNotification(`Activating ${skill.name} from ${repo}...`);
     try {
-      // Pass skillDir as skillName — empty string means install whole repo
-      const result = await skillsApi.install(repo, skill.skillDir || "");
+      const result = await skillsApi.activate(repo, skillDir, npxCommand, skill.description || "");
       if (result.status === "installed") {
-        addNotification(`Skill "${result.name || skill.name}" installed successfully`);
+        addNotification(`Skill "${result.name || skill.name}" activated successfully`);
         await refreshSkills();
       } else {
-        addNotification(`Install failed: ${result.error || "Unknown error"}`);
+        addNotification(`Activate failed: ${result.error || "Unknown error"}`);
       }
     } catch (e: unknown) {
-      addNotification(`Install failed: ${String(e)}`);
+      addNotification(`Activate failed: ${String(e)}`);
     } finally {
       setInstalling((prev) => { const next = new Set(prev); next.delete(skill.name); return next; });
     }
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDeactivate = async (name: string) => {
     setDeleteConfirm(null);
     setDeleting(name);
     try {
-      await skillsApi.delete(name);
-      addNotification(`Skill "${name}" deleted`);
+      await skillsApi.deactivate(name);
+      addNotification(`Skill "${name}" deactivated`);
       await refreshSkills();
     } catch (e: unknown) {
-      addNotification(`Delete failed: ${String(e)}`);
+      addNotification(`Deactivate failed: ${String(e)}`);
     } finally {
       setDeleting(null);
     }
-  };
-
-  const handleLocalInstall = async () => {
-    if (!localFiles || !localName) return;
-    setShowLocalDialog(false);
-    addNotification(`Installing local skill "${localName}"...`);
-    try {
-      const result = await skillsApi.uploadLocal(localName, localFiles);
-      if (result.status === "installed") {
-        addNotification(`Skill "${localName}" installed successfully`);
-        await refreshSkills();
-      } else {
-        addNotification(`Install failed: ${result.error || "Unknown error"}`);
-      }
-    } catch (e: unknown) {
-      addNotification(`Install failed: ${String(e)}`);
-    }
-    setLocalFiles(null);
-    setLocalName("");
   };
 
   if (loading) {
@@ -368,15 +345,9 @@ export default function AgentsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="text-sm font-medium text-[var(--color-text-muted)]">Skills Marketplace</h2>
-            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{skills.length} installed</p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{skills.length} activated</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowLocalDialog(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] transition-colors shrink-0"
-            >
-              <IconFolderPlus size={13} /> Add Local
-            </button>
             <div className="relative flex-1 min-w-0">
               <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
               <input
@@ -395,7 +366,7 @@ export default function AgentsPage() {
         {skills.length > 0 && (
           <div className="mb-4">
             <h3 className="text-xs font-medium text-green-400 mb-2 flex items-center gap-1.5">
-              <IconPackage size={12} /> Installed ({filteredInstalled.length})
+              <IconPackage size={12} /> Active ({filteredInstalled.length})
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {filteredInstalled.map((skill) => (
@@ -403,7 +374,7 @@ export default function AgentsPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="font-medium text-sm truncate">{skill.name}</div>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 shrink-0">installed</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 shrink-0">active</span>
                       {skill.source === "skills.sh" ? (
                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-brand-cyan)]/15 text-[var(--color-brand-cyan)] shrink-0">skills.sh</span>
                       ) : (
@@ -414,13 +385,14 @@ export default function AgentsPage() {
                       onClick={() => setDeleteConfirm(skill.name)}
                       disabled={deleting === skill.name}
                       className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400 transition-all shrink-0"
-                      title="Delete skill"
+                      title="Deactivate skill"
                     >
                       {deleting === skill.name ? <IconLoader2 size={13} className="animate-spin" /> : <IconTrash size={13} />}
                     </button>
                   </div>
                   <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{skill.description || "No description"}</p>
-                  {skill.version && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">v{skill.version}</p>}
+                  {skill.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{skill.source}</p>}
+                  {skill.activatedAt && <p className="text-[10px] text-[var(--color-text-muted)]">Activated {new Date(skill.activatedAt).toLocaleDateString()}</p>}
                 </div>
               ))}
             </div>
@@ -450,12 +422,12 @@ export default function AgentsPage() {
                       <IconExternalLink size={11} className="text-[var(--color-text-muted)]" />
                     </a>
                     <button
-                      onClick={() => handleInstall(skill)}
+                      onClick={() => handleActivate(skill)}
                       disabled={installing.has(skill.name)}
                       className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50"
                     >
                       {installing.has(skill.name) ? <IconLoader2 size={11} className="animate-spin" /> : <IconDownload size={11} />}
-                      Install
+                      Activate
                     </button>
                   </div>
                   <div className="flex items-center gap-2 mt-1">
@@ -481,7 +453,7 @@ export default function AgentsPage() {
 
         {skills.length === 0 && !skillSearch && (
           <p className="text-sm text-[var(--color-text-muted)]">
-            No skills installed. Search the marketplace above or click &quot;Add Local&quot; to install from a local directory.
+            No skills activated. Search the marketplace above to find and activate skills.
           </p>
         )}
       </div>
@@ -490,9 +462,9 @@ export default function AgentsPage() {
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 w-full max-w-sm mx-4">
-            <h3 className="font-medium text-sm mb-2">Delete skill &ldquo;{deleteConfirm}&rdquo;?</h3>
+            <h3 className="font-medium text-sm mb-2">Deactivate skill &ldquo;{deleteConfirm}&rdquo;?</h3>
             <p className="text-xs text-[var(--color-text-muted)] mb-4">
-              This will remove the skill directory from .agents/skills/. This action cannot be undone.
+              This will deactivate the skill. You can re-activate it from the marketplace at any time.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -502,92 +474,17 @@ export default function AgentsPage() {
                 Cancel
               </button>
               <button
-                onClick={() => handleDelete(deleteConfirm)}
+                onClick={() => handleDeactivate(deleteConfirm)}
                 className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
               >
-                Delete
+                Deactivate
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Add Local Skill dialog */}
-      {showLocalDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 w-full max-w-md mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-medium text-sm">Add Local Skill</h3>
-              <button onClick={() => { setShowLocalDialog(false); setLocalFiles(null); setLocalName(""); }} className="p-1 rounded hover:bg-[var(--color-bg-tertiary)]">
-                <IconX size={14} />
-              </button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-[var(--color-text-muted)] block mb-1">Skill Folder</label>
-                <input
-                  ref={folderInputRef}
-                  type="file"
-                  className="hidden"
-                  onChange={(e) => {
-                    const files = e.target.files;
-                    if (files && files.length > 0) {
-                      setLocalFiles(files);
-                      // Derive skill name from folder name (webkitRelativePath = "folder/file.md")
-                      const first = (files[0] as unknown as { webkitRelativePath?: string }).webkitRelativePath || files[0].name;
-                      const folderName = first.split("/")[0] || "skill";
-                      setLocalName(folderName);
-                    }
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    // Set webkitdirectory attribute dynamically (TypeScript doesn't know it)
-                    if (folderInputRef.current) {
-                      folderInputRef.current.setAttribute("webkitdirectory", "");
-                      folderInputRef.current.setAttribute("directory", "");
-                      folderInputRef.current.click();
-                    }
-                  }}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-dashed border-[var(--color-border-dark)] text-[var(--color-text-secondary)] hover:border-[var(--color-brand-pink)] hover:text-[var(--color-brand-pink)] transition-colors cursor-pointer"
-                >
-                  <IconFolderPlus size={16} />
-                  {localFiles ? `${localFiles.length} files selected` : "Browse folder..."}
-                </button>
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Select a folder containing a SKILL.md file</p>
-              </div>
-              {localName && (
-                <div>
-                  <label className="text-xs font-medium text-[var(--color-text-muted)] block mb-1">Skill Name</label>
-                  <input
-                    type="text"
-                    value={localName}
-                    onChange={(e) => setLocalName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-pink)]"
-                  />
-                  <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Auto-filled from folder name — edit if needed</p>
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => { setShowLocalDialog(false); setLocalFiles(null); setLocalName(""); }}
-                className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleLocalInstall}
-                disabled={!localFiles || !localName}
-                className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors disabled:opacity-50"
-              >
-                <IconPlus size={12} className="inline mr-1" />
-                Install
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
