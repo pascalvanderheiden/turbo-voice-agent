@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["upload"])
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_TYPES = {
     "image/png", "image/jpeg", "image/gif", "image/webp",
     "application/pdf",
@@ -27,7 +27,7 @@ async def upload_file(file: UploadFile):
 
     data = await file.read()
     if len(data) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+        raise HTTPException(status_code=400, detail="File too large (max 50 MB)")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
     filename = f"{uuid.uuid4()}.{ext}"
