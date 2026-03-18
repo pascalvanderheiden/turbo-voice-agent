@@ -538,8 +538,8 @@ class DevAgent:
                     ),
                     model=model,
                     stage_label=f"foundation-apply-{t_idx + 1}",
-                    timeout=600,
-                    stall_timeout=180,
+                    timeout=1200,
+                    stall_timeout=600,
                     raise_on_error=False,
                     work_dir=work_dir,
                 )
@@ -555,7 +555,7 @@ class DevAgent:
                 ),
                 model=model,
                 stage_label="foundation-apply",
-                stall_timeout=180,
+                stall_timeout=600,
                 raise_on_error=False,
                 work_dir=work_dir,
             )
@@ -749,8 +749,8 @@ class DevAgent:
                     ),
                     model=model,
                     stage_label=f"feature-{iter_idx}-apply-{ft_idx + 1}",
-                    timeout=600,
-                    stall_timeout=180,
+                    timeout=1200,
+                    stall_timeout=600,
                     raise_on_error=False,
                     work_dir=feature_work_dir,
                 )
@@ -768,7 +768,7 @@ class DevAgent:
                 ),
                 model=model,
                 stage_label=f"feature-{iter_idx}-apply",
-                stall_timeout=180,
+                stall_timeout=600,
                 raise_on_error=False,
                 work_dir=feature_work_dir,
             )
@@ -1021,7 +1021,7 @@ class DevAgent:
         model: str = "claude-opus-4.6",
         stage_label: str = "",
         timeout: float = 1200,
-        stall_timeout: float = 180,
+        stall_timeout: float = 600,
         raise_on_error: bool = True,
         work_dir: str = "/workspace",
     ) -> str:
