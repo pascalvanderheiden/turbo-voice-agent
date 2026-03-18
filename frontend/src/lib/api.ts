@@ -375,7 +375,7 @@ export const skillsApi = {
   listInstalled: (): Promise<{ skills: InstalledSkill[] }> => fetchApi("/api/agents/skills"),
   search: (q: string): Promise<{ results: { name: string; description: string; url: string; repo: string; skillDir?: string }[] }> =>
     fetchApi(`/api/agents/skills/search?q=${encodeURIComponent(q)}`),
-  activate: (repo: string, skillName: string, npxCommand: string, description: string): Promise<{ name: string; status: string; error?: string }> =>
+  activate: (repo: string, skillName: string, npxCommand: string, description: string): Promise<{ name: string; success: boolean; error?: string }> =>
     fetchApi("/api/agents/skills/install", { method: "POST", body: JSON.stringify({ repo, skillName, npxCommand, description }) }),
   deactivate: (name: string): Promise<{ name: string; success: boolean }> =>
     fetchApi(`/api/agents/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),

@@ -177,7 +177,7 @@ export default function AgentsPage() {
     addNotification(`Activating ${skill.name} from ${repo}...`);
     try {
       const result = await skillsApi.activate(repo, skillDir, npxCommand, skill.description || "");
-      if (result.status === "installed") {
+      if (result.success) {
         addNotification(`Skill "${result.name || skill.name}" activated successfully`);
         await refreshSkills();
       } else {
