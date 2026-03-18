@@ -172,7 +172,7 @@ export default function AgentsPage() {
       return;
     }
     const skillDir = skill.skillDir || skill.name;
-    const npxCommand = `npx @anthropic/skills install ${repo}/${skillDir}`;
+    const npxCommand = `npx -y degit ${repo}/${skillDir} .github/skills/${skillDir}`;
     setInstalling((prev) => new Set(prev).add(skill.name));
     addNotification(`Activating ${skill.name} from ${repo}...`);
     try {

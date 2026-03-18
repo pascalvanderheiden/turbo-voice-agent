@@ -99,7 +99,7 @@ class SkillsAgent:
             repo = args["repo"]
             skill_name = args["skill_name"]
             desc = args.get("description", "")
-            npx_cmd = f"npx -y @anthropic/skills install {repo}/{skill_name}"
+            npx_cmd = f"npx -y degit {repo}/{skill_name} .github/skills/{skill_name}"
             result = await svc.activate_skill(skill_name, desc, repo, npx_cmd)
             return json.dumps({"name": result["name"], "success": True})
 
