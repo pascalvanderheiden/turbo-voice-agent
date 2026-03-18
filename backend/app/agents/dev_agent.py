@@ -453,7 +453,7 @@ class DevAgent:
             raise_on_error=False,
             work_dir=work_dir,
         )
-        await self._collect_screenshots(task_id, work_dir=work_dir)
+        await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -690,7 +690,7 @@ class DevAgent:
             raise_on_error=False,
             work_dir=work_dir,
         )
-        await self._collect_screenshots(task_id, work_dir=work_dir)
+        await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
@@ -984,7 +984,7 @@ class DevAgent:
                 raise_on_error=False,
                 work_dir=work_dir,
             )
-            await self._collect_screenshots(task_id, work_dir=work_dir)
+            await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
             await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "completed")
 
             # Check if all iterations are done — if so, mark task completed
@@ -1402,9 +1402,11 @@ class DevAgent:
 
         raise RuntimeError(f"Sandbox task timed out: {stage_label}")
 
-    async def _collect_screenshots(self, task_id: str, work_dir: str = "/workspace") -> None:
+    async def _collect_screenshots(
+        self, task_id: str, work_dir: str = "/workspace", user_id: str | None = None
+    ) -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
-        svc = self._service
+        svc = self._service.with_user(user_id) if user_id else self._service
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # Search for screenshot*.png files specifically
