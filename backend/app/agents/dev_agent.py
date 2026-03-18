@@ -1483,14 +1483,18 @@ class DevAgent:
     ) -> int:
         """Copy user-selected skills into the sandbox workspace .github/skills/.
 
-        Sends each file individually to avoid payload size limits.
+        Creates a tar.gz of each skill directory and uploads via the sandbox
+        /files/upload endpoint — one HTTP request per skill.
         Returns the number of skills installed.
         """
         if not self._skills_service or not task.skill_ids:
             return 0
 
-        SKIP_EXTS = {".pyc", ".pyo", ".class", ".o", ".so", ".dylib"}
-        MAX_FILE_SIZE = 500_000  # 500KB per file
+        import io
+        import tarfile
+
+        SKIP_NAMES = {"__pycache__"}
+        SKIP_EXTS = {".pyc", ".pyo"}
 
         installed = 0
         for skill_id in task.skill_ids:
@@ -1499,64 +1503,53 @@ class DevAgent:
                 logger.debug("Skill %s not found on disk, skipping", skill_id)
                 continue
 
-            # Collect files, skipping hidden and compiled artifacts
-            files: list[tuple[str, bytes]] = []
-            for p in sorted(skill_dir.rglob("*")):
-                if not p.is_file() or p.name.startswith("."):
-                    continue
-                if p.suffix.lower() in SKIP_EXTS:
-                    continue
-                if "__pycache__" in str(p):
-                    continue
-                try:
-                    raw = p.read_bytes()
-                    if len(raw) > MAX_FILE_SIZE:
-                        raw = raw[:MAX_FILE_SIZE]
-                    rel = str(p.relative_to(skill_dir))
-                    files.append((rel, raw))
-                except Exception:
-                    continue
-
-            if not files:
+            # Build an in-memory tar.gz of the skill directory
+            buf = io.BytesIO()
+            try:
+                with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                    for p in sorted(skill_dir.rglob("*")):
+                        if not p.is_file() or p.name.startswith("."):
+                            continue
+                        if p.suffix.lower() in SKIP_EXTS:
+                            continue
+                        if any(skip in p.parts for skip in SKIP_NAMES):
+                            continue
+                        arcname = str(p.relative_to(skill_dir))
+                        tar.add(str(p), arcname=arcname)
+            except Exception as exc:
+                logger.warning("Failed to tar skill %s: %s", skill_id, exc)
                 continue
 
-            # Create the full directory tree in one call
-            # Note: command is passed directly to shell (sandbox uses shell:true
-            # for non-prompt commands), so no "bash -c" wrapper needed.
+            tar_data = buf.getvalue()
             dest = f"{work_dir}/.github/skills/{skill_id}"
-            subdirs = sorted(
-                {str(Path(rel).parent) for rel, _ in files} - {"."}
-            )
-            dir_paths = " ".join(f"{dest}/{sd}" for sd in subdirs)
-            dirs_cmd = f"mkdir -p {dest} {dir_paths}".strip()
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=dirs_cmd,
-                args=[],
-                stage_label=f"install-skill-{skill_id}",
-                work_dir=work_dir,
-                timeout=15,
-                raise_on_error=False,
-            )
 
-            # Send each file individually
-            for rel, raw in files:
-                b64 = base64.b64encode(raw).decode()
-                write_cmd = f"echo '{b64}' | base64 -d > {dest}/{rel}"
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    command=write_cmd,
-                    args=[],
-                    stage_label=f"install-skill-{skill_id}",
-                    work_dir=work_dir,
-                    timeout=15,
-                    raise_on_error=False,
+            # Upload tar.gz to sandbox in one request
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.put(
+                        f"{SANDBOX_URL}/files/upload",
+                        params={"dir": dest},
+                        content=tar_data,
+                        headers={"Content-Type": "application/gzip"},
+                    )
+                    resp.raise_for_status()
+                installed += 1
+                logger.info(
+                    "Installed skill %s (%d KB tar.gz) to %s",
+                    skill_id, len(tar_data) // 1024, dest,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to upload skill %s: %s", skill_id, exc,
                 )
 
-            installed += 1
-            logger.info(
-                "Installed skill %s (%d files)", skill_id, len(files),
-            )
+        # Log to pipeline output so it shows in the terminal
+        if installed and task_id in _pipeline_outputs:
+            _pipeline_outputs[task_id].append({
+                "type": "stdout",
+                "data": f"Installed {installed} skills into workspace\n",
+                "stage": "install-skills",
+            })
 
         return installed
 
