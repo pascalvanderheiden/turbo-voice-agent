@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconSearch, IconFileCode, IconLink, IconX } from "@tabler/icons-react";
+import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconSearch, IconFileCode, IconLink, IconX, IconFileTypePdf } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { ideasApi, researchApi, specsApi, type Idea, type Research, type Spec } from "@/lib/api";
+import { ideasApi, researchApi, specsApi, getUploadUrl, type Idea, type Research, type Spec } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -60,6 +60,16 @@ export default function IdeasPage() {
     }
   };
 
+  const handleDetailFilesChange = async (idea: Idea, images: string[], attachments: string[]) => {
+    try {
+      const updated = await ideasApi.update(idea.id, { images, attachments });
+      setIdeas((prev) => prev.map((i) => (i.id === idea.id ? updated : i)));
+      setViewIdea(updated);
+    } catch {
+      toast.error(t("ideas.failed"));
+    }
+  };
+
   // Mobile detail bottom sheet
   const ideaDetailContent = viewIdea && (
     <div className="space-y-4">
@@ -67,13 +77,20 @@ export default function IdeasPage() {
         viewIdea.status === "refined" ? "bg-green-500/15 text-green-400" : "bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]"
       }`}>{viewIdea.status === "refined" ? t("ideas.statusRefined") : t("ideas.statusDraft")}</span>
       {viewIdea.description && <p className="text-sm whitespace-pre-wrap">{viewIdea.description}</p>}
-      {viewIdea.refinedDraft && (
+
+      {/* Uploaded files */}
+      <IdeaFilesSection
+        idea={viewIdea}
+        onFilesChange={handleDetailFilesChange}
+      />
+
+      {viewIdea.refinedDraft && refining !== viewIdea.id && (
         <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
           <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2">{t("ideas.refinedDraft")}</h3>
           <div className="text-sm whitespace-pre-wrap">{viewIdea.refinedDraft}</div>
         </div>
       )}
-      {!viewIdea.refinedDraft && refining === viewIdea.id && streamingDraft && (
+      {refining === viewIdea.id && streamingDraft && (
         <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
           <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2 flex items-center gap-2">
             {t("ideas.refinedDraft")}
@@ -82,12 +99,10 @@ export default function IdeasPage() {
           <div className="text-sm whitespace-pre-wrap">{streamingDraft}</div>
         </div>
       )}
-      {!viewIdea.refinedDraft && (
-        <button onClick={() => handleRefine(viewIdea.id)} disabled={refining === viewIdea.id}
-          className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
-          <IconSparkles size={16} /> {refining === viewIdea.id ? t("ideas.refining") : t("ideas.refine")}
-        </button>
-      )}
+      <button onClick={() => handleRefine(viewIdea.id)} disabled={refining === viewIdea.id}
+        className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
+        <IconSparkles size={16} /> {refining === viewIdea.id ? t("ideas.refining") : viewIdea.refinedDraft ? t("ideas.reRefine") : t("ideas.refine")}
+      </button>
       <IdeaResearchSection ideaId={viewIdea.id} ideaTitle={viewIdea.title} ideaDescription={viewIdea.description} linkedResearch={linkedResearch} setLinkedResearch={setLinkedResearch} t={t} />
       <IdeaSpecSection ideaId={viewIdea.id} ideaTitle={viewIdea.title} linkedSpecs={linkedSpecs} setLinkedSpecs={setLinkedSpecs} converting={converting} setConverting={setConverting} t={t} />
       <div className="flex gap-2">
@@ -131,7 +146,13 @@ export default function IdeasPage() {
           </div>
         )}
 
-        {viewIdea.refinedDraft && (
+        {/* Uploaded files & upload zone */}
+        <IdeaFilesSection
+          idea={viewIdea}
+          onFilesChange={handleDetailFilesChange}
+        />
+
+        {viewIdea.refinedDraft && refining !== viewIdea.id && (
           <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
             <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2">{t("ideas.refinedDraft")}</h3>
             <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap">
@@ -140,7 +161,7 @@ export default function IdeasPage() {
           </div>
         )}
 
-        {!viewIdea.refinedDraft && refining === viewIdea.id && streamingDraft && (
+        {refining === viewIdea.id && streamingDraft && (
           <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-brand-pink)]/20">
             <h3 className="text-sm font-medium text-[var(--color-brand-pink)] mb-2 flex items-center gap-2">
               {t("ideas.refinedDraft")}
@@ -152,16 +173,14 @@ export default function IdeasPage() {
           </div>
         )}
 
-        {!viewIdea.refinedDraft && (
-          <button
-            onClick={() => handleRefine(viewIdea.id)}
-            disabled={refining === viewIdea.id}
-            className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            <IconSparkles size={16} />
-            {refining === viewIdea.id ? t("ideas.refining") : t("ideas.refine")}
-          </button>
-        )}
+        <button
+          onClick={() => handleRefine(viewIdea.id)}
+          disabled={refining === viewIdea.id}
+          className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-purple)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          <IconSparkles size={16} />
+          {refining === viewIdea.id ? t("ideas.refining") : viewIdea.refinedDraft ? t("ideas.reRefine") : t("ideas.refine")}
+        </button>
 
         {/* Linked Research */}
         <IdeaResearchSection ideaId={viewIdea.id} ideaTitle={viewIdea.title} ideaDescription={viewIdea.description} linkedResearch={linkedResearch} setLinkedResearch={setLinkedResearch} t={t} />
@@ -784,6 +803,60 @@ function IdeaSpecSection({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function IdeaFilesSection({
+  idea,
+  onFilesChange,
+}: {
+  idea: Idea;
+  onFilesChange: (idea: Idea, images: string[], attachments: string[]) => Promise<void>;
+}) {
+  return (
+    <div className="space-y-3">
+      {/* Image thumbnails */}
+      {idea.images?.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {idea.images.map((url, i) => (
+            <div key={`img-${i}`} className="relative group w-16 h-16 rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]">
+              <img src={getUploadUrl(url)} alt="" className="w-full h-full object-cover" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* PDF attachment chips */}
+      {idea.attachments?.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {idea.attachments.map((url, i) => {
+            const name = url.split("/").pop() || "document.pdf";
+            const shortName = name.length > 24 ? name.slice(0, 21) + "..." : name;
+            return (
+              <a
+                key={`pdf-${i}`}
+                href={getUploadUrl(url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-xs hover:border-[var(--color-brand-pink)]/30 transition-colors"
+              >
+                <IconFileTypePdf size={14} className="text-red-400 shrink-0" />
+                <span className="text-[var(--color-text-secondary)] truncate max-w-[140px]">{shortName}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Upload zone */}
+      <ImageUpload
+        images={idea.images || []}
+        onChange={(images) => onFilesChange(idea, images, idea.attachments || [])}
+        attachments={idea.attachments || []}
+        onAttachmentsChange={(attachments) => onFilesChange(idea, idea.images || [], attachments)}
+        acceptPdf
+      />
     </div>
   );
 }

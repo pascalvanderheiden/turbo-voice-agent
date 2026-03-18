@@ -126,9 +126,6 @@ export default function SpecDetailPage() {
       <div>
         <h1 className="text-2xl font-semibold gradient-brand-text">{foundation.title.replace(/ — Foundation$/, "")}</h1>
         <div className="flex items-center gap-2 mt-1">
-          <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-[var(--color-brand-pink)]/15 text-[var(--color-brand-pink)]">
-            {t("specs.typeFoundation")}
-          </span>
           <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${
             foundation.status === "optimized"
               ? "bg-green-500/15 text-green-400"
@@ -139,12 +136,8 @@ export default function SpecDetailPage() {
         </div>
       </div>
 
-      {/* Foundation content */}
-      <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
-        <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap">
-          {foundation.content || "—"}
-        </div>
-      </div>
+      {/* Spec content — split into Mockup / Foundation / Features sections */}
+      <SpecContentSections content={foundation.content} />
 
       {/* Foundation actions */}
       <div className="flex gap-2 flex-wrap">
@@ -194,8 +187,8 @@ export default function SpecDetailPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">
             Features
-            {features.length > 0 && (
-              <span className="ml-2 text-sm font-normal text-[var(--color-text-muted)]">({features.length})</span>
+            {(features.length + parseSpecContent(foundation.content).contentFeatures.length) > 0 && (
+              <span className="ml-2 text-sm font-normal text-[var(--color-text-muted)]">({features.length + parseSpecContent(foundation.content).contentFeatures.length})</span>
             )}
           </h2>
           <button
@@ -206,7 +199,7 @@ export default function SpecDetailPage() {
           </button>
         </div>
 
-        {features.length === 0 ? (
+        {features.length === 0 && parseSpecContent(foundation.content).contentFeatures.length === 0 ? (
           <div className="text-center py-10 text-[var(--color-text-muted)]">
             <IconFileCode size={32} stroke={1} className="mx-auto mb-2 opacity-50" />
             <p className="text-sm">No features yet</p>
@@ -214,6 +207,36 @@ export default function SpecDetailPage() {
           </div>
         ) : (
           <div className="space-y-3">
+            {/* In-content features (from spec markdown) */}
+            {parseSpecContent(foundation.content).contentFeatures.map((cf, idx) => {
+              const cfId = `content-feature-${idx}`;
+              const isExpanded = expandedId === cfId;
+              return (
+                <div key={cfId} className="rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] overflow-hidden">
+                  <div
+                    onClick={() => setExpandedId(isExpanded ? null : cfId)}
+                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-[var(--color-bg-tertiary)]/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[var(--color-brand-pink)]">●</span>
+                      <h3 className="font-medium text-sm truncate">{cf.name}</h3>
+                      <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-[var(--color-brand-pink)]/15 text-[var(--color-brand-pink)] flex-shrink-0">
+                        Spec
+                      </span>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-4 pb-4 border-t border-[var(--color-border-dark)]">
+                      <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap pt-3">
+                        {cf.content}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Standalone feature specs */}
             {features.map((feature) => {
               const isExpanded = expandedId === feature.id;
               return (
@@ -526,6 +549,92 @@ function DevelopDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface ParsedSpecContent {
+  mockup: string;
+  foundation: string;
+  contentFeatures: { name: string; content: string }[];
+}
+
+function parseSpecContent(content: string): ParsedSpecContent {
+  const result: ParsedSpecContent = { mockup: "", foundation: "", contentFeatures: [] };
+  if (!content) return result;
+
+  // Extract Mockup Description section
+  const mockupMatch = content.match(/##\s*Mockup\s*Description\s*\n([\s\S]*?)(?=\n##\s|$)/i);
+  if (mockupMatch) result.mockup = mockupMatch[1].trim();
+
+  // Extract Foundation section (under ### Foundation)
+  const foundationMatch = content.match(/###\s*Foundation\s*\n([\s\S]*?)(?=\n###\s|$)/i);
+  if (foundationMatch) result.foundation = foundationMatch[1].trim();
+
+  // Extract individual features (#### Feature: Name)
+  const featuresBlock = content.match(/###\s*Features\s*\n([\s\S]*?)(?=\n##\s[^#]|$)/i);
+  if (featuresBlock) {
+    const block = featuresBlock[1];
+    const featureRegex = /####\s*Feature:\s*(.+?)\n([\s\S]*?)(?=\n####\s|$)/gi;
+    let match;
+    while ((match = featureRegex.exec(block)) !== null) {
+      result.contentFeatures.push({ name: match[1].trim(), content: match[2].trim() });
+    }
+  }
+
+  return result;
+}
+
+function SpecContentSections({ content }: { content: string }) {
+  const [expandedSection, setExpandedSection] = useState<string | null>("mockup");
+  const parsed = parseSpecContent(content);
+
+  if (!content) {
+    return (
+      <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
+        <div className="text-sm text-[var(--color-text-muted)]">—</div>
+      </div>
+    );
+  }
+
+  // If content doesn't match the structured format, show raw
+  if (!parsed.mockup && !parsed.foundation) {
+    return (
+      <div className="p-4 rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
+        <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap">{content}</div>
+      </div>
+    );
+  }
+
+  const sections = [
+    { id: "mockup", label: "Mockup", icon: "🎨", content: parsed.mockup },
+    { id: "foundation", label: "Foundation", icon: "🏗️", content: parsed.foundation },
+  ].filter((s) => s.content);
+
+  return (
+    <div className="space-y-3">
+      {sections.map((section) => {
+        const isExpanded = expandedSection === section.id;
+        return (
+          <div key={section.id} className="rounded-[var(--radius-lg)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] overflow-hidden">
+            <div
+              onClick={() => setExpandedSection(isExpanded ? null : section.id)}
+              className="flex items-center gap-2 p-4 cursor-pointer hover:bg-[var(--color-bg-tertiary)]/50 transition-colors"
+            >
+              <span>{section.icon}</span>
+              <h3 className="font-medium text-sm flex-1">{section.label}</h3>
+              <span className="text-xs text-[var(--color-text-muted)]">{isExpanded ? "▾" : "▸"}</span>
+            </div>
+            {isExpanded && (
+              <div className="px-4 pb-4 border-t border-[var(--color-border-dark)]">
+                <div className="text-sm prose prose-invert max-w-none whitespace-pre-wrap pt-3">
+                  {section.content}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
