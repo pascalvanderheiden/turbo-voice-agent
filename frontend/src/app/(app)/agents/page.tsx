@@ -375,10 +375,8 @@ export default function AgentsPage() {
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="font-medium text-sm truncate">{skill.name}</div>
                       <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 shrink-0">active</span>
-                      {skill.source === "skills.sh" ? (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-brand-cyan)]/15 text-[var(--color-brand-cyan)] shrink-0">skills.sh</span>
-                      ) : (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-brand-purple)]/15 text-[var(--color-brand-purple)] shrink-0">local</span>
+                      {skill.source && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-brand-cyan)]/15 text-[var(--color-brand-cyan)] shrink-0">{skill.source}</span>
                       )}
                     </div>
                     <button
