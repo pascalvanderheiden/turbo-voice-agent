@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { IconUpload, IconX, IconPhoto, IconFileTypePdf } from "@tabler/icons-react";
 import { uploadImage, getUploadUrl } from "@/lib/api";
+import { toast } from "sonner";
 
 interface ImageUploadProps {
   images: string[];
@@ -30,19 +31,29 @@ export function ImageUpload({
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
+      setError(null);
       const fileArray = Array.from(files);
-      const isPdf = (f: File) =>
+      const isPdfFile = (f: File) =>
         f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
       const imageFiles = fileArray.filter((f) => f.type.startsWith("image/"));
-      const pdfFiles = acceptPdf ? fileArray.filter((f) => isPdf(f) && !f.type.startsWith("image/")) : [];
+      const pdfFiles = acceptPdf ? fileArray.filter((f) => isPdfFile(f) && !f.type.startsWith("image/")) : [];
 
       const imagesToUpload = imageFiles.slice(0, maxImages - images.length);
       const pdfsToUpload = pdfFiles.slice(0, maxAttachments - attachments.length);
 
-      if (imagesToUpload.length === 0 && pdfsToUpload.length === 0) return;
+      if (imagesToUpload.length === 0 && pdfsToUpload.length === 0) {
+        if (fileArray.length > 0) {
+          const names = fileArray.map((f) => f.name).join(", ");
+          const msg = `Unsupported file type: ${names}`;
+          setError(msg);
+          toast.error(msg);
+        }
+        return;
+      }
 
       setUploading(true);
       try {
@@ -58,8 +69,10 @@ export function ImageUpload({
         if (newPdfUrls.length > 0 && onAttachmentsChange) {
           onAttachmentsChange([...attachments, ...newPdfUrls]);
         }
-      } catch {
-        // silently fail
+      } catch (err) {
+        const msg = `Upload failed: ${err instanceof Error ? err.message : String(err)}`;
+        setError(msg);
+        toast.error(msg);
       } finally {
         setUploading(false);
       }
@@ -162,7 +175,9 @@ export function ImageUpload({
           className={`flex items-center justify-center gap-2 px-4 py-3 rounded-[var(--radius-md)] border-2 border-dashed cursor-pointer text-sm transition-colors ${
             dragOver
               ? "border-[var(--color-brand-pink)] bg-[var(--color-brand-pink)]/5"
-              : "border-[var(--color-border-dark)] text-[var(--color-text-muted)] hover:border-[var(--color-text-secondary)]"
+              : error
+                ? "border-red-500/50 text-red-400"
+                : "border-[var(--color-border-dark)] text-[var(--color-text-muted)] hover:border-[var(--color-text-secondary)]"
           }`}
         >
           {uploading ? (
@@ -174,6 +189,10 @@ export function ImageUpload({
             </>
           )}
         </div>
+      )}
+
+      {error && (
+        <p className="text-xs text-red-400">{error}</p>
       )}
     </div>
   );
