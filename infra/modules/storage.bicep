@@ -69,6 +69,14 @@ resource marketingVideosContainer 'Microsoft.Storage/storageAccounts/blobService
   }
 }
 
+resource openspecImportsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobServices
+  name: 'openspec-imports'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 output name string = storageAccount.name
 output id string = storageAccount.id
 output key string = storageAccount.listKeys().keys[0].value
