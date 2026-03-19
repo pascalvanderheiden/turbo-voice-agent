@@ -126,6 +126,9 @@ def _create_narrator_pip(
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()
+
+
+class MarketingAgent:
     """Agent that generates promotional videos from dev task screenshots + spec content."""
 
     def __init__(
