@@ -226,6 +226,7 @@ export interface Spec {
   ideaId: string | null;
   status: "draft" | "optimized" | "in-development" | "developed";
   devTaskId?: string | null;
+  formatVersion?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -273,6 +274,26 @@ export const specsApi = {
       method: "POST",
       body: JSON.stringify({ description }),
     }),
+  importOpenspec: async (files: File[]): Promise<{ foundationId: string; featureCount: number; changesFound: number }> => {
+    const form = new FormData();
+    for (const file of files) {
+      const f = file as File & { webkitRelativePath?: string };
+      const relPath = f.webkitRelativePath || f.name;
+      // Strip the top-level folder from the path
+      const stripped = relPath.split("/").slice(1).join("/");
+      form.append("files", file, stripped || file.name);
+    }
+    // Extract folder name from first file's relative path
+    const firstRel = (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath || "";
+    const folderName = firstRel.split("/")[0] || "imported-project";
+    form.append("folder_name", folderName);
+    const res = await authFetch(`${API_BASE}/api/specs/import-openspec`, { method: "POST", body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Import failed" }));
+      throw new Error(err.detail || "Import failed");
+    }
+    return res.json();
+  },
 };
 
 export async function uploadImage(file: File): Promise<string> {

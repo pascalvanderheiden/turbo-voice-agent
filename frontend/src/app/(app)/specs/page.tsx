@@ -7,6 +7,11 @@ import {
   IconSparkles,
   IconChevronRight,
   IconCode,
+  IconUpload,
+  IconLoader2,
+  IconX,
+  IconFileText,
+  IconFolderOpen,
 } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
 import { specsApi, type Spec, type SpecCreate } from "@/lib/api";
@@ -19,6 +24,9 @@ export default function SpecsPage() {
   const [specs, setSpecs] = useState<Spec[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
+  const [importing, setImporting] = useState(false);
   const { t } = useI18n();
   const isMobile = useIsMobile();
 
@@ -47,13 +55,22 @@ export default function SpecsPage() {
           <p className="text-[var(--color-text-secondary)] text-sm mt-1">{t("specs.subtitle")}</p>
         </div>
         {!isMobile && (
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          <IconPlus size={16} />
-          {t("specs.create")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] border border-[var(--color-border-dark)] text-[var(--color-text-secondary)] text-sm font-medium hover:bg-[var(--color-bg-tertiary)] transition-colors"
+          >
+            <IconUpload size={16} />
+            Import OpenSpec
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <IconPlus size={16} />
+            {t("specs.create")}
+          </button>
+        </div>
         )}
       </div>
 
@@ -102,6 +119,11 @@ export default function SpecsPage() {
                       >
                         <IconCode size={10} />
                         Dev Task
+                      </span>
+                    )}
+                    {foundation.formatVersion === "imported" && (
+                      <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">
+                        Imported
                       </span>
                     )}
                   </div>
@@ -192,6 +214,32 @@ export default function SpecsPage() {
           }}
         />
         )
+      )}
+
+      {/* Import OpenSpec Dialog */}
+      {showImport && (
+        <ImportOpenSpecDialog
+          files={importFiles}
+          setFiles={setImportFiles}
+          importing={importing}
+          onClose={() => { setShowImport(false); setImportFiles([]); }}
+          onImport={async () => {
+            if (importFiles.length === 0) return;
+            setImporting(true);
+            try {
+              const result = await specsApi.importOpenspec(importFiles);
+              toast.success(`Imported ${result.featureCount} specs from OpenSpec project`);
+              setShowImport(false);
+              setImportFiles([]);
+              loadData();
+              window.location.href = `/specs/${result.foundationId}`;
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Import failed");
+            } finally {
+              setImporting(false);
+            }
+          }}
+        />
       )}
 
       {/* Mobile FAB */}
@@ -299,6 +347,134 @@ function CreateSpecDialog({
           </button>
           <button onClick={handleSubmit} disabled={submitting || !title.trim()} className="px-4 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50">
             {submitting ? t("specs.saving") : t("specs.save")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportOpenSpecDialog({
+  files,
+  setFiles,
+  importing,
+  onClose,
+  onImport,
+}: {
+  files: File[];
+  setFiles: (f: File[]) => void;
+  importing: boolean;
+  onClose: () => void;
+  onImport: () => Promise<void>;
+}) {
+  const folderName = files.length > 0
+    ? ((files[0] as File & { webkitRelativePath?: string }).webkitRelativePath || "").split("/")[0] || "unknown"
+    : "";
+  const specFiles = files.filter((f) => {
+    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    return /specs\/[^/]+\/spec\.md$/i.test(rel);
+  });
+  const changeFiles = files.filter((f) => {
+    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    return /changes\/[^/]+\/proposal\.md$/i.test(rel);
+  });
+  const hasProject = files.some((f) => {
+    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    return /project\.md$/i.test(rel);
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 w-full max-w-md mx-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-medium text-sm flex items-center gap-2">
+            <IconFolderOpen size={16} className="text-amber-400" />
+            Import OpenSpec Project
+          </h3>
+          <button onClick={onClose} className="p-1 hover:bg-[var(--color-bg-tertiary)] rounded">
+            <IconX size={14} />
+          </button>
+        </div>
+
+        <p className="text-xs text-[var(--color-text-muted)] mb-4">
+          Select a local OpenSpec project folder containing a <code className="px-1 bg-[var(--color-bg-tertiary)] rounded">specs/</code> directory.
+          All specs and change history will be imported.
+        </p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Project Folder</label>
+            <input
+              type="file"
+              /* @ts-expect-error webkitdirectory is non-standard */
+              webkitdirectory=""
+              directory=""
+              onChange={(e) => setFiles(Array.from(e.target.files || []))}
+              className="w-full text-xs text-[var(--color-text-muted)] file:mr-3 file:py-1.5 file:px-3 file:rounded-[var(--radius-md)] file:border-0 file:text-xs file:font-medium file:bg-amber-500/10 file:text-amber-400 hover:file:bg-amber-500/20 file:cursor-pointer file:transition-colors"
+            />
+          </div>
+
+          {files.length > 0 && (
+            <div className="p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] space-y-2">
+              <div className="text-xs font-medium text-[var(--color-text-primary)]">
+                📁 {folderName}
+              </div>
+              <div className="grid grid-cols-2 gap-1 text-[10px] text-[var(--color-text-muted)]">
+                <div className="flex items-center gap-1">
+                  <IconFileCode size={10} className="text-amber-400" />
+                  {specFiles.length} spec{specFiles.length !== 1 ? "s" : ""} found
+                </div>
+                <div className="flex items-center gap-1">
+                  <IconFileText size={10} />
+                  {changeFiles.length} change{changeFiles.length !== 1 ? "s" : ""}
+                </div>
+                <div className="flex items-center gap-1">
+                  {hasProject ? "✓" : "✗"} project.md
+                </div>
+                <div className="flex items-center gap-1">
+                  {files.length} total files
+                </div>
+              </div>
+              {specFiles.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  <div className="text-[10px] font-medium text-[var(--color-text-muted)]">Specs:</div>
+                  {specFiles.slice(0, 10).map((f, i) => {
+                    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+                    const name = rel.match(/specs\/([^/]+)\//)?.[1] || rel;
+                    return (
+                      <div key={i} className="text-[10px] text-amber-400/80 flex items-center gap-1">
+                        <IconFileCode size={10} /> {name}
+                      </div>
+                    );
+                  })}
+                  {specFiles.length > 10 && (
+                    <div className="text-[10px] text-[var(--color-text-muted)]">...and {specFiles.length - 10} more</div>
+                  )}
+                </div>
+              )}
+              {specFiles.length === 0 && (
+                <div className="text-[10px] text-red-400">
+                  ⚠ No specs found — the folder must contain specs/&lt;name&gt;/spec.md files
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 mt-4">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onImport}
+            disabled={importing || specFiles.length === 0}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+          >
+            {importing ? <IconLoader2 size={12} className="animate-spin" /> : <IconUpload size={12} />}
+            Import {specFiles.length > 0 ? `${specFiles.length} Specs` : ""}
           </button>
         </div>
       </div>

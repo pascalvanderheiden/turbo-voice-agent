@@ -62,6 +62,7 @@ class SpecService:
                 "ideaId": data.idea_id,
                 "status": "draft",
                 "docType": "spec",
+                "formatVersion": data.format_version or "v2",
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
             }

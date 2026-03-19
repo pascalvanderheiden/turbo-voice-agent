@@ -133,6 +133,11 @@ export default function SpecDetailPage() {
           }`}>
             {foundation.status === "optimized" ? t("specs.statusOptimized") : t("specs.statusDraft")}
           </span>
+          {foundation.formatVersion === "imported" && (
+            <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-amber-500/15 text-amber-400">
+              Imported
+            </span>
+          )}
         </div>
       </div>
 

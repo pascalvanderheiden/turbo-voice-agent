@@ -48,6 +48,7 @@ class InMemorySpecService(JsonPersistenceMixin):
             "parentId": data.parent_id,
             "ideaId": data.idea_id,
             "status": "draft",
+            "formatVersion": data.format_version or "v2",
             "createdAt": now.isoformat(),
             "updatedAt": now.isoformat(),
         }

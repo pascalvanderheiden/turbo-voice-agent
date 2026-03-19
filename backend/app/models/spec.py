@@ -13,6 +13,7 @@ class SpecBase(BaseModel):
     type: str = Field(default="foundation")  # foundation | feature
     parent_id: str | None = Field(None, alias="parentId")
     idea_id: str | None = Field(None, alias="ideaId")
+    format_version: str | None = Field(None, alias="formatVersion")
 
 
 class SpecCreate(SpecBase):
@@ -38,7 +39,7 @@ class Spec(SpecBase):
 
     id: str
     status: str = "draft"  # draft | optimized | in-development | developed
-    format_version: str = Field("v2", alias="formatVersion")  # v1 (legacy) | v2 (mockup + openspec)
+    format_version: str = Field("v2", alias="formatVersion")  # v1 | v2 | imported
     dev_task_id: str | None = Field(None, alias="devTaskId")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
