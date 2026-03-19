@@ -346,6 +346,17 @@ export interface DevIteration {
   workspacePath?: string;
 }
 
+export interface SquadMember {
+  name: string;
+  role: string;
+  expertise: string;
+  status: string; // idle | working | done
+}
+
+export interface SquadInfo {
+  teamMembers: SquadMember[];
+}
+
 export interface DevTask {
   id: string;
   title: string;
@@ -353,6 +364,7 @@ export interface DevTask {
   mode: string; // mock | sequence
   status: string;
   skillIds?: string[];
+  squad?: SquadInfo;
   currentIteration: number;
   iterations: DevIteration[];
   stages: DevStage[]; // legacy flat view (iteration 0)

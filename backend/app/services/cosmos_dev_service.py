@@ -10,7 +10,7 @@ from azure.cosmos.aio import ContainerProxy, CosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from app.db.init import DATABASE_ID, DEV_TASKS_CONTAINER_ID
-from app.models.dev_task import DevArtifact, DevIteration, DevStage, DevTask, DevTaskCreate
+from app.models.dev_task import DevArtifact, DevIteration, DevStage, DevTask, DevTaskCreate, SquadInfo, SquadMember
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,9 @@ class DevService:
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            squad=SquadInfo(
+                teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
+            ) if (sq := doc.get("squad")) else None,
             premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
@@ -204,6 +207,17 @@ class DevService:
         except Exception:
             logger.exception("Failed to set status on dev task %s", task_id)
             return None
+
+    async def set_squad(self, task_id: str, squad_data: dict) -> None:
+        """Store squad metadata on a dev task."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=task_id, partition_key=self._user_id)
+            doc["squad"] = squad_data
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            await container.upsert_item(doc)
+        except Exception:
+            logger.exception("Failed to set squad on dev task %s", task_id)
 
     async def add_premium_requests(self, task_id: str, count: int) -> None:
         """Increment the premium request counter for a task."""

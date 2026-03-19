@@ -339,7 +339,7 @@ class DevAgent:
                 })
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
-        """Mockup pipeline: openspec init → propose → apply → archive → screenshots."""
+        """Mockup pipeline: init → openspec → skills → squad → propose → apply → archive → screenshots."""
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -357,23 +357,49 @@ class DevAgent:
             raise_on_error=False,
         )
 
-        # Stage: init — openspec init sets up skills for Copilot CLI
+        # Stage: init — workspace setup
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
             task_id=task_id,
-            command="openspec",
-            args=["init", "--tools", "github-copilot", "--force"],
+            command=f"cd {work_dir} && git init -q && git config user.email 'agent@sandbox' && git config user.name 'Sandbox Agent'",
+            args=[],
             stage_label="init",
             work_dir=work_dir,
+            raise_on_error=False,
         )
-        # Install user-selected skills into the sandbox workspace
+        await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+
+        # Stage: openspec — initialize OpenSpec tooling
+        await svc.set_iteration_stage_status(task_id, 0, "openspec", "running")
+        logger.info("Mockup openspec: task=%s", task_id)
+        await self._sandbox_exec(
+            task_id=task_id,
+            command="openspec",
+            args=["init", "--tools", "github-copilot", "--force"],
+            stage_label="openspec",
+            work_dir=work_dir,
+        )
+        await svc.set_iteration_stage_status(task_id, 0, "openspec", "completed")
+
+        # Stage: skills — install marketplace + local skills
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
         n_skills = await self._install_skills_in_sandbox(
             task_id, task, work_dir, user_id=user_id,
         )
         if n_skills:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
-        await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+        else:
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "stdout", "data": "No skills to install\n", "stage": "skills",
+                })
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
+
+        # Stage: squad — initialize squad team from spec
+        await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
+        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
 
         # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
@@ -553,23 +579,43 @@ class DevAgent:
             raise_on_error=False,
         )
 
-        # ── Foundation: init → propose → apply ───────────────────────
+        # ── Foundation: init → openspec → skills → squad → propose → apply ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
             task_id=task_id,
-            command="openspec",
-            args=["init", "--tools", "github-copilot", "--force"],
+            command=f"cd {work_dir} && git init -q && git config user.email 'agent@sandbox' && git config user.name 'Sandbox Agent'",
+            args=[],
             stage_label="init",
             work_dir=work_dir,
+            raise_on_error=False,
         )
-        # Install user-selected skills into the sandbox workspace
+        await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+
+        # OpenSpec stage
+        await svc.set_iteration_stage_status(task_id, 0, "openspec", "running")
+        await self._sandbox_exec(
+            task_id=task_id,
+            command="openspec",
+            args=["init", "--tools", "github-copilot", "--force"],
+            stage_label="openspec",
+            work_dir=work_dir,
+        )
+        await svc.set_iteration_stage_status(task_id, 0, "openspec", "completed")
+
+        # Skills stage
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
         n_skills = await self._install_skills_in_sandbox(
             task_id, task, work_dir, user_id=user_id,
         )
         if n_skills:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
-        await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
+
+        # Squad stage
+        await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
+        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
 
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("OpenSpec foundation propose: task=%s", task_id)
@@ -1567,6 +1613,188 @@ class DevAgent:
         if suggested:
             await self._service.set_skill_ids(task_id, suggested)
             logger.info("Auto-attached skills %s to task %s", suggested, task_id)
+
+    # ── Squad integration ─────────────────────────────────────────────
+
+    def _generate_squad_team(self, spec_content: str) -> list[dict]:
+        """Parse spec content for tech keywords and return squad team roster."""
+        content_lower = spec_content.lower() if spec_content else ""
+        team: list[dict] = []
+
+        # Always-present roles
+        team.append({"name": "Hicks", "role": "Lead", "expertise": "Architecture, code review, scope", "status": "idle"})
+
+        # Dynamic roles based on tech stack detection
+        frontend_kw = ["react", "next.js", "nextjs", "vue", "angular", "svelte", "tailwind", "css", "html", "frontend", "ui component"]
+        backend_kw = ["python", "fastapi", "flask", "django", "express", "node.js", "api", "endpoint", "backend", "server"]
+        test_kw = ["test", "jest", "pytest", "playwright", "cypress", "testing", "spec"]
+        devops_kw = ["docker", "kubernetes", "bicep", "terraform", "ci/cd", "pipeline", "deploy", "infrastructure"]
+
+        has_frontend = any(kw in content_lower for kw in frontend_kw)
+        has_backend = any(kw in content_lower for kw in backend_kw)
+        has_testing = any(kw in content_lower for kw in test_kw)
+        has_devops = any(kw in content_lower for kw in devops_kw)
+
+        if has_frontend:
+            team.append({"name": "Ripley", "role": "Frontend Dev", "expertise": "React, TypeScript, UI", "status": "idle"})
+        if has_backend:
+            team.append({"name": "Dallas", "role": "Backend Dev", "expertise": "Python, FastAPI, APIs", "status": "idle"})
+        if has_testing or has_frontend or has_backend:
+            team.append({"name": "Lambert", "role": "Tester", "expertise": "Jest, Playwright, integration tests", "status": "idle"})
+        if has_devops:
+            team.append({"name": "Parker", "role": "DevOps", "expertise": "Docker, CI/CD, infrastructure", "status": "idle"})
+
+        # If nothing detected, add a generic Developer
+        if len(team) == 1:
+            team.append({"name": "Dallas", "role": "Developer", "expertise": "Full-stack development", "status": "idle"})
+            team.append({"name": "Lambert", "role": "Tester", "expertise": "Testing, quality assurance", "status": "idle"})
+
+        # Scribe is always last (silent role)
+        team.append({"name": "Scribe", "role": "Scribe", "expertise": "Memory, decisions, session logs", "status": "idle"})
+
+        return team
+
+    def _generate_squad_files(self, team: list[dict], spec_content: str) -> dict[str, str]:
+        """Generate .squad/ config files from team and spec content."""
+        # team.md
+        team_lines = ["## Team\n"]
+        role_emojis = {
+            "Lead": "🏗️", "Frontend Dev": "⚛️", "Backend Dev": "🔧",
+            "Tester": "🧪", "DevOps": "🚀", "Developer": "💻", "Scribe": "📋",
+        }
+        for m in team:
+            emoji = role_emojis.get(m["role"], "👤")
+            silent = " (silent)" if m["role"] == "Scribe" else ""
+            team_lines.append(f"{emoji}  {m['name']}  — {m['role']}{silent}  {m['expertise']}")
+        team_md = "\n".join(team_lines) + "\n"
+
+        # routing.md — map work to roles
+        routing_lines = ["# Routing Rules\n"]
+        for m in team:
+            if m["role"] == "Frontend Dev":
+                routing_lines.append(f"**Frontend changes** → {m['name']}")
+                routing_lines.append(f"**UI/UX work** → {m['name']}")
+            elif m["role"] == "Backend Dev":
+                routing_lines.append(f"**Backend API work** → {m['name']}")
+                routing_lines.append(f"**Database changes** → {m['name']}")
+            elif m["role"] == "Tester":
+                routing_lines.append(f"**Test writing** → {m['name']}")
+            elif m["role"] == "DevOps":
+                routing_lines.append(f"**Infrastructure** → {m['name']}")
+            elif m["role"] == "Lead":
+                routing_lines.append(f"**Architecture decisions** → {m['name']}")
+        routing_md = "\n".join(routing_lines) + "\n"
+
+        # directives.md — extract conventions from spec
+        directives_lines = ["# Team Directives\n"]
+        directives_lines.append("- Follow the project spec for all implementation decisions")
+        directives_lines.append("- Keep changes minimal and focused on the task at hand")
+        directives_lines.append("- Write tests alongside implementation when applicable")
+        if "typescript" in (spec_content or "").lower():
+            directives_lines.append("- Use TypeScript strict mode")
+        if "python" in (spec_content or "").lower():
+            directives_lines.append("- Follow PEP 8 and use type hints")
+        directives_md = "\n".join(directives_lines) + "\n"
+
+        return {
+            ".squad/team.md": team_md,
+            ".squad/routing.md": routing_md,
+            ".squad/directives.md": directives_md,
+        }
+
+    async def _run_squad_stage(
+        self, task_id: str, work_dir: str, spec_content: str, user_id: str,
+    ) -> None:
+        """Initialize squad-pr in the workspace and hire agents based on spec."""
+        svc = self._service.with_user(user_id)
+        logger.info("Squad stage: task=%s", task_id)
+
+        # Step 1: squad init
+        if task_id in _pipeline_outputs:
+            _pipeline_outputs[task_id].append({
+                "type": "stdout", "data": "── Initializing Squad ──\n", "stage": "squad",
+            })
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="squad",
+                args=["init"],
+                stage_label="squad-init",
+                work_dir=work_dir,
+                timeout=60,
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("squad init failed (non-fatal): %s", exc)
+
+        # Step 2: Generate team from spec
+        team = self._generate_squad_team(spec_content)
+        squad_files = self._generate_squad_files(team, spec_content)
+
+        # Step 3: Write .squad/ config files
+        for file_path, content in squad_files.items():
+            full_path = f"{work_dir}/{file_path}"
+            escaped = content.replace("'", "'\\''")
+            try:
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    command=f"mkdir -p $(dirname {full_path}) && printf '%s' '{escaped}' > {full_path}",
+                    args=[],
+                    stage_label="squad-config",
+                    work_dir=work_dir,
+                    timeout=15,
+                    raise_on_error=False,
+                )
+            except Exception as exc:
+                logger.warning("Failed to write %s: %s", file_path, exc)
+
+        # Step 4: Hire each agent
+        for member in team:
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "stdout",
+                    "data": f"  Hiring {member['name']} as {member['role']}...\n",
+                    "stage": "squad",
+                })
+            try:
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    command="squad",
+                    args=["hire", "--name", member["name"], "--role", member["role"]],
+                    stage_label=f"squad-hire-{member['name'].lower()}",
+                    work_dir=work_dir,
+                    timeout=30,
+                    raise_on_error=False,
+                )
+            except Exception as exc:
+                logger.warning("squad hire %s failed: %s", member["name"], exc)
+
+        # Step 5: squad doctor (non-fatal)
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="squad",
+                args=["doctor"],
+                stage_label="squad-doctor",
+                work_dir=work_dir,
+                timeout=30,
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("squad doctor failed (non-fatal): %s", exc)
+
+        # Step 6: Store squad metadata
+        squad_data = {"teamMembers": team}
+        await svc.set_squad(task_id, squad_data)
+
+        if task_id in _pipeline_outputs:
+            names = ", ".join(f"{m['name']} ({m['role']})" for m in team)
+            _pipeline_outputs[task_id].append({
+                "type": "stdout",
+                "data": f"── Squad ready: {names} ──\n",
+                "stage": "squad",
+            })
+        logger.info("Squad stage complete: %d members for task %s", len(team), task_id)
 
     async def _install_skills_in_sandbox(
         self, task_id: str, task, work_dir: str, user_id: str | None = None,

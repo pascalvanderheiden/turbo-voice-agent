@@ -63,6 +63,25 @@ class DevDecision(BaseModel):
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
 
+class SquadMember(BaseModel):
+    """A member of the squad team assigned to a dev task."""
+
+    name: str
+    role: str
+    expertise: str = ""
+    status: str = "idle"  # idle | working | done
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class SquadInfo(BaseModel):
+    """Squad metadata for a dev task."""
+
+    team_members: list[SquadMember] = Field(default_factory=list, alias="teamMembers")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
 class DevTask(BaseModel):
     """API response model for a development task."""
 
@@ -81,6 +100,7 @@ class DevTask(BaseModel):
     artifact_url: str | None = Field(None, alias="artifactUrl")
     sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")
     decisions: list[DevDecision] = Field(default_factory=list)
+    squad: SquadInfo | None = None
     premium_requests: int = Field(0, alias="premiumRequests")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")

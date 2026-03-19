@@ -6,12 +6,12 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from app.models.dev_task import DevArtifact, DevIteration, DevStage, DevTask, DevTaskCreate
+from app.models.dev_task import DevArtifact, DevIteration, DevStage, DevTask, DevTaskCreate, SquadInfo, SquadMember
 from app.services.json_persistence import JsonPersistenceMixin
 
 logger = logging.getLogger(__name__)
 
-STAGE_NAMES = ["init", "propose", "apply", "archive", "screenshots"]
+STAGE_NAMES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive", "screenshots"]
 
 
 def _default_stages() -> list[dict]:
@@ -65,6 +65,9 @@ class InMemoryDevService(JsonPersistenceMixin):
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            squad=SquadInfo(
+                teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
+            ) if (sq := doc.get("squad")) else None,
             premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
@@ -148,6 +151,15 @@ class InMemoryDevService(JsonPersistenceMixin):
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
         return self._doc_to_model(doc)
+
+    async def set_squad(self, task_id: str, squad_data: dict) -> None:
+        """Store squad metadata on a dev task."""
+        doc = self._store.get(task_id)
+        if not doc:
+            return
+        doc["squad"] = squad_data
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
 
     async def add_premium_requests(self, task_id: str, count: int) -> None:
         """Increment the premium request counter for a task."""

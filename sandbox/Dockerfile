@@ -31,6 +31,9 @@ RUN npm install -g @github/copilot
 # OpenSpec CLI (generates skills for Copilot CLI via `openspec init --tools github-copilot`)
 RUN npm install -g @fission-ai/openspec@latest
 
+# Squad CLI (multi-agent runtime for GitHub Copilot)
+RUN npm install -g @bradygaster/squad-cli
+
 # Playwright npm package (browser install deferred to after user creation)
 RUN npm install -g playwright
 

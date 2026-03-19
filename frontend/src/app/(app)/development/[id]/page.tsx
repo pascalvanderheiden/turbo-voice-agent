@@ -22,14 +22,20 @@ import {
   IconVideo,
   IconX,
   IconTerminal2,
+  IconFileCode,
+  IconPuzzle,
+  IconUsersGroup,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, getAccessToken } from "@/lib/api";
+import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
 const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: string; color: string }> = {
   init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
+  openspec:    { Icon: IconFileCode,           label: "OpenSpec",    color: "var(--color-brand-purple)" },
+  skills:      { Icon: IconPuzzle,             label: "Skills",      color: "var(--color-brand-cyan)" },
+  squad:       { Icon: IconUsersGroup,         label: "Squad",       color: "var(--color-brand-pink)" },
   propose:     { Icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
   apply:       { Icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
   archive:     { Icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
@@ -252,6 +258,52 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
   );
 }
 
+const ROLE_EMOJI: Record<string, string> = {
+  Lead: "🏗️", "Frontend Dev": "⚛️", "Backend Dev": "🔧",
+  Tester: "🧪", DevOps: "🚀", Developer: "💻", Scribe: "📋",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  idle: "var(--color-text-muted)",
+  working: "var(--color-brand-cyan)",
+  done: "#22C55E",
+};
+
+function SquadPanel({ squad }: { squad: SquadInfo }) {
+  if (!squad?.teamMembers?.length) return null;
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <IconUsersGroup size={18} className="text-[var(--color-brand-pink)]" />
+        <h3 className="text-sm font-semibold">Squad</h3>
+        <span className="text-xs text-[var(--color-text-muted)]">{squad.teamMembers.length} members</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+        {squad.teamMembers.map((m) => (
+          <div
+            key={m.name}
+            className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-primary)] bg-[var(--color-bg-tertiary)] p-2.5"
+          >
+            <span className="text-lg leading-none mt-0.5">{ROLE_EMOJI[m.role] ?? "👤"}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-medium truncate">{m.name}</span>
+                <span
+                  className="inline-block w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
+                  title={m.status}
+                />
+              </div>
+              <span className="text-[11px] text-[var(--color-brand-cyan)] leading-tight block">{m.role}</span>
+              <span className="text-[10px] text-[var(--color-text-muted)] leading-tight block truncate">{m.expertise}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function DevTaskDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -445,6 +497,9 @@ export default function DevTaskDetailPage() {
         </h2>
         <IterationStages stages={iterations[activeIteration]?.stages || task.stages} taskFailed={task.status === "failed"} />
       </div>
+
+      {/* Squad Team */}
+      {task.squad && <SquadPanel squad={task.squad} />}
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
