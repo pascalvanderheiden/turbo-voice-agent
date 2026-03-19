@@ -156,10 +156,17 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
   const [connected, setConnected] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
+  const partialRef = useRef<string>("");
 
   useEffect(() => {
     if (!isRunning) {
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
+      // Flush any remaining partial line
+      if (partialRef.current) {
+        const remaining = partialRef.current;
+        partialRef.current = "";
+        setLines((prev) => [...prev, remaining].slice(-500));
+      }
       setConnected(false);
       return;
     }
@@ -185,12 +192,24 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
         try {
           const entry = JSON.parse(ev.data);
           if (entry.type === "stdout" || entry.type === "stderr" || entry.type === "stage" || entry.type === "decision") {
-            setLines((prev) => {
-              const newLines = [...prev, entry.data];
-              return newLines.slice(-200);
-            });
+            // Buffer partial lines: accumulate text until we see newlines
+            const chunk = entry.data as string;
+            const combined = partialRef.current + chunk;
+            const parts = combined.split("\n");
+            // Last element is the incomplete tail (empty string if chunk ended with \n)
+            partialRef.current = parts.pop() ?? "";
+            // All other elements are complete lines
+            if (parts.length > 0) {
+              setLines((prev) => [...prev, ...parts].slice(-500));
+            }
           }
           if (entry.type === "exit") {
+            // Flush remaining partial line
+            if (partialRef.current) {
+              const remaining = partialRef.current;
+              partialRef.current = "";
+              setLines((prev) => [...prev, remaining].slice(-500));
+            }
             console.log(`[SSE-DIAG] Exit event for task=${taskId}`);
             setConnected(false);
             es.close();

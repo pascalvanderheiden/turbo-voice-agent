@@ -380,7 +380,13 @@ class DevAgent:
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
             task_id=task_id,
-            command=f"cd {work_dir} && git init -q && git config user.email 'agent@sandbox' && git config user.name 'Sandbox Agent'",
+            command=(
+                f"cd {work_dir} && git init -q"
+                " && git config user.email 'agent@sandbox'"
+                " && git config user.name 'Sandbox Agent'"
+                " && git commit --allow-empty -m 'init' -q"
+                " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
+            ),
             args=[],
             stage_label="init",
             work_dir=work_dir,
@@ -602,7 +608,13 @@ class DevAgent:
         logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
             task_id=task_id,
-            command=f"cd {work_dir} && git init -q && git config user.email 'agent@sandbox' && git config user.name 'Sandbox Agent'",
+            command=(
+                f"cd {work_dir} && git init -q"
+                " && git config user.email 'agent@sandbox'"
+                " && git config user.name 'Sandbox Agent'"
+                " && git commit --allow-empty -m 'init' -q"
+                " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
+            ),
             args=[],
             stage_label="init",
             work_dir=work_dir,
@@ -1680,8 +1692,8 @@ class DevAgent:
 
     def _generate_squad_files(self, team: list[dict], spec_content: str) -> dict[str, str]:
         """Generate .squad/ config files from team and spec content."""
-        # team.md
-        team_lines = ["## Team\n"]
+        # team.md — squad-pr expects "## Members" header
+        team_lines = ["## Members\n"]
         role_emojis = {
             "Lead": "🏗️", "Frontend Dev": "⚛️", "Backend Dev": "🔧",
             "Tester": "🧪", "DevOps": "🚀", "Developer": "💻", "Scribe": "📋",
@@ -1750,6 +1762,27 @@ class DevAgent:
             )
         except Exception as exc:
             logger.warning("squad init failed (non-fatal): %s", exc)
+
+        # Ensure squad config uses relative teamRoot and casting/registry.json exists
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"mkdir -p {work_dir}/.squad/casting"
+                    f" && test -f {work_dir}/.squad/casting/registry.json"
+                    f" || echo '[]' > {work_dir}/.squad/casting/registry.json"
+                    f" && if [ -f {work_dir}/.squad/config.json ]; then"
+                    f"   sed -i 's|\"teamRoot\":.*|\"teamRoot\": \".\",|'"
+                    f"   {work_dir}/.squad/config.json; fi"
+                ),
+                args=[],
+                stage_label="squad-config-fix",
+                work_dir=work_dir,
+                timeout=15,
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("squad config fix failed (non-fatal): %s", exc)
 
         # Step 2: Generate team from spec
         team = self._generate_squad_team(spec_content)
