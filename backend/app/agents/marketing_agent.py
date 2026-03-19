@@ -2,12 +2,14 @@
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
 from pathlib import Path
 
 from openai import AsyncAzureOpenAI
+from PIL import Image
 
 from app.models.marketing import MarketingVideo
 from app.services.memory_marketing_service import InMemoryMarketingService
@@ -15,6 +17,35 @@ from app.services.memory_marketing_service import InMemoryMarketingService
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+
+
+def _resize_image_to_match(image_bytes: bytes, width: int, height: int) -> tuple[bytes, str, str]:
+    """Resize image bytes to exactly width×height, returning (resized_bytes, mime, ext).
+
+    Uses letterboxing (black bars) to preserve aspect ratio.
+    """
+    img = Image.open(io.BytesIO(image_bytes))
+    img = img.convert("RGB")
+
+    # Letterbox: fit within target, pad with black
+    img_ratio = img.width / img.height
+    target_ratio = width / height
+    if img_ratio > target_ratio:
+        new_w = width
+        new_h = int(width / img_ratio)
+    else:
+        new_h = height
+        new_w = int(height * img_ratio)
+
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    paste_x = (width - new_w) // 2
+    paste_y = (height - new_h) // 2
+    canvas.paste(img, (paste_x, paste_y))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue(), "image/png", "png"
 
 
 class MarketingAgent:
@@ -489,15 +520,9 @@ class MarketingAgent:
                         logger.info("Segment %d: attaching screenshot '%s' as input image", idx, screenshots[screenshot_idx][0])
 
                     if input_image:
-                        # Detect image type
-                        mime = "image/jpeg"
-                        ext = "jpg"
-                        if input_image[:4] == b'\x89PNG':
-                            mime = "image/png"
-                            ext = "png"
-                        elif input_image[:4] == b'RIFF' and input_image[8:12] == b'WEBP':
-                            mime = "image/webp"
-                            ext = "webp"
+                        # Resize to match requested video dimensions (1280x720)
+                        input_image, mime, ext = _resize_image_to_match(input_image, 1280, 720)
+                        logger.info("Segment %d: resized input image to 1280x720 (%s)", idx, mime)
 
                         # Use multipart/form-data so input_reference is sent as a file upload
                         form = aiohttp.FormData()
