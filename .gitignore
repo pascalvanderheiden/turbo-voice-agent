@@ -30,3 +30,6 @@ Thumbs.db
 .expo/
 ios/
 android/
+
+# Deploy cache busting
+.build-stamp

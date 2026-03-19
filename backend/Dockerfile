@@ -24,8 +24,7 @@ RUN python3 -c "import tomllib, pathlib; \
 # Install Playwright Chromium browser (used by dev pipeline test stage)
 RUN playwright install --with-deps chromium
 
-# Cache-bust: ARG changes every deploy to ensure COPY picks up new files
-ARG CACHEBUST=1
+# Copy app source (`.build-stamp` file changes each deploy to bust cache)
 COPY . .
 
 # Verify critical route modules are importable (fail fast if not)

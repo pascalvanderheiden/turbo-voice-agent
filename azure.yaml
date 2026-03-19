@@ -16,8 +16,6 @@ services:
       path: ./Dockerfile
       context: .
       remoteBuild: true
-      buildArgs:
-        CACHEBUST: "${AZURE_DEV_TIMESTAMP}"
 
   frontend:
     host: containerapp
