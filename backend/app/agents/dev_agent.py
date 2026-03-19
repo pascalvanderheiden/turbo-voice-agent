@@ -1486,11 +1486,12 @@ class DevAgent:
     async def _install_skills_in_sandbox(
         self, task_id: str, task, work_dir: str, user_id: str | None = None,
     ) -> int:
-        """Install activated skills in sandbox by running their npx commands.
+        """Install activated skills in sandbox.
 
-        For each skill attached to the task, fetches the npxCommand from
-        Cosmos DB and executes it in the sandbox via _sandbox_exec().
-        After installation, verifies each skill has a valid SKILL.md file.
+        Marketplace skills are installed via their npx commands.
+        Local skills (source=blob storage) are already synced by entrypoint.sh
+        to ~/.copilot/skills/ and are skipped here.
+        After installation, runs a single CLI prompt to verify all skills.
         Returns the number of skills successfully installed.
         """
         if not self._cosmos_skills or not task.skill_ids:
@@ -1503,6 +1504,18 @@ class DevAgent:
 
         installed = 0
         for skill_name, npx_cmd in npx_map.items():
+            # Local skills are pre-synced from blob storage — skip npx install
+            if npx_cmd == "__local__":
+                if task_id in _pipeline_outputs:
+                    _pipeline_outputs[task_id].append({
+                        "type": "stdout",
+                        "data": f"── {skill_name} (local — pre-synced from blob) ──\n",
+                        "stage": "install-skills",
+                    })
+                installed += 1
+                logger.info("Skill '%s' is local (blob-synced), skipping npx install", skill_name)
+                continue
+
             if task_id in _pipeline_outputs:
                 _pipeline_outputs[task_id].append({
                     "type": "stdout",
@@ -1536,37 +1549,30 @@ class DevAgent:
                 "stage": "install-skills",
             })
 
-        # ── Verify installed skills ──────────────────────────────────
-        await self._verify_skills_in_sandbox(task_id, work_dir, list(npx_map.keys()))
+        # ── Verify all skills with a single CLI prompt ───────────────
+        await self._verify_skills_in_sandbox(task_id, work_dir)
 
         return installed
 
     async def _verify_skills_in_sandbox(
-        self, task_id: str, work_dir: str, expected_skills: list[str],
+        self, task_id: str, work_dir: str,
     ) -> None:
-        """Verify skills are properly installed by asking the Copilot CLI.
+        """Verify skills by asking the Copilot CLI: 'What skills do you have?'
 
-        Uses a Copilot CLI prompt to list all available skills, confirming
-        the CLI actually sees them (not just that files exist on disk).
-        Uses claude-haiku-4.5 (cheap model) to minimize premium request cost.
+        Single simple prompt — no distinction between project/user skills.
+        Uses claude-haiku-4.5 (cheap) to minimize premium request cost.
         """
         if task_id in _pipeline_outputs:
             _pipeline_outputs[task_id].append({
                 "type": "stdout",
-                "data": "── verify-skills (CLI) ──\n",
+                "data": "── verify-skills ──\n",
                 "stage": "verify-skills",
             })
 
         try:
-            # First, reload skills so the CLI picks up newly installed ones
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=(
-                    "Reload all your skills from disk, then list every skill "
-                    "you have available. For each skill, show its name and "
-                    "location (e.g. .github/skills/ or ~/.copilot/skills/). "
-                    "Include skills from all locations."
-                ),
+                prompt="What skills do you have?",
                 model="claude-haiku-4.5",
                 stage_label="verify-skills",
                 work_dir=work_dir,

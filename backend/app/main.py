@@ -449,7 +449,10 @@ async def activate_skill(body: SkillInstallRequest, request: Request):
     if not _cosmos_skills:
         return {"error": "Skills service not available"}
     svc = _cosmos_skills.with_user(user_id)
-    npx_cmd = body.npxCommand or f"npx -y degit {body.repo}/{body.skillName} .github/skills/{body.skillName}"
+    npx_cmd = body.npxCommand or (
+        "__local__" if body.repo == "local"
+        else f"npx -y degit {body.repo}/{body.skillName} .github/skills/{body.skillName}"
+    )
     result = await svc.activate_skill(body.skillName, body.description or "", body.repo, npx_cmd)
     logger.info("Activated skill '%s' for user=%s", body.skillName, user_id)
     return {"name": result["name"], "success": True}
