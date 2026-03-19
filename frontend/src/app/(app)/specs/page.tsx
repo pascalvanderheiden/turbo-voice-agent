@@ -405,13 +405,20 @@ function ImportOpenSpecDialog({
           <div>
             <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Project Folder</label>
             <input
+              ref={(el) => { if (el) el.setAttribute("webkitdirectory", ""); }}
               type="file"
-              /* @ts-expect-error webkitdirectory is non-standard */
-              webkitdirectory=""
-              directory=""
+              id="openspec-folder-input"
+              className="hidden"
               onChange={(e) => setFiles(Array.from(e.target.files || []))}
-              className="w-full text-xs text-[var(--color-text-muted)] file:mr-3 file:py-1.5 file:px-3 file:rounded-[var(--radius-md)] file:border-0 file:text-xs file:font-medium file:bg-amber-500/10 file:text-amber-400 hover:file:bg-amber-500/20 file:cursor-pointer file:transition-colors"
             />
+            <button
+              type="button"
+              onClick={() => document.getElementById("openspec-folder-input")?.click()}
+              className="flex items-center gap-2 w-full px-3 py-2 text-xs rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-dark)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:border-amber-500/40 transition-colors"
+            >
+              <IconFolderOpen size={14} className="text-amber-400" />
+              {files.length > 0 ? `${folderName} (${files.length} files)` : "Select Folder"}
+            </button>
           </div>
 
           {files.length > 0 && (
