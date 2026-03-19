@@ -536,39 +536,60 @@ export default function AgentsPage() {
               </button>
             </div>
             <p className="text-xs text-[var(--color-text-muted)] mb-4">
-              Upload a skill directory (SKILL.md + supporting files) to Azure Blob Storage.
-              The skill will be available in sandbox containers on next startup.
+              Select a skill folder (must contain SKILL.md). All files and subfolders will be
+              uploaded to Azure Blob Storage and available in sandbox containers on next startup.
             </p>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Skill Name</label>
-                <input
-                  type="text"
-                  placeholder="my-custom-skill"
-                  value={uploadName}
-                  onChange={(e) => setUploadName(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-purple)] transition-colors"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Files (SKILL.md required)</label>
+                <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Skill Folder</label>
                 <input
                   type="file"
-                  multiple
-                  accept=".md,.txt,.json,.yaml,.yml,.js,.ts,.py"
-                  onChange={(e) => setUploadFiles(Array.from(e.target.files || []))}
+                  /* @ts-expect-error webkitdirectory is non-standard but supported in Chrome/Edge/Safari */
+                  webkitdirectory=""
+                  directory=""
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    setUploadFiles(files);
+                    // Auto-extract skill name from the folder name (first path segment)
+                    if (files.length > 0) {
+                      const relPath = (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath || "";
+                      const folderName = relPath.split("/")[0];
+                      if (folderName) setUploadName(folderName);
+                    }
+                  }}
                   className="w-full text-xs text-[var(--color-text-muted)] file:mr-3 file:py-1.5 file:px-3 file:rounded-[var(--radius-md)] file:border-0 file:text-xs file:font-medium file:bg-[var(--color-brand-purple)]/10 file:text-[var(--color-brand-purple)] hover:file:bg-[var(--color-brand-purple)]/20 file:cursor-pointer file:transition-colors"
                 />
                 {uploadFiles.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {uploadFiles.map((f) => (
-                      <div key={f.name} className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
-                        <IconFileText size={10} /> {f.name} ({(f.size / 1024).toFixed(1)} KB)
-                      </div>
-                    ))}
+                  <div className="mt-2 max-h-40 overflow-y-auto space-y-0.5">
+                    <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1">
+                      {uploadFiles.length} file{uploadFiles.length !== 1 ? "s" : ""} in &ldquo;{uploadName}&rdquo;
+                    </div>
+                    {uploadFiles.slice(0, 20).map((f, i) => {
+                      const relPath = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+                      const displayPath = relPath.split("/").slice(1).join("/");
+                      return (
+                        <div key={i} className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1 truncate">
+                          <IconFileText size={10} className="shrink-0" /> {displayPath}
+                        </div>
+                      );
+                    })}
+                    {uploadFiles.length > 20 && (
+                      <div className="text-[10px] text-[var(--color-text-muted)]">...and {uploadFiles.length - 20} more</div>
+                    )}
                   </div>
                 )}
               </div>
+              {uploadName && (
+                <div>
+                  <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Skill Name</label>
+                  <input
+                    type="text"
+                    value={uploadName}
+                    onChange={(e) => setUploadName(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-purple)] transition-colors"
+                  />
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button

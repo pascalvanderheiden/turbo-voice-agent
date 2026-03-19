@@ -383,7 +383,12 @@ export const skillsApi = {
     fetchApi(`/api/dev/suggest-skills?specId=${encodeURIComponent(specId)}`),
   uploadLocal: async (skillName: string, files: File[]): Promise<{ success: boolean; skillName: string; uploadedFiles: string[]; message: string }> => {
     const form = new FormData();
-    files.forEach((f) => form.append("files", f));
+    files.forEach((f) => {
+      // Preserve subfolder structure: strip the top-level folder from webkitRelativePath
+      const relPath = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+      const subPath = relPath ? relPath.split("/").slice(1).join("/") : f.name;
+      form.append("files", f, subPath);
+    });
     const resp = await authFetch(`${API_BASE}/api/dev/skills/upload-local?skill_name=${encodeURIComponent(skillName)}`, {
       method: "POST",
       body: form,
