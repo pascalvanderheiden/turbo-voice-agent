@@ -392,23 +392,94 @@ class DevAgent:
         )
         await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
 
-        # Stage: apply — Copilot CLI implements the proposal via openspec-apply
+        # Stage: apply — incremental per-task apply with retry on timeout
         await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-apply-change skill to implement all tasks "
-                "from the proposal. Work through every task until all are complete. "
-                "Fix any build errors along the way."
-            ),
-            model=model,
-            stage_label="apply",
-            stall_timeout=600,
-            timeout=2400,
-            raise_on_error=False,
-            work_dir=work_dir,
-            continue_session=True,
-        )
+
+        # Try to find task list so we can apply incrementally (more reliable)
+        task_list: list[str] = []
+        try:
+            tasks_output = await self._sandbox_exec(
+                task_id=task_id,
+                command=f"cat {work_dir}/openspec/changes/*/tasks.md 2>/dev/null || echo ''",
+                args=[],
+                stage_label="find-tasks",
+                timeout=15,
+                stall_timeout=10,
+                raise_on_error=False,
+                work_dir=work_dir,
+            )
+            # Extract checkbox items: "- [ ] 1.1 Some task"
+            import re
+            task_list = re.findall(
+                r"-\s*\[[ x]\]\s*\d+\.\d+\s+(.+)", tasks_output,
+            )
+        except Exception:
+            pass
+
+        if task_list:
+            # Per-task incremental apply (smaller prompts, less likely to timeout)
+            logger.info("Mockup apply: %d tasks found, applying incrementally", len(task_list))
+            for i, task_desc in enumerate(task_list):
+                try:
+                    await self._sandbox_exec(
+                        task_id=task_id,
+                        prompt=(
+                            f"Use the openspec-apply-change skill. Implement this specific task "
+                            f"and mark it done: {task_desc}"
+                        ),
+                        model=model,
+                        stage_label=f"apply-{i + 1}",
+                        timeout=1200,
+                        stall_timeout=300,
+                        raise_on_error=False,
+                        work_dir=work_dir,
+                        continue_session=True,
+                    )
+                except Exception as exc:
+                    logger.warning("Mockup apply task %d failed: %s", i + 1, exc)
+                    if task_id in _pipeline_outputs:
+                        _pipeline_outputs[task_id].append({
+                            "type": "stderr",
+                            "data": f"Apply task {i + 1} failed: {exc}\n",
+                            "stage": f"apply-{i + 1}",
+                        })
+        else:
+            # Fallback: single apply with retry on timeout
+            logger.info("Mockup apply: no task list found, using single apply with retry")
+            for attempt in range(2):
+                try:
+                    await self._sandbox_exec(
+                        task_id=task_id,
+                        prompt=(
+                            "Use the openspec-apply-change skill to implement all tasks "
+                            "from the proposal. Work through every task until all are complete. "
+                            "Fix any build errors along the way."
+                            + (" Focus on the remaining incomplete tasks only."
+                               if attempt > 0 else "")
+                        ),
+                        model=model,
+                        stage_label=f"apply{'-retry' if attempt else ''}",
+                        stall_timeout=600,
+                        timeout=2400,
+                        raise_on_error=False,
+                        work_dir=work_dir,
+                        continue_session=True,
+                    )
+                    break  # Success — no need to retry
+                except RuntimeError as exc:
+                    if attempt == 0 and "timed out" in str(exc):
+                        logger.warning("Mockup apply timed out, retrying once...")
+                        await self._checkpoint(task_id, "mockup-apply-partial", work_dir)
+                        if task_id in _pipeline_outputs:
+                            _pipeline_outputs[task_id].append({
+                                "type": "stderr",
+                                "data": "Apply timed out — retrying with continue...\n",
+                                "stage": "apply-retry",
+                            })
+                    else:
+                        logger.warning("Mockup apply failed: %s", exc)
+                        break
+
         await self._checkpoint(task_id, "mockup-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
 
@@ -1145,11 +1216,13 @@ class DevAgent:
 
                         now = time.monotonic()
                         if now - start > timeout:
+                            await self._kill_sandbox_task(sandbox_task_id, stage_label)
                             raise RuntimeError(
                                 f"Sandbox task timed out: {stage_label}"
                             )
                         # Stall detection: no meaningful output for too long
                         if now - last_output_time > stall_timeout:
+                            await self._kill_sandbox_task(sandbox_task_id, stage_label)
                             raise RuntimeError(
                                 f"Sandbox task stalled (no output for "
                                 f"{stall_timeout:.0f}s): {stage_label}"
@@ -1234,6 +1307,18 @@ class DevAgent:
             )
 
         return combined
+
+    async def _kill_sandbox_task(self, sandbox_task_id: str, stage_label: str) -> None:
+        """Kill a running sandbox task process to free resources on timeout/stall."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.delete(f"{SANDBOX_URL}/tasks/{sandbox_task_id}")
+                logger.info(
+                    "[SANDBOX-DIAG] Kill task %s [%s]: %s",
+                    sandbox_task_id, stage_label, resp.json(),
+                )
+        except Exception as exc:
+            logger.warning("Failed to kill sandbox task %s: %s", sandbox_task_id, exc)
 
     async def _checkpoint(
         self,

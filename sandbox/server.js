@@ -182,6 +182,28 @@ app.get("/tasks/:id/status", (req, res) => {
   });
 });
 
+// Kill a running task (cleanup on timeout)
+app.delete("/tasks/:id", (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    return res.status(404).json({ error: "task not found" });
+  }
+  const code = task.exitCode();
+  if (code !== null) {
+    return res.json({ id: req.params.id, killed: false, alreadyDone: true, exitCode: code });
+  }
+  try {
+    task.proc.kill("SIGTERM");
+    setTimeout(() => {
+      try { task.proc.kill("SIGKILL"); } catch (_) { /* already dead */ }
+    }, 5000);
+    console.log(`[sandbox] Killed task ${req.params.id} (SIGTERM)`);
+    res.json({ id: req.params.id, killed: true });
+  } catch (err) {
+    res.status(500).json({ error: `Failed to kill: ${err.message}` });
+  }
+});
+
 // List active/completed tasks
 app.get("/tasks", (_req, res) => {
   const list = [...tasks.entries()].map(([id, t]) => ({
