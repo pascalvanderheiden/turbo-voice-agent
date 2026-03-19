@@ -24,6 +24,20 @@ export const sandboxApi = {
     return res.json();
   },
 
+  async stop() {
+    const res = await authFetch(`${API_URL}/api/sandbox/stop`, {
+      method: "POST",
+    });
+    return res.json();
+  },
+
+  async start() {
+    const res = await authFetch(`${API_URL}/api/sandbox/start`, {
+      method: "POST",
+    });
+    return res.json();
+  },
+
   async getSandboxConnection() {
     const res = await authFetch(`${API_URL}/api/me/connections/github-sandbox`);
     return res.json();

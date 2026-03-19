@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.models.dev_task import DevTask, DevTaskCreate
+from app.agents.dev_agent import cancel_sandbox_task_for
 from app.services.dev_service import InMemoryDevService
 
 logger = logging.getLogger(__name__)
@@ -191,6 +192,11 @@ async def delete_dev_task(task_id: str, request: Request):
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
+    # Kill any running sandbox task
+    if task.status == "running":
+        killed = await cancel_sandbox_task_for(task_id)
+        if killed:
+            logger.info("Killed sandbox task for dev-task %s before deletion", task_id)
     # Clear bidirectional link on the spec (and any child feature specs)
     if task.spec_id and _spec_service:
         try:

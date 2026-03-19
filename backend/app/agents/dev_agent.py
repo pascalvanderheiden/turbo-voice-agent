@@ -31,6 +31,9 @@ SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 # Stores streaming output entries for the frontend terminal view.
 _pipeline_outputs: dict[str, list[dict]] = {}
 
+# ── Active sandbox task IDs per dev task (for cleanup on deletion) ────────
+_active_sandbox_tasks: dict[str, str] = {}  # dev_task_id → sandbox_task_id
+
 # Question patterns that indicate the CLI is waiting for user input
 _QUESTION_PATTERNS = [
     r"\?\s*$",                          # ends with ?
@@ -74,6 +77,21 @@ def _get_premium_multiplier(model: str) -> int:
 def get_pipeline_output(task_id: str) -> list[dict]:
     """Get the pipeline output buffer for a task (for SSE streaming)."""
     return _pipeline_outputs.get(task_id, [])
+
+
+async def cancel_sandbox_task_for(task_id: str) -> bool:
+    """Kill any active sandbox task associated with a dev task. Returns True if killed."""
+    sandbox_task_id = _active_sandbox_tasks.pop(task_id, None)
+    if not sandbox_task_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(f"{SANDBOX_URL}/tasks/{sandbox_task_id}")
+            logger.info("Killed sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, resp.json())
+            return True
+    except Exception as exc:
+        logger.warning("Failed to kill sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, exc)
+        return False
 
 
 class DevAgent:
@@ -1216,6 +1234,10 @@ class DevAgent:
             task_data = resp.json()
             sandbox_task_id = task_data["id"]
 
+        # Track active sandbox task for cleanup on dev-task deletion
+        if task_id:
+            _active_sandbox_tasks[task_id] = sandbox_task_id
+
         logger.info(
             "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, "
             "connecting SSE to %s/tasks/%s/stream",
@@ -1340,6 +1362,8 @@ class DevAgent:
             )
 
         combined = "".join(output_lines)
+        # Clear active sandbox task tracking
+        _active_sandbox_tasks.pop(task_id, None)
         logger.info(
             "[SANDBOX-DIAG] Sandbox exec [%s] exit=%d chars=%d "
             "lines=%d buf_size=%d elapsed=%.0fs",

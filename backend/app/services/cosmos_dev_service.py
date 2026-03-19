@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "default-user"
 
-STAGE_NAMES = ["plan", "build", "run", "test"]
+STAGE_NAMES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive", "screenshots"]
 
 
 def _default_stages() -> list[dict]:

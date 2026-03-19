@@ -154,6 +154,39 @@ async def recreate_sandbox(request: Request):
     return {"status": "provisioning", "message": "Sandbox recreation initiated"}
 
 
+@router.post("/stop")
+async def stop_sandbox(request: Request):
+    """Stop all active sandbox tasks."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    logger.info("Sandbox stop requested for user %s", user_id)
+    killed = 0
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{SANDBOX_URL}/tasks")
+            data = resp.json()
+            for t in data.get("tasks", []):
+                tid = t.get("id")
+                if tid and t.get("exitCode") is None:
+                    try:
+                        await client.delete(f"{SANDBOX_URL}/tasks/{tid}")
+                        killed += 1
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.warning("Failed to stop sandbox tasks: %s", exc)
+    return {"stopped": True, "killedTasks": killed}
+
+
+@router.post("/start")
+async def start_sandbox(request: Request):
+    """Start/restart the sandbox environment."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _get_service().with_user(user_id)
+    await svc.set_status("provisioning")
+    logger.info("Sandbox start requested for user %s", user_id)
+    return {"status": "provisioning", "message": "Sandbox start initiated"}
+
+
 class SandboxTaskRequest(BaseModel):
     devTaskId: str
     command: str
