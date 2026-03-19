@@ -1557,9 +1557,10 @@ class DevAgent:
     async def _verify_skills_in_sandbox(
         self, task_id: str, work_dir: str,
     ) -> None:
-        """Verify skills by asking the Copilot CLI: 'What skills do you have?'
+        """Reload skills from disk, then verify via 'What skills do you have?'
 
-        Single simple prompt — no distinction between project/user skills.
+        Two-step: first triggers a reload so the CLI picks up any newly
+        installed or blob-synced skills, then asks what it sees.
         Uses claude-haiku-4.5 (cheap) to minimize premium request cost.
         """
         if task_id in _pipeline_outputs:
@@ -1572,7 +1573,7 @@ class DevAgent:
         try:
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt="What skills do you have?",
+                prompt="Reload your skills from disk, then tell me: What skills do you have?",
                 model="claude-haiku-4.5",
                 stage_label="verify-skills",
                 work_dir=work_dir,
