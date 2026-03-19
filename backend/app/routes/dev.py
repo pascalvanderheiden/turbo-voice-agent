@@ -5,7 +5,7 @@ import logging
 import os
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -70,6 +70,73 @@ async def suggest_skills(request: Request, specId: str = ""):
         activated = await _cosmos_skills.with_user(user_id).list_activated()
     suggested = svc.suggest_skills_for_content(content, activated)
     return {"skillIds": suggested}
+
+
+@router.post("/skills/upload-local")
+async def upload_local_skills(
+    request: Request,
+    skill_name: str,
+    files: list[UploadFile],
+):
+    """Upload local skill files to Azure Blob Storage for sandbox use.
+
+    Uploads skill files (SKILL.md + any supporting files) to the `skills`
+    container in Blob Storage. The sandbox container downloads these on startup
+    into ~/.copilot/skills/, making them available to the Copilot CLI.
+    """
+    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+    if not storage_account:
+        raise HTTPException(
+            status_code=503,
+            detail="Blob Storage not configured — set AZURE_STORAGE_ACCOUNT_NAME",
+        )
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    if not skill_name:
+        raise HTTPException(status_code=400, detail="skill_name is required")
+
+    try:
+        from azure.identity.aio import DefaultAzureCredential
+        from azure.storage.blob.aio import BlobServiceClient
+
+        credential = DefaultAzureCredential()
+        blob_service = BlobServiceClient(
+            account_url=f"https://{storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+        uploaded = []
+        async with blob_service:
+            container = blob_service.get_container_client("skills")
+            try:
+                await container.create_container()
+            except Exception:
+                pass  # Container may already exist
+            for file in files:
+                blob_path = f"{skill_name}/{file.filename}"
+                content = await file.read()
+                blob_client = container.get_blob_client(blob_path)
+                await blob_client.upload_blob(content, overwrite=True)
+                uploaded.append(blob_path)
+                logger.info("Uploaded skill file: %s", blob_path)
+        await credential.close()
+
+        return {
+            "success": True,
+            "skillName": skill_name,
+            "uploadedFiles": uploaded,
+            "message": (
+                f"Uploaded {len(uploaded)} file(s) for skill '{skill_name}'. "
+                "Files will be available in the sandbox on next container restart."
+            ),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="Azure SDK not available — install azure-identity and azure-storage-blob",
+        )
+    except Exception as e:
+        logger.exception("Failed to upload skill files to Blob Storage")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
 
 @router.get("/{task_id}", response_model=DevTask)

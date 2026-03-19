@@ -42,6 +42,7 @@ app.post("/tasks", (req, res) => {
     model = DEFAULT_MODEL,
     workDir = "/workspace",
     ghToken: perTaskToken,
+    continueSession = false,
   } = req.body;
 
   // Two modes: a) raw command, b) Copilot CLI prompt
@@ -50,6 +51,10 @@ app.post("/tasks", (req, res) => {
     // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
     spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
+    // Continue from previous session to maintain context across pipeline stages
+    if (continueSession) {
+      spawnArgs.push("--continue");
+    }
     // Premium request multiplier depends on model tier
     // Claude Opus = 3 premium, everything else = 1
     const premiumMultiplier = /opus/i.test(model) ? 3 : 1;

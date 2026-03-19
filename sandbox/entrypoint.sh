@@ -41,43 +41,28 @@ if [ -n "$AZURE_STORAGE_ACCOUNT_NAME" ]; then
   fi
 fi
 
-# Verify all installed skills on startup
-echo "=== Skill Verification ==="
+# List installed skills on startup (CLI-based verification happens at pipeline time)
+echo "=== Installed Skills ==="
 echo ""
 echo "Workspace skills (.github/skills/):"
-if [ -d /workspace/.github/skills ]; then
-  for d in /workspace/.github/skills/*/; do
-    name=$(basename "$d")
-    if [ -f "$d/SKILL.md" ]; then
-      lines=$(wc -l < "$d/SKILL.md")
-      echo "  ✓ $name (SKILL.md: ${lines} lines)"
-    else
-      echo "  ✗ $name (SKILL.md MISSING)"
-    fi
+if [ -d /workspace/.github/skills ] && [ "$(ls -A /workspace/.github/skills 2>/dev/null)" ]; then
+  ls -1 /workspace/.github/skills/ 2>/dev/null | while read name; do
+    echo "  • $name"
   done
 else
-  echo "  (none — will be created at pipeline time)"
+  echo "  (none — installed at pipeline time)"
 fi
 echo ""
 echo "User skills (~/.copilot/skills/):"
 if [ -d /home/agent/.copilot/skills ] && [ "$(ls -A /home/agent/.copilot/skills 2>/dev/null)" ]; then
-  for d in /home/agent/.copilot/skills/*/; do
-    name=$(basename "$d")
-    if [ -f "$d/SKILL.md" ]; then
-      lines=$(wc -l < "$d/SKILL.md")
-      echo "  ✓ $name (SKILL.md: ${lines} lines)"
-    else
-      echo "  ✗ $name (SKILL.md MISSING)"
-    fi
+  ls -1 /home/agent/.copilot/skills/ 2>/dev/null | while read name; do
+    echo "  • $name"
   done
 else
   echo "  (none)"
 fi
-ws_count=$(find /workspace/.github/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ")
-user_count=$(find /home/agent/.copilot/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ")
-total=$((ws_count + user_count))
 echo ""
-echo "Total: $total skills verified ($ws_count workspace + $user_count user-level)"
+echo "Note: Copilot CLI skill verification runs at pipeline init time."
 echo "==========================="
 
 exec node /app/server.js

@@ -407,6 +407,7 @@ class DevAgent:
             timeout=2400,
             raise_on_error=False,
             work_dir=work_dir,
+            continue_session=True,
         )
         await self._checkpoint(task_id, "mockup-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
@@ -423,6 +424,7 @@ class DevAgent:
             stage_label="archive",
             raise_on_error=False,
             work_dir=work_dir,
+            continue_session=True,
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
@@ -453,6 +455,7 @@ class DevAgent:
             stage_label="screenshots",
             raise_on_error=False,
             work_dir=work_dir,
+            continue_session=True,
         )
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
@@ -542,6 +545,7 @@ class DevAgent:
                     stall_timeout=600,
                     raise_on_error=False,
                     work_dir=work_dir,
+                    continue_session=True,
                 )
                 await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
         else:
@@ -558,6 +562,7 @@ class DevAgent:
                 stall_timeout=600,
                 raise_on_error=False,
                 work_dir=work_dir,
+                continue_session=True,
             )
             await self._checkpoint(task_id, "foundation-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
@@ -661,6 +666,7 @@ class DevAgent:
             stage_label="archive",
             raise_on_error=False,
             work_dir=work_dir,
+            continue_session=True,
         )
         await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
@@ -690,6 +696,7 @@ class DevAgent:
             stage_label="screenshots",
             raise_on_error=False,
             work_dir=work_dir,
+            continue_session=True,
         )
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
@@ -964,6 +971,7 @@ class DevAgent:
                 model=model,
                 stage_label=f"feature-{iteration_index}-apply",
                 work_dir=work_dir,
+                continue_session=True,
             )
             await svc.set_iteration_stage_status(task_id, iteration_index, "apply", "completed")
 
@@ -984,6 +992,7 @@ class DevAgent:
                 stage_label=f"feature-{iteration_index}-screenshots",
                 raise_on_error=False,
                 work_dir=work_dir,
+                continue_session=True,
             )
             await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
             await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "completed")
@@ -1024,6 +1033,7 @@ class DevAgent:
         stall_timeout: float = 600,
         raise_on_error: bool = True,
         work_dir: str = "/workspace",
+        continue_session: bool = False,
     ) -> str:
         """Submit a task to the sandbox and stream output via SSE.
 
@@ -1034,11 +1044,15 @@ class DevAgent:
         Args:
             stall_timeout: Seconds of silence (no stdout) before considering the
                 task stalled and killing it. Default 180s (3 minutes).
+            continue_session: If True, adds --continue flag to Copilot CLI to
+                resume the previous session and maintain context across stages.
         """
         payload: dict = {"workDir": work_dir}
         if prompt:
             payload["prompt"] = prompt
             payload["model"] = model
+            if continue_session:
+                payload["continueSession"] = True
             # Track premium request cost for this Copilot CLI invocation
             premium_cost = _get_premium_multiplier(model)
             if task_id:
@@ -1530,73 +1544,38 @@ class DevAgent:
     async def _verify_skills_in_sandbox(
         self, task_id: str, work_dir: str, expected_skills: list[str],
     ) -> None:
-        """Verify skills are properly installed by checking SKILL.md files.
+        """Verify skills are properly installed by asking the Copilot CLI.
 
-        Checks both workspace skills (.github/skills/) and user-level skills
-        (~/.copilot/skills/). Outputs a verification summary to the pipeline stream.
+        Uses a Copilot CLI prompt to list all available skills, confirming
+        the CLI actually sees them (not just that files exist on disk).
+        Uses claude-haiku-4.5 (cheap model) to minimize premium request cost.
         """
         if task_id in _pipeline_outputs:
             _pipeline_outputs[task_id].append({
                 "type": "stdout",
-                "data": "── verify-skills ──\n",
+                "data": "── verify-skills (CLI) ──\n",
                 "stage": "verify-skills",
             })
 
-        # Run a single command that checks all skill locations and outputs a report
-        verify_script = (
-            'echo "=== Skill Verification ===" && '
-            'echo "" && '
-            # Check workspace skills (.github/skills/)
-            'echo "Workspace skills (.github/skills/):" && '
-            'if [ -d .github/skills ]; then '
-            '  for d in .github/skills/*/; do '
-            '    name=$(basename "$d"); '
-            '    if [ -f "$d/SKILL.md" ]; then '
-            '      lines=$(wc -l < "$d/SKILL.md"); '
-            '      echo "  ✓ $name (SKILL.md: ${lines} lines)"; '
-            '    else '
-            '      echo "  ✗ $name (SKILL.md MISSING)"; '
-            '    fi; '
-            '  done; '
-            'else '
-            '  echo "  (none)"; '
-            'fi && '
-            'echo "" && '
-            # Check user-level skills (~/.copilot/skills/)
-            'echo "User skills (~/.copilot/skills/):" && '
-            'if [ -d ~/.copilot/skills ] && [ "$(ls -A ~/.copilot/skills 2>/dev/null)" ]; then '
-            '  for d in ~/.copilot/skills/*/; do '
-            '    name=$(basename "$d"); '
-            '    if [ -f "$d/SKILL.md" ]; then '
-            '      lines=$(wc -l < "$d/SKILL.md"); '
-            '      echo "  ✓ $name (SKILL.md: ${lines} lines)"; '
-            '    else '
-            '      echo "  ✗ $name (SKILL.md MISSING)"; '
-            '    fi; '
-            '  done; '
-            'else '
-            '  echo "  (none)"; '
-            'fi && '
-            'echo "" && '
-            # Count totals
-            'ws_count=$(find .github/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ") && '
-            'user_count=$(find ~/.copilot/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ") && '
-            'total=$((ws_count + user_count)) && '
-            'echo "Total: $total skills verified ($ws_count workspace + $user_count user-level)" && '
-            'echo "==========================="'
-        )
-
         try:
+            # First, reload skills so the CLI picks up newly installed ones
             await self._sandbox_exec(
                 task_id=task_id,
-                command=f"bash -c '{verify_script}'",
-                args=[],
+                prompt=(
+                    "Reload all your skills from disk, then list every skill "
+                    "you have available. For each skill, show its name and "
+                    "location (e.g. .github/skills/ or ~/.copilot/skills/). "
+                    "Include skills from all locations."
+                ),
+                model="claude-haiku-4.5",
                 stage_label="verify-skills",
                 work_dir=work_dir,
-                timeout=30,
+                timeout=60,
+                stall_timeout=30,
+                raise_on_error=False,
             )
         except Exception as exc:
-            logger.warning("Skill verification failed: %s", exc)
+            logger.warning("CLI skill verification failed: %s", exc)
             if task_id in _pipeline_outputs:
                 _pipeline_outputs[task_id].append({
                     "type": "stderr",
