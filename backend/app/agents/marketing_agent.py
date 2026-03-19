@@ -50,29 +50,78 @@ def _resize_image_to_match(image_bytes: bytes, width: int, height: int) -> tuple
     return buf.getvalue(), "image/png", "png"
 
 
-def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -> bytes:
-    """Create a circular profile photo PNG with a white border and transparent background.
+def _create_narrator_pip(
+    photo_bytes: bytes,
+    width: int = 240,
+    height: int = 240,
+    radius: int = 18,
+    border_w: int = 4,
+) -> bytes:
+    """Create a professional YouTube-style narrator PIP overlay.
 
-    Used as the picture-in-picture narrator overlay in marketing videos.
+    Rounded rectangle with branded border, subtle shadow, and transparent background.
+    Designed to be placed bottom-right as a webcam-style narrator window.
     """
     img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
-    img = img.resize((size, size), Image.LANCZOS)
 
-    # Create circular mask
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+    # Center-crop to target aspect ratio
+    target_ratio = width / height
+    img_ratio = img.width / img.height
+    if img_ratio > target_ratio:
+        new_w = int(img.height * target_ratio)
+        offset = (img.width - new_w) // 2
+        img = img.crop((offset, 0, offset + new_w, img.height))
+    else:
+        new_h = int(img.width / target_ratio)
+        offset = (img.height - new_h) // 2
+        img = img.crop((0, offset, img.width, offset + new_h))
+    img = img.resize((width, height), Image.LANCZOS)
 
-    # Apply mask for circular crop
-    circular = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    circular.paste(img, (0, 0), mask)
+    # Rounded rectangle mask for the photo
+    mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=255)
 
-    # Add white border ring
-    total = size + border * 2
-    canvas = Image.new("RGBA", (total, total), (0, 0, 0, 0))
-    border_draw = ImageDraw.Draw(canvas)
-    border_draw.ellipse((0, 0, total - 1, total - 1), fill=(255, 255, 255, 200))
-    canvas.paste(circular, (border, border), circular)
+    rounded_photo = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    rounded_photo.paste(img, (0, 0), mask)
+
+    # Canvas: photo + border + shadow padding
+    shadow_offset = 6
+    total_w = width + border_w * 2 + shadow_offset
+    total_h = height + border_w * 2 + shadow_offset
+    canvas = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    cd = ImageDraw.Draw(canvas)
+
+    # Shadow — semi-transparent, slightly offset
+    cd.rounded_rectangle(
+        (border_w + shadow_offset, border_w + shadow_offset,
+         border_w + width + border_w - 1 + shadow_offset,
+         border_w + height + border_w - 1 + shadow_offset),
+        radius=radius + border_w, fill=(0, 0, 0, 70),
+    )
+
+    # Outer border frame — white with branded pink tint
+    cd.rounded_rectangle(
+        (0, 0, width + border_w * 2 - 1, height + border_w * 2 - 1),
+        radius=radius + border_w, fill=(255, 255, 255, 240),
+    )
+
+    # Inner dark background (prevents bleed if photo has transparency)
+    cd.rounded_rectangle(
+        (border_w, border_w, border_w + width - 1, border_w + height - 1),
+        radius=radius, fill=(15, 15, 26, 255),
+    )
+
+    # Paste the rounded photo
+    canvas.paste(rounded_photo, (border_w, border_w), rounded_photo)
+
+    # Subtle branded accent line at bottom of frame (pink → purple gradient feel)
+    accent_y = border_w + height + 1
+    for x in range(border_w, border_w + width):
+        t = (x - border_w) / max(width - 1, 1)
+        r = int(233 * (1 - t) + 123 * t)  # #E91E8C → #7B2FBE
+        g = int(30 * (1 - t) + 47 * t)
+        b = int(140 * (1 - t) + 190 * t)
+        cd.line([(x, accent_y), (x, accent_y + 1)], fill=(r, g, b, 200))
 
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
@@ -293,6 +342,20 @@ def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -
             profile_photo: bytes | None = None
             if user_id and self._profile_service:
                 profile_photo = await self._fetch_profile_photo(user_id)
+                if profile_photo:
+                    logger.info(
+                        "Profile photo ready for narrator PIP (%d bytes)", len(profile_photo)
+                    )
+                else:
+                    logger.warning(
+                        "No profile photo available for user %s — video will have no narrator PIP",
+                        user_id,
+                    )
+            else:
+                logger.info(
+                    "Skipping narrator PIP: user_id=%r, profile_service=%s",
+                    user_id, "available" if self._profile_service else "None",
+                )
             script = await self._generate_script(video.title, spec_content, screenshots, has_profile_photo=profile_photo is not None)
             await service.set_status(video_id, "scripting", script_content=script)
 
@@ -357,10 +420,17 @@ def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -
         try:
             profile = await self._profile_service.get_profile(user_id)
             if not profile:
+                logger.warning("No profile document found for user %s", user_id)
                 return None
             photo_url = profile.get("profilePhotoUrl")
             if not photo_url:
+                logger.warning(
+                    "Profile exists for user %s but no profilePhotoUrl field (keys: %s)",
+                    user_id, list(profile.keys()),
+                )
                 return None
+
+            logger.info("Downloading profile photo from: %s", photo_url)
 
             # Download from blob storage using managed identity
             from azure.identity.aio import DefaultAzureCredential
@@ -649,12 +719,14 @@ def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -
                 if proc.returncode != 0:
                     raise RuntimeError(f"ffmpeg failed: {proc.stderr[-500:]}")
 
-            # Narrator PIP overlay: add circular profile photo in bottom-right corner
+            # Narrator PIP overlay: professional webcam-style window in bottom-right corner
             if profile_photo:
+                logger.info("Applying narrator PIP overlay to composed video...")
                 try:
-                    pip_img = _create_circular_pip(profile_photo, size=120, border=3)
+                    pip_img = _create_narrator_pip(profile_photo, width=240, height=240)
                     pip_path = tmp_dir / "pip_overlay.png"
                     pip_path.write_bytes(pip_img)
+                    logger.info("Narrator PIP image created: %d bytes", len(pip_img))
 
                     pip_output = tmp_dir / "output_pip.mp4"
                     pip_proc = subprocess.run(
@@ -663,7 +735,7 @@ def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -
                             "-i", str(output_path),
                             "-i", str(pip_path),
                             "-filter_complex",
-                            "[1:v]format=rgba[pip];[0:v][pip]overlay=W-w-24:H-h-24",
+                            "[1:v]format=rgba[pip];[0:v][pip]overlay=W-w-30:H-h-30",
                             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                             "-c:a", "copy",
                             "-movflags", "+faststart",
@@ -674,14 +746,17 @@ def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -
                     if pip_proc.returncode == 0 and pip_output.exists():
                         import shutil
                         shutil.move(str(pip_output), str(output_path))
-                        logger.info("Added narrator PIP overlay to video")
+                        logger.info("✓ Narrator PIP overlay applied successfully")
                     else:
-                        logger.warning(
-                            "PIP overlay failed (continuing without): %s",
-                            pip_proc.stderr[-300:] if pip_proc.stderr else "unknown",
+                        logger.error(
+                            "PIP overlay ffmpeg failed (rc=%d): %s",
+                            pip_proc.returncode,
+                            pip_proc.stderr[-500:] if pip_proc.stderr else "no stderr",
                         )
                 except Exception as pip_exc:
-                    logger.warning("PIP overlay error (continuing without): %s", pip_exc)
+                    logger.error("PIP overlay error (continuing without): %s", pip_exc, exc_info=True)
+            else:
+                logger.warning("No profile photo — skipping narrator PIP overlay")
 
             # Calculate actual duration
             duration = len(clip_paths) * 10  # rough estimate
