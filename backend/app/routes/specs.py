@@ -4,6 +4,8 @@ Route ordering: ALL named (static) routes are defined BEFORE any
 parameterised ``{spec_id}`` routes so that FastAPI/Starlette never
 accidentally matches a literal path segment like ``import-openspec`` or
 ``generate`` as a ``spec_id`` value.
+
+Revision: 2026-03-19 – import-openspec + blob storage + UUID guard
 """
 
 import logging

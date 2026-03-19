@@ -26,6 +26,9 @@ RUN playwright install --with-deps chromium
 
 COPY . .
 
+# Verify critical route modules are importable (fail fast if not)
+RUN python3 -c "from app.utils.openspec_parser import parse_openspec_folder; print('openspec_parser OK')"
+
 RUN mkdir -p /mnt/data /app/uploads
 
 EXPOSE 8000
