@@ -26,6 +26,9 @@ _cosmos_skills = None
 _spec_service = None
 _dev_agent = None
 
+# Track running pipeline asyncio tasks so they can be cancelled on delete
+_running_pipelines: dict[str, asyncio.Task] = {}  # task_id → asyncio.Task
+
 
 def set_dev_service(service: InMemoryDevService, pipeline_fn=None, skills_service=None, cosmos_skills=None, spec_service=None, dev_agent=None) -> None:
     global _dev_service, _pipeline_fn, _skills_service, _cosmos_skills, _spec_service, _dev_agent
@@ -192,11 +195,15 @@ async def delete_dev_task(task_id: str, request: Request):
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
-    # Kill any running sandbox task
-    if task.status == "running":
-        killed = await cancel_sandbox_task_for(task_id)
-        if killed:
-            logger.info("Killed sandbox task for dev-task %s before deletion", task_id)
+    # Cancel running pipeline asyncio task
+    pipeline_task = _running_pipelines.pop(task_id, None)
+    if pipeline_task and not pipeline_task.done():
+        pipeline_task.cancel()
+        logger.info("Cancelled pipeline asyncio task for %s", task_id)
+    # Kill any active sandbox task
+    killed = await cancel_sandbox_task_for(task_id)
+    if killed:
+        logger.info("Killed sandbox task for dev-task %s", task_id)
     # Clear bidirectional link on the spec (and any child feature specs)
     if task.spec_id and _spec_service:
         try:
@@ -290,7 +297,9 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
 
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(_safe_pipeline(task_id, user_id))
+            atask = loop.create_task(_safe_pipeline(task_id, user_id))
+            _running_pipelines[task_id] = atask
+            atask.add_done_callback(lambda _: _running_pipelines.pop(task_id, None))
             logger.info("Pipeline task scheduled on event loop for %s", task_id)
         except RuntimeError:
             logger.exception("No running event loop — cannot schedule pipeline for %s", task_id)

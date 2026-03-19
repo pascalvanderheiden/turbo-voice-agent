@@ -121,6 +121,8 @@ jobs:
           if [ -n "$ACR" ]; then
             azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR" -e "$AZURE_ENV_NAME"
           fi
+          # Set timestamp for Docker cache busting
+          azd env set AZURE_DEV_TIMESTAMP "$(date +%s)" -e "$AZURE_ENV_NAME"
 
       - name: Deploy applications
         run: azd deploy -e "$AZURE_ENV_NAME" --no-prompt

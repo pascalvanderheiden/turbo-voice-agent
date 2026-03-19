@@ -156,9 +156,27 @@ async def recreate_sandbox(request: Request):
 
 @router.post("/stop")
 async def stop_sandbox(request: Request):
-    """Stop all active sandbox tasks."""
+    """Stop all active sandbox tasks and cancel running pipelines."""
     user_id = getattr(request.state, "user_id", "default-user")
     logger.info("Sandbox stop requested for user %s", user_id)
+
+    # Cancel all running backend pipeline asyncio tasks
+    from app.routes.dev import _running_pipelines, _get_service as _get_dev_service
+    cancelled = 0
+    for tid, atask in list(_running_pipelines.items()):
+        if not atask.done():
+            atask.cancel()
+            cancelled += 1
+            # Mark the dev task as failed so it doesn't look "running"
+            try:
+                svc = _get_dev_service().with_user(user_id)
+                await svc.set_status(tid, "failed")
+            except Exception:
+                pass
+    _running_pipelines.clear()
+    logger.info("Cancelled %d pipeline tasks", cancelled)
+
+    # Kill all active sandbox container tasks
     killed = 0
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -174,7 +192,7 @@ async def stop_sandbox(request: Request):
                         pass
     except Exception as exc:
         logger.warning("Failed to stop sandbox tasks: %s", exc)
-    return {"stopped": True, "killedTasks": killed}
+    return {"stopped": True, "killedTasks": killed, "cancelledPipelines": cancelled}
 
 
 @router.post("/start")

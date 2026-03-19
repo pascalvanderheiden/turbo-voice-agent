@@ -80,10 +80,11 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
   const handleStop = async () => {
     setLoading(true);
     try {
-      await sandboxApi.stop();
+      const result = await sandboxApi.stop();
       setActiveTasks(0);
       setStatus("ready");
-      fetchStatus();
+      // Delay re-fetch to let sandbox settle
+      setTimeout(fetchStatus, 3000);
     } catch {
       // ignore
     } finally {
