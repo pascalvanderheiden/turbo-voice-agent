@@ -41,6 +41,90 @@ async def list_specs(request: Request):
     return await _get_service().with_user(user_id).list()
 
 
+@router.post("/import-openspec")
+async def import_openspec(
+    request: Request,
+    files: Annotated[list[UploadFile], File()],
+    folder_name: Annotated[str, Form()] = "imported-project",
+):
+    """Import a local OpenSpec project folder into the spec system.
+
+    Creates one foundation spec (from project.md + change history) and
+    one feature spec per specs/<name>/spec.md found in the upload.
+    All created specs are tagged with formatVersion='imported'.
+    """
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+
+    # Reconstruct folder structure from uploaded files
+    file_map: dict[str, str] = {}
+    for f in files:
+        content = (await f.read()).decode("utf-8", errors="replace")
+        path = f.filename or f.headers.get("filename", "unknown")
+        file_map[path] = content
+
+    if not file_map:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    # Parse the OpenSpec folder
+    try:
+        parsed = parse_openspec_folder(file_map, folder_name=folder_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Build foundation spec content
+    foundation_parts: list[str] = []
+    if parsed.project_context:
+        foundation_parts.append(f"## Project Context\n\n{parsed.project_context.strip()}")
+
+    change_history = synthesize_change_history(parsed.changes)
+    if change_history:
+        foundation_parts.append(change_history.strip())
+
+    # Add a summary of included specs
+    spec_names = [s.name for s in parsed.specs]
+    foundation_parts.append(
+        "## Capabilities\n\n"
+        + "\n".join(f"- **{name}**" for name in spec_names)
+    )
+
+    foundation_content = "\n\n".join(foundation_parts)
+
+    # Create foundation spec
+    foundation = await service.create(SpecCreate(
+        title=f"{folder_name} (imported)",
+        content=foundation_content,
+        type="foundation",
+        formatVersion="imported",
+    ))
+    if foundation is None:
+        raise HTTPException(status_code=500, detail="Failed to create foundation spec")
+
+    # Create feature specs
+    feature_count = 0
+    for spec in parsed.specs:
+        feature = await service.create(SpecCreate(
+            title=spec.name,
+            content=spec.content,
+            type="feature",
+            parentId=foundation.id,
+            formatVersion="imported",
+        ))
+        if feature:
+            feature_count += 1
+
+    logger.info(
+        "Imported OpenSpec project '%s': foundation=%s, %d features, %d changes",
+        folder_name, foundation.id, feature_count, len(parsed.changes),
+    )
+
+    return {
+        "foundationId": foundation.id,
+        "featureCount": feature_count,
+        "changesFound": len(parsed.changes),
+    }
+
+
 @router.get("/{spec_id}", response_model=Spec)
 async def get_spec(spec_id: str, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
@@ -155,87 +239,3 @@ async def add_feature_to_spec(spec_id: str, data: AddFeatureRequest, request: Re
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add feature: {str(e)}")
-
-
-@router.post("/import-openspec")
-async def import_openspec(
-    request: Request,
-    files: Annotated[list[UploadFile], File()],
-    folder_name: Annotated[str, Form()] = "imported-project",
-):
-    """Import a local OpenSpec project folder into the spec system.
-
-    Creates one foundation spec (from project.md + change history) and
-    one feature spec per specs/<name>/spec.md found in the upload.
-    All created specs are tagged with formatVersion='imported'.
-    """
-    user_id = getattr(request.state, "user_id", "default-user")
-    service = _get_service().with_user(user_id)
-
-    # Reconstruct folder structure from uploaded files
-    file_map: dict[str, str] = {}
-    for f in files:
-        content = (await f.read()).decode("utf-8", errors="replace")
-        path = f.filename or f.headers.get("filename", "unknown")
-        file_map[path] = content
-
-    if not file_map:
-        raise HTTPException(status_code=400, detail="No files uploaded")
-
-    # Parse the OpenSpec folder
-    try:
-        parsed = parse_openspec_folder(file_map, folder_name=folder_name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Build foundation spec content
-    foundation_parts: list[str] = []
-    if parsed.project_context:
-        foundation_parts.append(f"## Project Context\n\n{parsed.project_context.strip()}")
-
-    change_history = synthesize_change_history(parsed.changes)
-    if change_history:
-        foundation_parts.append(change_history.strip())
-
-    # Add a summary of included specs
-    spec_names = [s.name for s in parsed.specs]
-    foundation_parts.append(
-        "## Capabilities\n\n"
-        + "\n".join(f"- **{name}**" for name in spec_names)
-    )
-
-    foundation_content = "\n\n".join(foundation_parts)
-
-    # Create foundation spec
-    foundation = await service.create(SpecCreate(
-        title=f"{folder_name} (imported)",
-        content=foundation_content,
-        type="foundation",
-        formatVersion="imported",
-    ))
-    if foundation is None:
-        raise HTTPException(status_code=500, detail="Failed to create foundation spec")
-
-    # Create feature specs
-    feature_count = 0
-    for spec in parsed.specs:
-        feature = await service.create(SpecCreate(
-            title=spec.name,
-            content=spec.content,
-            type="feature",
-            parentId=foundation.id,
-            formatVersion="imported",
-        ))
-        if feature:
-            feature_count += 1
-
-    logger.info(
-        "Imported OpenSpec project '%s': foundation=%s, %d features, %d changes",
-        folder_name, foundation.id, feature_count, len(parsed.changes),
-    )
-
-    return {
-        "foundationId": foundation.id,
-        "featureCount": feature_count,
-        "changesFound": len(parsed.changes),
-    }
