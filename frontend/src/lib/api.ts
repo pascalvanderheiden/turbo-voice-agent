@@ -381,6 +381,19 @@ export const skillsApi = {
     fetchApi(`/api/agents/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
   suggestForSpec: (specId: string): Promise<{ skillIds: string[] }> =>
     fetchApi(`/api/dev/suggest-skills?specId=${encodeURIComponent(specId)}`),
+  uploadLocal: async (skillName: string, files: File[]): Promise<{ success: boolean; skillName: string; uploadedFiles: string[]; message: string }> => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    const resp = await authFetch(`${API_BASE}/api/dev/skills/upload-local?skill_name=${encodeURIComponent(skillName)}`, {
+      method: "POST",
+      body: form,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Upload failed");
+    }
+    return resp.json();
+  },
 };
 
 /* ── Spec Dev Task link ── */

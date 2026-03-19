@@ -21,6 +21,7 @@ import {
   IconSettings,
   IconBrandGithub,
   IconServer,
+  IconUpload,
 } from "@tabler/icons-react";
 import { agentsApi, notesApi, ideasApi, researchApi, specsApi, devApi, skillsApi, type AgentInfo, type AgentEdge, type InstalledSkill } from "@/lib/api";
 import { SandboxConfig } from "@/components/agents/sandbox-config";
@@ -73,6 +74,10 @@ export default function AgentsPage() {
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sandboxStatus, setSandboxStatus] = useState<string>("loading");
   const [sandboxActiveTasks, setSandboxActiveTasks] = useState<number>(0);
@@ -201,6 +206,31 @@ export default function AgentsPage() {
       addNotification(`Deactivate failed: ${String(e)}`);
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const handleUploadLocal = async () => {
+    if (!uploadName.trim() || uploadFiles.length === 0) return;
+    setUploading(true);
+    try {
+      const result = await skillsApi.uploadLocal(uploadName.trim(), uploadFiles);
+      if (result.success) {
+        // Also activate the skill in Cosmos so it appears in the active list
+        try {
+          await skillsApi.activate("local", uploadName.trim(), "", `Local skill: ${uploadName.trim()}`);
+        } catch {
+          // Blob upload succeeded even if activation fails
+        }
+        addNotification(result.message);
+        await refreshSkills();
+        setUploadOpen(false);
+        setUploadName("");
+        setUploadFiles([]);
+      }
+    } catch (e: unknown) {
+      addNotification(`Upload failed: ${String(e)}`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -348,6 +378,13 @@ export default function AgentsPage() {
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{skills.length} activated</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setUploadOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-[var(--color-brand-purple)]/10 text-[var(--color-brand-purple)] hover:bg-[var(--color-brand-purple)]/20 transition-colors"
+            >
+              <IconUpload size={13} />
+              Upload Local
+            </button>
             <div className="relative flex-1 min-w-0">
               <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
               <input
@@ -376,7 +413,13 @@ export default function AgentsPage() {
                       <div className="font-medium text-sm truncate">{skill.name}</div>
                       <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 shrink-0">active</span>
                       {skill.source && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-brand-cyan)]/15 text-[var(--color-brand-cyan)] shrink-0">{skill.source}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+                          skill.source === "local"
+                            ? "bg-[var(--color-brand-purple)]/15 text-[var(--color-brand-purple)]"
+                            : "bg-[var(--color-brand-cyan)]/15 text-[var(--color-brand-cyan)]"
+                        }`}>
+                          {skill.source === "local" ? "local" : "marketplace"}
+                        </span>
                       )}
                     </div>
                     <button
@@ -476,6 +519,71 @@ export default function AgentsPage() {
                 className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
               >
                 Deactivate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload local skill dialog */}
+      {uploadOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-medium text-sm">Upload Local Skill</h3>
+              <button onClick={() => { setUploadOpen(false); setUploadName(""); setUploadFiles([]); }} className="p-1 hover:bg-[var(--color-bg-tertiary)] rounded">
+                <IconX size={14} />
+              </button>
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
+              Upload a skill directory (SKILL.md + supporting files) to Azure Blob Storage.
+              The skill will be available in sandbox containers on next startup.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Skill Name</label>
+                <input
+                  type="text"
+                  placeholder="my-custom-skill"
+                  value={uploadName}
+                  onChange={(e) => setUploadName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-brand-purple)] transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-[var(--color-text-muted)] mb-1 block">Files (SKILL.md required)</label>
+                <input
+                  type="file"
+                  multiple
+                  accept=".md,.txt,.json,.yaml,.yml,.js,.ts,.py"
+                  onChange={(e) => setUploadFiles(Array.from(e.target.files || []))}
+                  className="w-full text-xs text-[var(--color-text-muted)] file:mr-3 file:py-1.5 file:px-3 file:rounded-[var(--radius-md)] file:border-0 file:text-xs file:font-medium file:bg-[var(--color-brand-purple)]/10 file:text-[var(--color-brand-purple)] hover:file:bg-[var(--color-brand-purple)]/20 file:cursor-pointer file:transition-colors"
+                />
+                {uploadFiles.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {uploadFiles.map((f) => (
+                      <div key={f.name} className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
+                        <IconFileText size={10} /> {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => { setUploadOpen(false); setUploadName(""); setUploadFiles([]); }}
+                className="px-3 py-1.5 text-xs rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUploadLocal}
+                disabled={uploading || !uploadName.trim() || uploadFiles.length === 0}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-[var(--color-brand-purple)]/10 text-[var(--color-brand-purple)] hover:bg-[var(--color-brand-purple)]/20 transition-colors disabled:opacity-50"
+              >
+                {uploading ? <IconLoader2 size={12} className="animate-spin" /> : <IconUpload size={12} />}
+                Upload & Activate
               </button>
             </div>
           </div>

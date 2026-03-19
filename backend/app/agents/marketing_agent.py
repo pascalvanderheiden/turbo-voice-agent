@@ -6,10 +6,12 @@ import io
 import json
 import logging
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 from openai import AsyncAzureOpenAI
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.models.marketing import MarketingVideo
 from app.services.memory_marketing_service import InMemoryMarketingService
@@ -48,7 +50,33 @@ def _resize_image_to_match(image_bytes: bytes, width: int, height: int) -> tuple
     return buf.getvalue(), "image/png", "png"
 
 
-class MarketingAgent:
+def _create_circular_pip(photo_bytes: bytes, size: int = 120, border: int = 3) -> bytes:
+    """Create a circular profile photo PNG with a white border and transparent background.
+
+    Used as the picture-in-picture narrator overlay in marketing videos.
+    """
+    img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
+    img = img.resize((size, size), Image.LANCZOS)
+
+    # Create circular mask
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+
+    # Apply mask for circular crop
+    circular = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    circular.paste(img, (0, 0), mask)
+
+    # Add white border ring
+    total = size + border * 2
+    canvas = Image.new("RGBA", (total, total), (0, 0, 0, 0))
+    border_draw = ImageDraw.Draw(canvas)
+    border_draw.ellipse((0, 0, total - 1, total - 1), fill=(255, 255, 255, 200))
+    canvas.paste(circular, (border, border), circular)
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
     """Agent that generates promotional videos from dev task screenshots + spec content."""
 
     def __init__(
@@ -444,8 +472,6 @@ class MarketingAgent:
     async def _generate_video(self, video_id: str, script: str, screenshots: list[tuple[str, bytes]], profile_photo: bytes | None = None) -> tuple[Path, int, str | None]:
         """Generate multiple Sora-2 clips and concatenate into a ~30s video. Returns (path, duration, blob_url)."""
         import aiohttp
-        import subprocess
-        import tempfile
 
         endpoint = os.environ.get("SORA_ENDPOINT", os.environ.get("AZURE_OPENAI_ENDPOINT", "")).rstrip("/")
         api_key = os.environ.get("SORA_API_KEY", os.environ.get("AZURE_OPENAI_API_KEY", ""))
@@ -622,6 +648,40 @@ class MarketingAgent:
                 )
                 if proc.returncode != 0:
                     raise RuntimeError(f"ffmpeg failed: {proc.stderr[-500:]}")
+
+            # Narrator PIP overlay: add circular profile photo in bottom-right corner
+            if profile_photo:
+                try:
+                    pip_img = _create_circular_pip(profile_photo, size=120, border=3)
+                    pip_path = tmp_dir / "pip_overlay.png"
+                    pip_path.write_bytes(pip_img)
+
+                    pip_output = tmp_dir / "output_pip.mp4"
+                    pip_proc = subprocess.run(
+                        [
+                            "ffmpeg", "-y",
+                            "-i", str(output_path),
+                            "-i", str(pip_path),
+                            "-filter_complex",
+                            "[1:v]format=rgba[pip];[0:v][pip]overlay=W-w-24:H-h-24",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                            "-c:a", "copy",
+                            "-movflags", "+faststart",
+                            str(pip_output),
+                        ],
+                        capture_output=True, text=True, timeout=180,
+                    )
+                    if pip_proc.returncode == 0 and pip_output.exists():
+                        import shutil
+                        shutil.move(str(pip_output), str(output_path))
+                        logger.info("Added narrator PIP overlay to video")
+                    else:
+                        logger.warning(
+                            "PIP overlay failed (continuing without): %s",
+                            pip_proc.stderr[-300:] if pip_proc.stderr else "unknown",
+                        )
+                except Exception as pip_exc:
+                    logger.warning("PIP overlay error (continuing without): %s", pip_exc)
 
             # Calculate actual duration
             duration = len(clip_paths) * 10  # rough estimate
