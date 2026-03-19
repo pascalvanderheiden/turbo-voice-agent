@@ -49,102 +49,161 @@ function StageStatusIcon({ status }: { status: string }) {
   return <IconClock size={18} className="text-[var(--color-text-muted)]" />;
 }
 
-function IterationStages({ stages, taskFailed }: { stages: DevIteration["stages"]; taskFailed?: boolean }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
+/* ── Phase-based pipeline visualization ── */
 
-  const effectiveStatus = (status: string) =>
-    taskFailed && status === "running" ? "failed" : status;
+const FOUNDATION_STAGES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive"];
+const FEATURE_STAGES = ["propose", "apply"];
 
-  const getStageColors = (status: string) => {
-    const s = effectiveStatus(status);
-    if (s === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)" };
-    if (s === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)" };
-    if (s === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)" };
-    return { stroke: "var(--color-border-dark)", fill: "var(--color-bg-tertiary)" };
-  };
+const SHORT_LABELS: Record<string, string> = {
+  init: "Init", openspec: "Spec", skills: "Skills", squad: "Squad",
+  propose: "Prop", apply: "Apply", archive: "Arch", screenshots: "Screenshots",
+};
 
-  const connectorColor = (status: string) =>
-    status === "completed" ? "#22C55E" : "var(--color-border-dark)";
+function StageNode({ stage, meta, taskFailed }: { stage: { name: string; status: string; startedAt?: string | null; completedAt?: string | null }; meta: (typeof STAGE_META)[string]; taskFailed?: boolean }) {
+  const s = taskFailed && stage.status === "running" ? "failed" : stage.status;
+  const borderColor = s === "completed" ? "#22C55E" : s === "running" ? "#3B82F6" : s === "failed" ? "#EF4444" : "var(--color-border-dark)";
+  const bgColor = s === "completed" ? "rgba(34,197,94,0.08)" : s === "running" ? "rgba(59,130,246,0.08)" : s === "failed" ? "rgba(239,68,68,0.08)" : "var(--color-bg-tertiary)";
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="w-9 h-9 rounded-lg flex items-center justify-center border" style={{ borderColor, backgroundColor: bgColor }}>
+        {s === "completed" ? <IconCircleCheck size={18} color="#4ADE80" />
+         : s === "running" ? <IconLoader2 size={18} color="#60A5FA" className="animate-spin" />
+         : s === "failed" ? <IconCircleX size={18} color="#F87171" />
+         : <meta.Icon size={18} style={{ color: meta.color }} />}
+      </div>
+      <span className="text-[10px] text-[var(--color-text-muted)] leading-tight text-center">
+        {SHORT_LABELS[stage.name] ?? stage.name}
+      </span>
+    </div>
+  );
+}
+
+function StageConnector({ completed }: { completed: boolean }) {
+  return (
+    <div className="flex items-center self-start mt-3.5">
+      <div className="w-3 h-px" style={{ backgroundColor: completed ? "#22C55E" : "var(--color-border-dark)", opacity: 0.6 }} />
+    </div>
+  );
+}
+
+function PhaseBadge({ label, done, failed, running }: { label: string; done: boolean; failed?: boolean; running?: boolean }) {
+  const color = done ? "text-green-400 border-green-500/30 bg-green-500/5"
+    : failed ? "text-red-400 border-red-500/30 bg-red-500/5"
+    : running ? "text-blue-400 border-blue-500/30 bg-blue-500/5"
+    : "text-[var(--color-text-muted)] border-[var(--color-border-dark)]";
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${color}`}>
+      {done ? <IconCircleCheck size={14} /> : running ? <IconLoader2 size={14} className="animate-spin" /> : failed ? <IconCircleX size={14} /> : <IconClock size={14} />}
+      {label}
+    </div>
+  );
+}
+
+function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
+  stages: DevIteration["stages"];
+  taskFailed?: boolean;
+  iterations?: DevIteration[];
+  activeIteration?: number;
+}) {
+  const foundation = iterations?.[0];
+  const features = iterations?.slice(1) ?? [];
+  const isOpenSpec = iterations && iterations.length > 0;
+
+  // Foundation phase
+  const foundationStages = isOpenSpec ? (foundation?.stages ?? []).filter(s => FOUNDATION_STAGES.includes(s.name)) : stages;
+  const foundationDone = foundationStages.every(s => s.status === "completed");
+  const foundationFailed = foundationStages.some(s => s.status === "failed");
+  const foundationRunning = foundationStages.some(s => s.status === "running");
+
+  // Features phase
+  const allFeaturesDone = features.length > 0 && features.every(f => {
+    const fStages = f.stages.filter(s => FEATURE_STAGES.includes(s.name));
+    return fStages.length > 0 && fStages.every(s => s.status === "completed");
+  });
+
+  // Screenshots stage (from foundation or first iteration)
+  const screenshotsStage = (foundation?.stages ?? stages).find(s => s.name === "screenshots");
+  const showScreenshots = features.length === 0 || allFeaturesDone || (screenshotsStage?.status !== "pending");
 
   return (
-    <div className="space-y-0">
-      {stages.map((stage, i) => {
-        const meta = STAGE_META[stage.name] || { Icon: IconSettingsAutomation, label: stage.name, color: "var(--color-text-muted)" };
-        const hasContent = !!(stage.output || stage.error);
-        const isOpen = expanded === stage.name;
-        const colors = getStageColors(stage.status);
-        const showConnector = i < stages.length - 1;
-
-        return (
-          <div key={stage.name}>
-            <div
-              className={`flex items-start gap-4 ${hasContent ? "cursor-pointer" : ""}`}
-              onClick={() => hasContent && setExpanded(isOpen ? null : stage.name)}
-            >
-              {/* SVG node + connector */}
-              <div className="flex flex-col items-center flex-shrink-0" style={{ width: 44 }}>
-                <svg width={44} height={44} className="overflow-visible">
-                  <rect x={2} y={2} width={40} height={40} rx={12}
-                    fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5" />
-                  <foreignObject x={2} y={2} width={40} height={40}>
-                    <div className="w-full h-full flex items-center justify-center">
-                      {effectiveStatus(stage.status) === "completed" ? <IconCircleCheck size={20} color="#4ADE80" />
-                      : effectiveStatus(stage.status) === "running" ? <IconLoader2 size={20} color="#60A5FA" className="animate-spin" />
-                      : effectiveStatus(stage.status) === "failed" ? <IconCircleX size={20} color="#F87171" />
-                      : <meta.Icon size={20} style={{ color: meta.color }} />}
-                    </div>
-                  </foreignObject>
-                </svg>
-                {showConnector && (
-                  <svg width={20} height={28} className="overflow-visible">
-                    <defs>
-                      <marker id={`det-arrow-${i}`} markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-                        <path d="M0,0 L4,2 L0,4" fill="none" stroke={connectorColor(stage.status)} strokeWidth="0.8" />
-                      </marker>
-                    </defs>
-                    <path
-                      d={`M10,0 C10,10 10,18 10,24`}
-                      stroke={connectorColor(stage.status)}
-                      strokeWidth="1.5" fill="none" opacity="0.7"
-                      markerEnd={`url(#det-arrow-${i})`}
-                    />
-                  </svg>
-                )}
-              </div>
-              {/* Label + status */}
-              <div className="flex-1 flex items-center gap-3 pt-2.5">
-                <span className="font-medium">{meta.label}</span>
-                <StageStatusIcon status={effectiveStatus(stage.status)} />
-                {stage.startedAt && stage.completedAt && (
-                  <span className="text-xs text-[var(--color-text-muted)]">
-                    {Math.round((new Date(stage.completedAt).getTime() - new Date(stage.startedAt).getTime()) / 1000)}s
-                  </span>
-                )}
-                {hasContent && (
-                  isOpen ? <IconChevronDown size={14} className="text-[var(--color-text-muted)]" />
-                         : <IconChevronRight size={14} className="text-[var(--color-text-muted)]" />
-                )}
-              </div>
-            </div>
-            {isOpen && (
-              <div className="ml-14 mt-2 mb-2">
-                {stage.output && (
-                  <div className={`text-xs bg-[var(--color-bg-tertiary)] rounded-[var(--radius-md)] p-3 overflow-auto max-h-80 ${
-                    stage.name === "propose" ? "text-[var(--color-text-primary)] whitespace-pre-wrap leading-relaxed" : "text-[var(--color-text-secondary)] whitespace-pre-wrap font-mono"
-                  }`}>
-                    {stage.output}
-                  </div>
-                )}
-                {stage.error && (
-                  <pre className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-[var(--radius-md)] p-3 overflow-auto max-h-64 whitespace-pre-wrap">
-                    {stage.error}
-                  </pre>
-                )}
-              </div>
-            )}
+    <div className="space-y-4">
+      {/* Foundation phase */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Foundation</span>
+          {foundationDone && <PhaseBadge label="Complete" done />}
+          {foundationFailed && !foundationDone && <PhaseBadge label="Failed" done={false} failed />}
+        </div>
+        {foundationDone ? (
+          <div className="text-xs text-green-400/70 ml-1">All stages completed ✓</div>
+        ) : (
+          <div className="flex flex-wrap gap-1 items-start">
+            {foundationStages.map((stage, i) => {
+              const meta = STAGE_META[stage.name] || { Icon: IconSettingsAutomation, label: stage.name, color: "var(--color-text-muted)" };
+              return (
+                <div key={stage.name} className="flex items-start">
+                  <StageNode stage={stage} meta={meta} taskFailed={taskFailed} />
+                  {i < foundationStages.length - 1 && <StageConnector completed={stage.status === "completed"} />}
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        )}
+      </div>
+
+      {/* Features phase */}
+      {features.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Features</span>
+            {allFeaturesDone && <PhaseBadge label="Complete" done />}
+          </div>
+          <div className="space-y-1.5">
+            {features.map((feat, i) => {
+              const fStages = feat.stages.filter(s => FEATURE_STAGES.includes(s.name));
+              const fDone = fStages.length > 0 && fStages.every(s => s.status === "completed");
+              const fFailed = fStages.some(s => s.status === "failed");
+              const fRunning = fStages.some(s => s.status === "running");
+              const fQueued = !foundationDone && fStages.every(s => s.status === "pending");
+              return (
+                <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
+                  <span className="text-xs font-medium truncate flex-1 min-w-0">{feat.label}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {fQueued ? (
+                      <span className="text-[10px] text-amber-400 flex items-center gap-1">
+                        <IconClock size={12} /> Queued
+                      </span>
+                    ) : fDone ? (
+                      <span className="text-[10px] text-green-400 flex items-center gap-1">
+                        <IconCircleCheck size={12} /> Complete
+                      </span>
+                    ) : (
+                      fStages.map((s) => {
+                        const meta = STAGE_META[s.name] || { Icon: IconSettingsAutomation, label: s.name, color: "var(--color-text-muted)" };
+                        return <StageNode key={s.name} stage={s} meta={meta} taskFailed={taskFailed} />;
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Screenshots phase */}
+      {screenshotsStage && showScreenshots && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Screenshots</span>
+          </div>
+          <StageNode
+            stage={screenshotsStage}
+            meta={STAGE_META.screenshots}
+            taskFailed={taskFailed}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -158,10 +217,12 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
   const esRef = useRef<EventSource | null>(null);
   const partialRef = useRef<string>("");
 
+  // Connect when task is running OR was recently running (completed/failed may still have buffer data)
+  const shouldConnect = isRunning || taskStatus === "completed" || taskStatus === "failed";
+
   useEffect(() => {
-    if (!isRunning) {
+    if (!shouldConnect) {
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
-      // Flush any remaining partial line
       if (partialRef.current) {
         const remaining = partialRef.current;
         partialRef.current = "";
@@ -175,66 +236,56 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
     const connect = async () => {
       if (cancelled || (esRef.current && esRef.current.readyState !== EventSource.CLOSED)) return;
 
-      // Get auth token for Azure (EventSource can't send headers)
       const token = await getAccessToken();
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
       const url = `${API_URL}/api/dev/${taskId}/stream${tokenParam}`;
-      console.log(`[SSE-DIAG] Connecting to ${url.replace(/token=[^&]+/, "token=***")}`);
       const es = new EventSource(url);
       esRef.current = es;
       setConnected(true);
-
-      es.onopen = () => {
-        console.log(`[SSE-DIAG] EventSource OPEN for task=${taskId}`);
-      };
 
       es.onmessage = (ev) => {
         try {
           const entry = JSON.parse(ev.data);
           if (entry.type === "stdout" || entry.type === "stderr" || entry.type === "stage" || entry.type === "decision") {
-            // Buffer partial lines: accumulate text until we see newlines
             const chunk = entry.data as string;
             const combined = partialRef.current + chunk;
             const parts = combined.split("\n");
-            // Last element is the incomplete tail (empty string if chunk ended with \n)
             partialRef.current = parts.pop() ?? "";
-            // All other elements are complete lines
             if (parts.length > 0) {
               setLines((prev) => [...prev, ...parts].slice(-500));
             }
           }
           if (entry.type === "exit") {
-            // Flush remaining partial line
             if (partialRef.current) {
               const remaining = partialRef.current;
               partialRef.current = "";
               setLines((prev) => [...prev, remaining].slice(-500));
             }
-            console.log(`[SSE-DIAG] Exit event for task=${taskId}`);
             setConnected(false);
             es.close();
+            esRef.current = null;
           }
         } catch { /* ignore parse errors */ }
       };
 
-      es.onerror = (err) => {
-        console.error(`[SSE-DIAG] EventSource ERROR for task=${taskId} readyState=${es.readyState}`, err);
+      es.onerror = () => {
         setConnected(false);
         es.close();
         esRef.current = null;
       };
     };
 
+    // Connect immediately on mount
     connect();
-    // Retry connection every 5s while running
-    const interval = setInterval(connect, 5000);
+    // Retry every 5s while running
+    const interval = isRunning ? setInterval(connect, 5000) : null;
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
     };
-  }, [isRunning, taskId]);
+  }, [shouldConnect, isRunning, taskId]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -245,6 +296,10 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
 
   if (taskStatus === "pending") return null;
 
+  const emptyMessage = isRunning
+    ? "Reconnecting to sandbox stream..."
+    : "Waiting for sandbox output...";
+
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border-dark)]">
@@ -253,7 +308,7 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
           <span className="text-xs font-medium text-[var(--color-text-muted)]">Copilot CLI Sandbox</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`relative flex h-2 w-2 ${connected ? "" : ""}`}>
+          <span className={`relative flex h-2 w-2`}>
             {connected && <span className="absolute inset-0 rounded-full bg-green-400 opacity-75 animate-ping" />}
             <span className={`relative inline-flex h-2 w-2 rounded-full ${connected ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
           </span>
@@ -266,7 +321,10 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
         style={{ maxHeight: 320, minHeight: 120 }}
       >
         {lines.length === 0 ? (
-          <span className="text-[var(--color-text-muted)]">Waiting for sandbox output...</span>
+          <span className="text-[var(--color-text-muted)]">
+            {isRunning && <IconLoader2 size={12} className="inline animate-spin mr-1.5 align-middle" />}
+            {emptyMessage}
+          </span>
         ) : (
           lines.map((line, i) => (
             <div key={i} className="whitespace-pre-wrap text-[var(--color-text-secondary)]">{line}</div>
@@ -308,7 +366,7 @@ function SquadPanel({ squad }: { squad: SquadInfo }) {
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-medium truncate">{m.name}</span>
                 <span
-                  className="inline-block w-2 h-2 rounded-full shrink-0"
+                  className={`inline-block w-2 h-2 rounded-full shrink-0 ${m.status === "working" ? "animate-pulse" : ""}`}
                   style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
                   title={m.status}
                 />
@@ -514,7 +572,12 @@ export default function DevTaskDetailPage() {
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-6">
           {isOpenSpec ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
         </h2>
-        <IterationStages stages={iterations[activeIteration]?.stages || task.stages} taskFailed={task.status === "failed"} />
+        <IterationStages
+          stages={iterations[activeIteration]?.stages || task.stages}
+          taskFailed={task.status === "failed"}
+          iterations={isOpenSpec ? iterations : undefined}
+          activeIteration={activeIteration}
+        />
       </div>
 
       {/* Squad Team */}

@@ -30,6 +30,7 @@ SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 # ── Pipeline output buffers (module-level, keyed by dev task ID) ──────────
 # Stores streaming output entries for the frontend terminal view.
 _pipeline_outputs: dict[str, list[dict]] = {}
+_PIPELINE_BUFFER_CAP = 2000  # Max entries per task to prevent unbounded memory
 
 # ── Active sandbox task IDs per dev task (for cleanup on deletion) ────────
 _active_sandbox_tasks: dict[str, str] = {}  # dev_task_id → sandbox_task_id
@@ -77,6 +78,16 @@ def _get_premium_multiplier(model: str) -> int:
 def get_pipeline_output(task_id: str) -> list[dict]:
     """Get the pipeline output buffer for a task (for SSE streaming)."""
     return _pipeline_outputs.get(task_id, [])
+
+
+def _buf_append(task_id: str, entry: dict) -> None:
+    """Append an entry to the pipeline output buffer, capping at _PIPELINE_BUFFER_CAP."""
+    buf = _pipeline_outputs.get(task_id)
+    if buf is None:
+        return
+    buf.append(entry)
+    if len(buf) > _PIPELINE_BUFFER_CAP:
+        del buf[: len(buf) - _PIPELINE_BUFFER_CAP]
 
 
 async def cancel_sandbox_task_for(task_id: str) -> bool:
@@ -330,7 +341,7 @@ class DevAgent:
             logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
             # Emit error to terminal
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "stderr", "data": f"Pipeline failed: {e}", "ts": time.time()
                 })
             try:
@@ -352,7 +363,7 @@ class DevAgent:
         finally:
             # Emit completion marker
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "exit", "code": 0, "ts": time.time()
                 })
 
@@ -415,7 +426,7 @@ class DevAgent:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
         else:
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "stdout", "data": "No skills to install\n", "stage": "skills",
                 })
         await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
@@ -488,7 +499,7 @@ class DevAgent:
                 except Exception as exc:
                     logger.warning("Mockup apply task %d failed: %s", i + 1, exc)
                     if task_id in _pipeline_outputs:
-                        _pipeline_outputs[task_id].append({
+                        _buf_append(task_id, {
                             "type": "stderr",
                             "data": f"Apply task {i + 1} failed: {exc}\n",
                             "stage": f"apply-{i + 1}",
@@ -521,7 +532,7 @@ class DevAgent:
                         logger.warning("Mockup apply timed out, retrying once...")
                         await self._checkpoint(task_id, "mockup-apply-partial", work_dir)
                         if task_id in _pipeline_outputs:
-                            _pipeline_outputs[task_id].append({
+                            _buf_append(task_id, {
                                 "type": "stderr",
                                 "data": "Apply timed out — retrying with continue...\n",
                                 "stage": "apply-retry",
@@ -646,6 +657,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
+        self._squad_enabled = True  # Enable --agent squad for apply stages
 
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("OpenSpec foundation propose: task=%s", task_id)
@@ -693,8 +705,10 @@ class DevAgent:
                     raise_on_error=False,
                     work_dir=work_dir,
                     continue_session=True,
+                    agent="squad" if self._squad_enabled else None,
                 )
                 await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
+                await self._poll_squad_status(task_id, work_dir, user_id)
         else:
             # Fallback: single apply if we couldn't parse tasks
             await self._sandbox_exec(
@@ -710,9 +724,13 @@ class DevAgent:
                 raise_on_error=False,
                 work_dir=work_dir,
                 continue_session=True,
+                agent="squad" if self._squad_enabled else None,
             )
             await self._checkpoint(task_id, "foundation-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
+
+        # Mark foundation archive as completed before moving to features
+        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
 
         # ── Post-foundation hook: pick up any queued feature iterations ──
         # Features may have been added via add_feature_to_spec while foundation was running
@@ -761,6 +779,7 @@ class DevAgent:
                         model=model,
                         svc=svc,
                         feature_work_dir=feat_dir,
+                        user_id=user_id,
                     )
 
             await asyncio.gather(
@@ -862,6 +881,7 @@ class DevAgent:
         model: str,
         svc,
         feature_work_dir: str,
+        user_id: str = "",
     ) -> None:
         """Run propose + apply for a single feature in its own workspace copy."""
         logger.info(
@@ -907,11 +927,14 @@ class DevAgent:
                     stall_timeout=600,
                     raise_on_error=False,
                     work_dir=feature_work_dir,
+                    agent="squad" if self._squad_enabled else None,
                 )
                 await self._checkpoint(
                     task_id, f"feature-{iter_idx}-task-{ft_idx + 1}",
                     feature_work_dir,
                 )
+                if user_id:
+                    await self._poll_squad_status(task_id, feature_work_dir, user_id)
         else:
             await self._sandbox_exec(
                 task_id=task_id,
@@ -925,6 +948,7 @@ class DevAgent:
                 stall_timeout=600,
                 raise_on_error=False,
                 work_dir=feature_work_dir,
+                agent="squad" if self._squad_enabled else None,
             )
             await self._checkpoint(
                 task_id, f"feature-{iter_idx}-apply", feature_work_dir,
@@ -1181,6 +1205,7 @@ class DevAgent:
         raise_on_error: bool = True,
         work_dir: str = "/workspace",
         continue_session: bool = False,
+        agent: str | None = None,
     ) -> str:
         """Submit a task to the sandbox and stream output via SSE.
 
@@ -1193,6 +1218,7 @@ class DevAgent:
                 task stalled and killing it. Default 180s (3 minutes).
             continue_session: If True, adds --continue flag to Copilot CLI to
                 resume the previous session and maintain context across stages.
+            agent: If set (e.g. "squad"), adds --agent flag to Copilot CLI.
         """
         payload: dict = {"workDir": work_dir}
         if prompt:
@@ -1200,6 +1226,8 @@ class DevAgent:
             payload["model"] = model
             if continue_session:
                 payload["continueSession"] = True
+            if agent:
+                payload["agent"] = agent
             # Track premium request cost for this Copilot CLI invocation
             premium_cost = _get_premium_multiplier(model)
             if task_id:
@@ -1236,7 +1264,7 @@ class DevAgent:
 
         # Emit stage marker
         if task_id:
-            output_buf.append({
+            _buf_append(task_id, {
                 "type": "stage", "data": f"── {stage_label} ──", "ts": time.time()
             })
 
@@ -1331,7 +1359,7 @@ class DevAgent:
                         # Forward to pipeline buffer for terminal view
                         # (skip exit events — the pipeline emits its own on completion)
                         if task_id and entry_type != "exit":
-                            output_buf.append(entry)
+                            _buf_append(task_id, entry)
 
                         if entry_type == "stdout":
                             data = entry.get("data", "")
@@ -1401,6 +1429,45 @@ class DevAgent:
                 )
         except Exception as exc:
             logger.warning("Failed to kill sandbox task %s: %s", sandbox_task_id, exc)
+
+    async def _poll_squad_status(
+        self, task_id: str, work_dir: str, user_id: str,
+    ) -> None:
+        """Poll squad status and update member activity in the service."""
+        try:
+            raw = await self._sandbox_exec(
+                task_id=task_id,
+                command=f"test -f {work_dir}/.squad/config.json && squad status --json 2>/dev/null || echo '[]'",
+                args=[],
+                stage_label="squad-status",
+                work_dir=work_dir,
+                timeout=15,
+                raise_on_error=False,
+            )
+            if not raw.strip() or raw.strip() == "[]":
+                return
+            status_data = json.loads(raw.strip())
+            if not isinstance(status_data, list):
+                return
+            svc = self._service.with_user(user_id)
+            task = await svc.get_by_id(task_id)
+            if not task or not task.squad:
+                return
+            active_names = {m.get("name", "") for m in status_data if m.get("active")}
+            updated_members = []
+            for m in task.squad.team_members:
+                if m.name in active_names:
+                    m.status = "working"
+                elif m.status == "working":
+                    m.status = "done"
+                updated_members.append(m)
+            await svc.set_squad(task_id, {"teamMembers": [m.model_dump(by_alias=True) for m in updated_members]})
+        except Exception as exc:
+            logger.debug("squad status poll failed (non-fatal): %s", exc)
+
+    def _has_squad(self, work_dir: str) -> bool:
+        """Check if squad config flag was set for this task."""
+        return getattr(self, "_squad_enabled", False)
 
     async def _checkpoint(
         self,
@@ -1504,7 +1571,7 @@ class DevAgent:
             return
 
         # Log to output buffer
-        output_buf.append({
+        _buf_append(task_id, {
             "type": "decision",
             "data": f"🤖 Auto-answered: {answer}",
             "ts": time.time(),
@@ -1579,7 +1646,7 @@ class DevAgent:
                             data = entry.get("data", "")
                             output_lines.append(data)
                         if task_id:
-                            output_buf.append(entry)
+                            _buf_append(task_id, entry)
                     return status.get("exitCode", -1)
 
         raise RuntimeError(f"Sandbox task timed out: {stage_label}")
@@ -1747,7 +1814,7 @@ class DevAgent:
 
         # Step 1: squad init
         if task_id in _pipeline_outputs:
-            _pipeline_outputs[task_id].append({
+            _buf_append(task_id, {
                 "type": "stdout", "data": "── Initializing Squad ──\n", "stage": "squad",
             })
         try:
@@ -1808,7 +1875,7 @@ class DevAgent:
         # Step 4: Hire each agent
         for member in team:
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "stdout",
                     "data": f"  Hiring {member['name']} as {member['role']}...\n",
                     "stage": "squad",
@@ -1846,7 +1913,7 @@ class DevAgent:
 
         if task_id in _pipeline_outputs:
             names = ", ".join(f"{m['name']} ({m['role']})" for m in team)
-            _pipeline_outputs[task_id].append({
+            _buf_append(task_id, {
                 "type": "stdout",
                 "data": f"── Squad ready: {names} ──\n",
                 "stage": "squad",
@@ -1879,7 +1946,7 @@ class DevAgent:
             is_local = npx_cmd == "__local__" or "local/" in npx_cmd
             if is_local:
                 if task_id in _pipeline_outputs:
-                    _pipeline_outputs[task_id].append({
+                    _buf_append(task_id, {
                         "type": "stdout",
                         "data": f"── {skill_name} (local — pre-synced from blob) ──\n",
                         "stage": "install-skills",
@@ -1889,7 +1956,7 @@ class DevAgent:
                 continue
 
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "stdout",
                     "data": f"── install-skill-{skill_name} ──\n",
                     "stage": "install-skills",
@@ -1908,14 +1975,14 @@ class DevAgent:
             except Exception as exc:
                 logger.warning("Failed to install skill '%s': %s", skill_name, exc)
                 if task_id in _pipeline_outputs:
-                    _pipeline_outputs[task_id].append({
+                    _buf_append(task_id, {
                         "type": "stderr",
                         "data": f"Skill install failed for {skill_name}: {exc}\n",
                         "stage": "install-skills",
                     })
 
         if installed and task_id in _pipeline_outputs:
-            _pipeline_outputs[task_id].append({
+            _buf_append(task_id, {
                 "type": "stdout",
                 "data": f"Activated {installed} skills in workspace\n",
                 "stage": "install-skills",
@@ -1936,7 +2003,7 @@ class DevAgent:
         Uses claude-haiku-4.5 (cheap) to minimize premium request cost.
         """
         if task_id in _pipeline_outputs:
-            _pipeline_outputs[task_id].append({
+            _buf_append(task_id, {
                 "type": "stdout",
                 "data": "── verify-skills ──\n",
                 "stage": "verify-skills",
@@ -1956,7 +2023,7 @@ class DevAgent:
         except Exception as exc:
             logger.warning("CLI skill verification failed: %s", exc)
             if task_id in _pipeline_outputs:
-                _pipeline_outputs[task_id].append({
+                _buf_append(task_id, {
                     "type": "stderr",
                     "data": f"Skill verification error: {exc}\n",
                     "stage": "verify-skills",

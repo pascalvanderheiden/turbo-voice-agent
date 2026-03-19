@@ -20,7 +20,7 @@ import {
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { devApi, specsApi, skillsApi, type DevTask, type Spec, type InstalledSkill } from "@/lib/api";
+import { devApi, specsApi, skillsApi, type DevTask, type Spec, type InstalledSkill, type DevIteration } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -48,165 +48,95 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function StagePipeline({ stages }: { stages: DevTask["stages"] }) {
-  // Layout: main row (init→archive), then screenshots drops below last stage
-  const mainStages = stages.filter((s) => s.name !== "screenshots");
-  const screenshotStage = stages.find((s) => s.name === "screenshots");
+function StagePipeline({ task }: { task: DevTask }) {
+  const iterations = task.iterations.length > 0 ? task.iterations : [{ iterationIndex: 0, label: task.title, stages: task.stages, specPartId: undefined, workspacePath: undefined }];
+  const foundation = iterations[0];
+  const features = iterations.slice(1);
 
-  // Node dimensions in viewBox units
-  const nodeW = 36, nodeH = 36, gapX = 32, gapY = 44, labelH = 14;
-  const mainY = 0;
-  const totalMainW = mainStages.length * nodeW + (mainStages.length - 1) * gapX;
-  const svgW = totalMainW + (screenshotStage ? 24 : 4);
-  const svgH = screenshotStage ? mainY + nodeH + labelH + gapY + nodeH + labelH + 4 : mainY + nodeH + labelH + 4;
+  const foundationStages = foundation?.stages.filter(s => s.name !== "screenshots") ?? [];
+  const foundationDone = foundationStages.every(s => s.status === "completed");
+  const foundationFailed = foundationStages.some(s => s.status === "failed");
+  const foundationRunning = foundationStages.some(s => s.status === "running");
 
-  const getStageColor = (status: string) => {
-    if (status === "completed") return { stroke: "#22C55E", fill: "rgba(34,197,94,0.1)", text: "#4ADE80" };
-    if (status === "running") return { stroke: "#3B82F6", fill: "rgba(59,130,246,0.1)", text: "#60A5FA" };
-    if (status === "failed") return { stroke: "#EF4444", fill: "rgba(239,68,68,0.1)", text: "#F87171" };
-    return { stroke: "var(--color-border-dark)", fill: "var(--color-bg-tertiary)", text: "var(--color-text-muted)" };
+  const allFeaturesDone = features.length > 0 && features.every(f =>
+    f.stages.filter(s => s.name === "propose" || s.name === "apply").every(s => s.status === "completed")
+  );
+
+  const screenshotsStage = foundation?.stages.find(s => s.name === "screenshots");
+
+  // Working squad members
+  const workingMembers = task.squad?.teamMembers?.filter(m => m.status === "working") ?? [];
+  const ROLE_EMOJI: Record<string, string> = {
+    Lead: "🏗️", "Frontend Dev": "⚛️", "Backend Dev": "🔧",
+    Tester: "🧪", DevOps: "🚀", Developer: "💻", Scribe: "📋",
   };
 
-  const connectorColor = (fromStatus: string) =>
-    fromStatus === "completed" ? "#22C55E" : "var(--color-border-dark)";
-
   return (
-    <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full overflow-visible" style={{ maxHeight: svgH * 1.2 }}>
-      <defs>
-        <marker id="arrow-green" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-          <path d="M0,0 L4,2 L0,4" fill="none" stroke="#22C55E" strokeWidth="0.8" />
-        </marker>
-        <marker id="arrow-muted" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
-          <path d="M0,0 L4,2 L0,4" fill="none" stroke="var(--color-border-dark)" strokeWidth="0.8" />
-        </marker>
-      </defs>
+    <div className="space-y-1.5">
+      {/* Foundation */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[9px] text-[var(--color-text-muted)] uppercase font-semibold w-12 shrink-0">Found.</span>
+        {foundationDone ? (
+          <span className="text-[10px] text-green-400 flex items-center gap-0.5"><IconCircleCheck size={12} /> Done</span>
+        ) : (
+          foundationStages.map((s) => {
+            const color = s.status === "completed" ? "#22C55E" : s.status === "running" ? "#3B82F6" : s.status === "failed" ? "#EF4444" : "var(--color-border-dark)";
+            return (
+              <div key={s.name} className="w-5 h-5 rounded flex items-center justify-center border" style={{ borderColor: color }}>
+                {s.status === "completed" ? <IconCircleCheck size={11} color="#4ADE80" />
+                 : s.status === "running" ? <IconLoader2 size={11} color="#60A5FA" className="animate-spin" />
+                 : s.status === "failed" ? <IconCircleX size={11} color="#F87171" />
+                 : <div className="w-1.5 h-1.5 rounded-full bg-current opacity-30" />}
+              </div>
+            );
+          })
+        )}
+      </div>
 
-      {/* Horizontal connectors between main stages */}
-      {mainStages.map((stage, i) => {
-        if (i >= mainStages.length - 1) return null;
-        const x1 = i * (nodeW + gapX) + nodeW + 4;
-        const x2 = (i + 1) * (nodeW + gapX) - 4;
-        const y = mainY + nodeH / 2;
-        const color = connectorColor(stage.status);
-        const markerId = stage.status === "completed" ? "arrow-green" : "arrow-muted";
-        return (
-          <path
-            key={`conn-${i}`}
-            d={`M${x1},${y} C${x1 + 14},${y} ${x2 - 14},${y} ${x2},${y}`}
-            stroke={color}
-            strokeWidth="1.5"
-            fill="none"
-            opacity="0.7"
-            markerEnd={`url(#${markerId})`}
-          />
-        );
-      })}
+      {/* Features (compact) */}
+      {features.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[9px] text-[var(--color-text-muted)] uppercase font-semibold w-12 shrink-0">Feat.</span>
+          {features.map((f, i) => {
+            const fDone = f.stages.filter(s => s.name === "propose" || s.name === "apply").every(s => s.status === "completed");
+            const fRunning = f.stages.some(s => s.status === "running");
+            return (
+              <span key={i} className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] border ${
+                fDone ? "text-green-400 border-green-500/30" : fRunning ? "text-blue-400 border-blue-500/30" : "text-[var(--color-text-muted)] border-[var(--color-border-dark)]"
+              }`}>
+                {fDone ? <IconCircleCheck size={10} /> : fRunning ? <IconLoader2 size={10} className="animate-spin" /> : <IconClock size={10} />}
+                {i + 1}
+              </span>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Curved connector from right side of archive to right side of screenshots */}
-      {screenshotStage && mainStages.length > 0 && (() => {
-        const lastIdx = mainStages.length - 1;
-        const archiveRight = lastIdx * (nodeW + gapX) + nodeW;
-        const archiveMidY = mainY + nodeH / 2;
-        const screenshotY = mainY + nodeH + labelH + gapY;
-        const screenshotRight = archiveRight;
-        const screenshotMidY = screenshotY + nodeH / 2;
-        const bulge = 20;
-        const color = connectorColor(mainStages[lastIdx].status);
-        const markerId = mainStages[lastIdx].status === "completed" ? "arrow-green" : "arrow-muted";
-        return (
-          <path
-            d={`M${archiveRight},${archiveMidY} C${archiveRight + bulge},${archiveMidY} ${screenshotRight + bulge},${screenshotMidY} ${screenshotRight},${screenshotMidY}`}
-            stroke={color}
-            strokeWidth="1.5"
-            fill="none"
-            opacity="0.7"
-            markerEnd={`url(#${markerId})`}
-          />
-        );
-      })()}
+      {/* Screenshots */}
+      {screenshotsStage && screenshotsStage.status !== "pending" && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-[var(--color-text-muted)] uppercase font-semibold w-12 shrink-0">Shots</span>
+          <span className={`text-[10px] flex items-center gap-0.5 ${
+            screenshotsStage.status === "completed" ? "text-green-400" : screenshotsStage.status === "running" ? "text-blue-400" : "text-[var(--color-text-muted)]"
+          }`}>
+            {screenshotsStage.status === "completed" ? <IconCircleCheck size={12} /> : screenshotsStage.status === "running" ? <IconLoader2 size={12} className="animate-spin" /> : <IconClock size={12} />}
+            {screenshotsStage.status}
+          </span>
+        </div>
+      )}
 
-      {/* Main stage nodes */}
-      {mainStages.map((stage, i) => {
-        const x = i * (nodeW + gapX);
-        const colors = getStageColor(stage.status);
-        const meta = STAGE_META[stage.name];
-        const cx = x + nodeW / 2, cy = mainY + nodeH / 2;
-        return (
-          <g key={stage.name}>
-            <rect
-              x={x} y={mainY} width={nodeW} height={nodeH} rx={10}
-              fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5"
-            />
-            {stage.status === "completed" ? (
-              <path d={`M${cx - 6},${cy} L${cx - 1},${cy + 5} L${cx + 7},${cy - 4}`}
-                stroke="#4ADE80" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            ) : stage.status === "failed" ? (
-              <g stroke="#F87171" strokeWidth="2.5" strokeLinecap="round">
-                <line x1={cx - 5} y1={cy - 5} x2={cx + 5} y2={cy + 5} />
-                <line x1={cx + 5} y1={cy - 5} x2={cx - 5} y2={cy + 5} />
-              </g>
-            ) : stage.status === "running" ? (
-              <circle cx={cx} cy={cy} r={6} fill="none" stroke="#60A5FA" strokeWidth="2.5"
-                strokeDasharray="12 8" strokeLinecap="round">
-                <animateTransform attributeName="transform" type="rotate"
-                  from={`0 ${cx} ${cy}`} to={`360 ${cx} ${cy}`} dur="1s" repeatCount="indefinite" />
-              </circle>
-            ) : (
-              <circle cx={cx} cy={cy} r={4} fill={meta?.color || "var(--color-text-muted)"} opacity="0.6" />
-            )}
-            <text
-              x={x + nodeW / 2} y={mainY + nodeH + 12}
-              textAnchor="middle" fontSize="9" fontWeight="500"
-              fill={colors.text}
-            >
-              {meta?.label || stage.name}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* Screenshots node (below last main stage) */}
-      {screenshotStage && (() => {
-        const lastIdx = mainStages.length - 1;
-        const x = lastIdx * (nodeW + gapX);
-        const y = mainY + nodeH + labelH + gapY;
-        const colors = getStageColor(screenshotStage.status);
-        const meta = STAGE_META.screenshots;
-        const cx = x + nodeW / 2, cy = y + nodeH / 2;
-        return (
-          <g>
-            <rect
-              x={x} y={y} width={nodeW} height={nodeH} rx={10}
-              fill={colors.fill} stroke={colors.stroke} strokeWidth="1.5"
-            />
-            {screenshotStage.status === "completed" ? (
-              <path d={`M${cx - 6},${cy} L${cx - 1},${cy + 5} L${cx + 7},${cy - 4}`}
-                stroke="#4ADE80" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            ) : screenshotStage.status === "failed" ? (
-              <g stroke="#F87171" strokeWidth="2.5" strokeLinecap="round">
-                <line x1={cx - 5} y1={cy - 5} x2={cx + 5} y2={cy + 5} />
-                <line x1={cx + 5} y1={cy - 5} x2={cx - 5} y2={cy + 5} />
-              </g>
-            ) : screenshotStage.status === "running" ? (
-              <circle cx={cx} cy={cy} r={6} fill="none" stroke="#60A5FA" strokeWidth="2.5"
-                strokeDasharray="12 8" strokeLinecap="round">
-                <animateTransform attributeName="transform" type="rotate"
-                  from={`0 ${cx} ${cy}`} to={`360 ${cx} ${cy}`} dur="1s" repeatCount="indefinite" />
-              </circle>
-            ) : (
-              <circle cx={cx} cy={cy} r={4} fill={meta.color} opacity="0.6" />
-            )}
-            <text
-              x={x + nodeW / 2} y={y + nodeH + 12}
-              textAnchor="middle" fontSize="9" fontWeight="500"
-              fill={colors.text}
-            >
-              {meta.label}
-            </text>
-          </g>
-        );
-      })()}
-    </svg>
+      {/* Working squad members */}
+      {workingMembers.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap pt-0.5">
+          {workingMembers.map((m) => (
+            <span key={m.name} className="inline-flex items-center gap-0.5 text-[9px] text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/5 px-1 py-0.5 rounded border border-[var(--color-brand-cyan)]/20">
+              <span>{ROLE_EMOJI[m.role] ?? "👤"}</span>
+              {m.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -376,7 +306,7 @@ export default function DevelopmentPage() {
                   )}
                 </div>
 
-                <StagePipeline stages={task.stages} />
+                <StagePipeline task={task} />
 
                 <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--color-border-dark)]">
                   <span className="text-xs text-[var(--color-text-muted)]">
