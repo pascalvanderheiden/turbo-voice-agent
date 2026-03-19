@@ -99,7 +99,10 @@ class SkillsAgent:
             repo = args["repo"]
             skill_name = args["skill_name"]
             desc = args.get("description", "")
-            npx_cmd = f"npx -y degit {repo}/{skill_name} .github/skills/{skill_name}"
+            npx_cmd = (
+                "__local__" if repo == "local"
+                else f"npx -y degit {repo}/{skill_name} .github/skills/{skill_name}"
+            )
             result = await svc.activate_skill(skill_name, desc, repo, npx_cmd)
             return json.dumps({"name": result["name"], "success": True})
 

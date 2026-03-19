@@ -1590,7 +1590,9 @@ class DevAgent:
         installed = 0
         for skill_name, npx_cmd in npx_map.items():
             # Local skills are pre-synced from blob storage — skip npx install
-            if npx_cmd == "__local__":
+            # Also catch legacy records where repo was "local" but npxCommand wasn't fixed
+            is_local = npx_cmd == "__local__" or "local/" in npx_cmd
+            if is_local:
                 if task_id in _pipeline_outputs:
                     _pipeline_outputs[task_id].append({
                         "type": "stdout",
