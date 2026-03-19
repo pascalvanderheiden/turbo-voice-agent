@@ -105,7 +105,7 @@ async def create_dev_task(data: DevTaskCreate, request: Request):
             activated = await _cosmos_skills.with_user(user_id).list_activated()
             suggested = _skills_service.suggest_skills_for_content(content, activated) if _skills_service else []
             if not suggested:
-                suggested = [s["name"] for s in activated[:3]]
+                suggested = [s["name"] for s in activated]
             if suggested:
                 task = await svc.set_skill_ids(task.id, suggested)
                 logger.info("Auto-attached skills %s to task %s", suggested, task.id)

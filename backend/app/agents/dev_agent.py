@@ -1464,7 +1464,7 @@ class DevAgent:
         suggested = self._skills_service.suggest_skills_for_content(content, activated)
         # Fallback: if no keyword match, include all activated skills
         if not suggested:
-            suggested = [s["name"] for s in activated[:3]]
+            suggested = [s["name"] for s in activated]
         if suggested:
             await self._service.set_skill_ids(task_id, suggested)
             logger.info("Auto-attached skills %s to task %s", suggested, task_id)
@@ -1476,6 +1476,7 @@ class DevAgent:
 
         For each skill attached to the task, fetches the npxCommand from
         Cosmos DB and executes it in the sandbox via _sandbox_exec().
+        After installation, verifies each skill has a valid SKILL.md file.
         Returns the number of skills successfully installed.
         """
         if not self._cosmos_skills or not task.skill_ids:
@@ -1521,7 +1522,87 @@ class DevAgent:
                 "stage": "install-skills",
             })
 
+        # ── Verify installed skills ──────────────────────────────────
+        await self._verify_skills_in_sandbox(task_id, work_dir, list(npx_map.keys()))
+
         return installed
+
+    async def _verify_skills_in_sandbox(
+        self, task_id: str, work_dir: str, expected_skills: list[str],
+    ) -> None:
+        """Verify skills are properly installed by checking SKILL.md files.
+
+        Checks both workspace skills (.github/skills/) and user-level skills
+        (~/.copilot/skills/). Outputs a verification summary to the pipeline stream.
+        """
+        if task_id in _pipeline_outputs:
+            _pipeline_outputs[task_id].append({
+                "type": "stdout",
+                "data": "── verify-skills ──\n",
+                "stage": "verify-skills",
+            })
+
+        # Run a single command that checks all skill locations and outputs a report
+        verify_script = (
+            'echo "=== Skill Verification ===" && '
+            'echo "" && '
+            # Check workspace skills (.github/skills/)
+            'echo "Workspace skills (.github/skills/):" && '
+            'if [ -d .github/skills ]; then '
+            '  for d in .github/skills/*/; do '
+            '    name=$(basename "$d"); '
+            '    if [ -f "$d/SKILL.md" ]; then '
+            '      lines=$(wc -l < "$d/SKILL.md"); '
+            '      echo "  ✓ $name (SKILL.md: ${lines} lines)"; '
+            '    else '
+            '      echo "  ✗ $name (SKILL.md MISSING)"; '
+            '    fi; '
+            '  done; '
+            'else '
+            '  echo "  (none)"; '
+            'fi && '
+            'echo "" && '
+            # Check user-level skills (~/.copilot/skills/)
+            'echo "User skills (~/.copilot/skills/):" && '
+            'if [ -d ~/.copilot/skills ] && [ "$(ls -A ~/.copilot/skills 2>/dev/null)" ]; then '
+            '  for d in ~/.copilot/skills/*/; do '
+            '    name=$(basename "$d"); '
+            '    if [ -f "$d/SKILL.md" ]; then '
+            '      lines=$(wc -l < "$d/SKILL.md"); '
+            '      echo "  ✓ $name (SKILL.md: ${lines} lines)"; '
+            '    else '
+            '      echo "  ✗ $name (SKILL.md MISSING)"; '
+            '    fi; '
+            '  done; '
+            'else '
+            '  echo "  (none)"; '
+            'fi && '
+            'echo "" && '
+            # Count totals
+            'ws_count=$(find .github/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ") && '
+            'user_count=$(find ~/.copilot/skills -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d " ") && '
+            'total=$((ws_count + user_count)) && '
+            'echo "Total: $total skills verified ($ws_count workspace + $user_count user-level)" && '
+            'echo "==========================="'
+        )
+
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=f"bash -c '{verify_script}'",
+                args=[],
+                stage_label="verify-skills",
+                work_dir=work_dir,
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.warning("Skill verification failed: %s", exc)
+            if task_id in _pipeline_outputs:
+                _pipeline_outputs[task_id].append({
+                    "type": "stderr",
+                    "data": f"Skill verification error: {exc}\n",
+                    "stage": "verify-skills",
+                })
 
     # ── Spec content helpers ────────────────────────────────────────
 

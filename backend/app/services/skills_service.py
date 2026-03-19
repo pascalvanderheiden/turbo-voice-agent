@@ -47,7 +47,6 @@ class SkillsService:
         self,
         content: str,
         installed_skills: list[dict],
-        top_n: int = 3,
     ) -> list[str]:
         """Match content keywords against provided skill descriptions.
 
@@ -55,7 +54,7 @@ class SkillsService:
         ``name`` and ``description`` keys (as returned by
         ``CosmosSkillsService.list_activated``).
 
-        Returns the top-*n* skill names sorted by relevance score.
+        Returns all matching skill names sorted by relevance score.
         """
         if not installed_skills:
             return []
@@ -77,4 +76,4 @@ class SkillsService:
                 scored.append((skill["name"], score))
 
         scored.sort(key=lambda x: x[1], reverse=True)
-        return [name for name, _ in scored[:top_n]]
+        return [name for name, _ in scored]
