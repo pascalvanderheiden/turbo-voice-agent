@@ -118,12 +118,19 @@ class CosmosSkillsService:
             return None
 
     async def get_npx_commands(self, skill_ids: list[str]) -> dict[str, str]:
-        """Return a mapping of skill name → npxCommand for all requested skills."""
+        """Return a mapping of skill name → npxCommand for all requested skills.
+
+        Local skills (source='local') always return '__local__' regardless of
+        what npxCommand is stored, to handle legacy records with wrong degit URLs.
+        """
         if not skill_ids:
             return {}
         result: dict[str, str] = {}
         for name in skill_ids:
             skill = await self.get_skill(name)
             if skill and skill.get("npxCommand"):
-                result[name] = skill["npxCommand"]
+                if skill.get("source") == "local":
+                    result[name] = "__local__"
+                else:
+                    result[name] = skill["npxCommand"]
         return result
