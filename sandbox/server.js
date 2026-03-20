@@ -51,7 +51,7 @@ app.post("/tasks", (req, res) => {
   if (prompt) {
     // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
-    spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
+    spawnArgs = ["-p", prompt, "--model", model, "--autopilot"];
     // Continue from previous session to maintain context across pipeline stages
     if (continueSession) {
       spawnArgs.push("--continue");
