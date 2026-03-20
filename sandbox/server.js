@@ -43,6 +43,7 @@ app.post("/tasks", (req, res) => {
     workDir = "/workspace",
     ghToken: perTaskToken,
     continueSession = false,
+    agent,
   } = req.body;
 
   // Two modes: a) raw command, b) Copilot CLI prompt
@@ -54,6 +55,9 @@ app.post("/tasks", (req, res) => {
     // Continue from previous session to maintain context across pipeline stages
     if (continueSession) {
       spawnArgs.push("--continue");
+    }
+    if (agent) {
+      spawnArgs.push("--agent", agent);
     }
     // Premium request multiplier depends on model tier
     // Claude Opus = 3 premium, everything else = 1
