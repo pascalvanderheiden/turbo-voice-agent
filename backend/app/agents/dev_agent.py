@@ -1475,60 +1475,31 @@ class DevAgent:
     async def _poll_openspec_status(
         self, task_id: str, work_dir: str, user_id: str,
     ) -> None:
-        """Poll openspec status and update the dev task."""
+        """Poll openspec status via `openspec list --json` and update the dev task."""
         try:
-            # First discover the active change name
-            list_raw = await self._sandbox_exec(
-                task_id=task_id,
-                command=f"cd {work_dir} && openspec list --json 2>/dev/null || echo '[]'",
-                args=[],
-                stage_label="openspec-list",
-                work_dir=work_dir,
-                timeout=15,
-                raise_on_error=False,
-            )
             import re
-            change_name = ""
-            try:
-                json_match = re.search(r'\[.*\]', list_raw.strip(), re.DOTALL)
-                if json_match:
-                    changes = json.loads(json_match.group())
-                    if isinstance(changes, list) and changes:
-                        change_name = changes[0].get("name", changes[0].get("changeName", ""))
-            except Exception:
-                pass
-            if not change_name:
-                return
-
             raw = await self._sandbox_exec(
                 task_id=task_id,
-                command=(
-                    f"cd {work_dir} && "
-                    f'openspec status --json --change "{change_name}" 2>/dev/null || echo \'{{}}\''
-                ),
+                command=f"cd {work_dir} && openspec list --json 2>/dev/null || echo '[]'",
                 args=[],
                 stage_label="openspec-status",
                 work_dir=work_dir,
                 timeout=15,
                 raise_on_error=False,
             )
-            if not raw.strip() or raw.strip() == "{}":
-                return
-            json_match = re.search(r'\{.*\}', raw.strip(), re.DOTALL)
+            json_match = re.search(r'\[.*\]', raw.strip(), re.DOTALL)
             if not json_match:
                 return
-            data = json.loads(json_match.group())
-            # Parse openspec status fields
-            tasks = data.get("tasks", [])
-            total = len(tasks) if isinstance(tasks, list) else data.get("totalTasks", 0)
-            done = sum(1 for t in tasks if t.get("done") or t.get("status") == "done") if isinstance(tasks, list) else data.get("completedTasks", 0)
-            current = ""
-            if isinstance(tasks, list):
-                for t in tasks:
-                    if not t.get("done") and t.get("status") != "done":
-                        current = t.get("title", t.get("name", ""))
-                        break
-            # Count changed files
+            changes = json.loads(json_match.group())
+            if not isinstance(changes, list) or not changes:
+                return
+            change = changes[0]
+            change_name = change.get("name", change.get("changeName", ""))
+            total = change.get("totalTasks", change.get("total", 0))
+            done = change.get("completedTasks", change.get("complete", 0))
+            current = change.get("currentTask", "")
+
+            # Count changed files via git
             files_raw = await self._sandbox_exec(
                 task_id=task_id,
                 command=f"cd {work_dir} && git diff --stat HEAD~1 2>/dev/null | tail -1 || echo '0'",
