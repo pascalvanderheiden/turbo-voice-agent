@@ -346,17 +346,19 @@ const STATUS_COLOR: Record<string, string> = {
   done: "#22C55E",
 };
 
-function StatusPanel({ squad, openspecStatus, taskStatus }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus; taskStatus?: string }) {
+function StatusPanel({ squad, openspecStatus, taskStatus, mode }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus; taskStatus?: string; mode?: string }) {
   const hasSquad = squad?.teamMembers?.length;
   const hasOpenspec = openspecStatus && openspecStatus.totalTasks > 0;
   const isRunning = taskStatus === "running";
-  if (!hasSquad && !hasOpenspec && !isRunning) return null;
+  const showOpenspec = mode !== "slides"; // OpenSpec not relevant for slides
+  if (!hasSquad && (!hasOpenspec || !showOpenspec) && !isRunning) return null;
 
   const workingMembers = squad?.teamMembers?.filter(m => m.status === "working") ?? [];
 
   return (
     <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] p-4 space-y-4">
-      {/* OpenSpec status */}
+      {/* OpenSpec status — only for openspec/mockup modes */}
+      {showOpenspec && (
       <div>
         <div className="flex items-center gap-2 mb-2">
           <IconFileCode size={14} className="text-purple-400 shrink-0" />
@@ -397,6 +399,7 @@ function StatusPanel({ squad, openspecStatus, taskStatus }: { squad?: SquadInfo;
           </span>
         )}
       </div>
+      )}
 
       {/* Squad members */}
       {hasSquad && (
@@ -651,7 +654,7 @@ export default function DevTaskDetailPage() {
       </div>
 
       {/* Squad & OpenSpec Status */}
-      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} taskStatus={task.status} />
+      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} taskStatus={task.status} mode={task.mode} />
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />

@@ -886,53 +886,70 @@ class DevAgent:
         logger.info("OpenSpec pipeline COMPLETED for task %s", task_id)
 
     async def _run_slides_pipeline(self, task_id: str, user_id: str) -> None:
-        """Slides pipeline: init (clone deck-engine) → slides (generate) → export (PDF)."""
+        """Slides pipeline: init (create-deckio) → slides (Copilot CLI + deck skills) → export (PDF)."""
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
         if not task:
             return
 
         work_dir = f"/workspace/{task_id}"
+        deck_name = task.title.lower().replace(" ", "-")[:30]
         model = await self._get_user_model(user_id)
 
-        # Gather slides content for the prompt
-        slides_prompt = f"Create a professional slide deck titled: {task.title}"
+        # Gather slides content for the prompts
+        slide_requests: list[str] = []
+        slides_context = f"Presentation: {task.title}"
         if self._slides_service and task.slides_id:
             try:
                 ss = self._slides_service.with_user(user_id)
                 slides_data = await ss.get_by_id(task.slides_id)
                 if slides_data:
-                    parts = [f"# {slides_data.title}"]
                     if slides_data.description:
-                        parts.append(slides_data.description)
+                        slides_context += f"\n\n{slides_data.description}"
                     if slides_data.refined_draft:
-                        parts.append(f"\n## Refined Outline\n{slides_data.refined_draft}")
-                    for i, sec in enumerate(slides_data.sections):
-                        parts.append(
-                            f"\n### Slide {i + 1}: {sec.title}\n{sec.content}"
-                            + (f"\nNotes: {sec.notes}" if sec.notes else "")
-                        )
-                    slides_prompt = "\n".join(parts)
+                        slides_context += f"\n\n{slides_data.refined_draft}"
+                    for sec in slides_data.sections:
+                        desc = f"Add a slide titled '{sec.title}'"
+                        if sec.content:
+                            desc += f" that covers: {sec.content}"
+                        if sec.notes:
+                            desc += f" (speaker notes: {sec.notes})"
+                        slide_requests.append(desc)
             except Exception:
                 logger.warning("Could not load slides data for task %s", task_id)
 
+        if not slide_requests:
+            slide_requests = [
+                f"Add a title slide for: {task.title}",
+                f"Add a slide covering the main points of: {task.title}",
+                "Add a closing slide with key takeaways",
+            ]
+
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init ──
+        # ── Stage 1: Init — create-deckio scaffolds a new deck project ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
             await self._sandbox_exec(
                 task_id=task_id,
                 command=(
-                    f"rm -rf {work_dir} && mkdir -p {work_dir} && cd {work_dir}"
-                    " && git clone https://github.com/deckio-art/deck-engine.git ."
-                    " && npm install --prefer-offline 2>&1 | tail -5"
+                    f"rm -rf {work_dir} && mkdir -p {work_dir}"
+                    f" && cd {work_dir}"
+                    f" && npx -y create-deckio@latest {deck_name}"
+                    f" --title '{task.title}'"
+                    " --subtitle 'Built with deck-engine'"
+                    " --theme shadcn/ui"
+                    " --appearance dark"
+                    " --palette arctic"
+                    " --yes"
                 ),
                 args=[],
                 stage_label="init",
                 work_dir=work_dir,
-                timeout=300,
+                timeout=180,
             )
+            # Move into the created deck directory
+            work_dir = f"/workspace/{task_id}/{deck_name}"
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
             logger.error("Slides init failed for %s: %s", task_id, e)
@@ -942,22 +959,40 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Slides generation via Copilot CLI ──
+        # ── Stage 2: Slides — use Copilot CLI with deck skills to add each slide ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
-            prompt = (
-                f"Using the deck-engine project in the current directory, create a professional"
-                f" slide deck based on the following definition. Generate the slide content"
-                f" files and configure the deck:\n\n{slides_prompt}"
-            )
+            # Use deck skills via Copilot CLI to build slides one by one
+            for i, slide_prompt in enumerate(slide_requests):
+                _buf_append(task_id, {
+                    "type": "stage",
+                    "data": f"Creating slide {i + 1}/{len(slide_requests)}...",
+                    "ts": __import__("time").time(),
+                })
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    prompt=(
+                        f"Use the deck-add-slide skill to: {slide_prompt}. "
+                        f"Context: {slides_context}"
+                    ),
+                    model=model,
+                    stage_label=f"slide-{i + 1}",
+                    work_dir=work_dir,
+                    timeout=120,
+                    stall_timeout=90,
+                    continue_session=(i > 0),
+                )
+
+            # Validate the project
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=prompt,
+                prompt="Use the deck-validate-project skill to check the deck for consistency.",
                 model=model,
-                stage_label="slides",
+                stage_label="validate",
                 work_dir=work_dir,
-                timeout=600,
-                stall_timeout=300,
+                timeout=60,
+                stall_timeout=45,
+                continue_session=True,
             )
             await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
         except Exception as e:
@@ -968,33 +1003,33 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 3: Export to PDF ──
+        # ── Stage 3: Export — build and export to PDF ──
         await svc.set_iteration_stage_status(task_id, 0, "export", "running")
         try:
-            # Build and export using deck-engine's export capability
             await self._sandbox_exec(
                 task_id=task_id,
                 prompt=(
-                    "Build and export the slide deck to PDF. Run the deck-engine build"
-                    " and export each page as a single PDF file. If the project has an"
-                    " export script, use it. Otherwise use playwright or puppeteer to"
-                    " render pages and export to PDF. Save the final PDF to ./output.pdf"
+                    "Build the deck and export every slide page to a single combined PDF."
+                    " Run `npm run build` first, then start the dev server and use"
+                    " playwright to navigate each slide route and print-to-PDF."
+                    " Combine all pages into ./output.pdf. Stop the server when done."
                 ),
                 model=model,
                 stage_label="export",
                 work_dir=work_dir,
-                timeout=600,
-                stall_timeout=300,
+                timeout=300,
+                stall_timeout=180,
                 continue_session=True,
             )
 
-            # Try to read and upload the PDF
+            # Try to upload the PDF to blob storage
             pdf_url = None
             try:
                 import os
+
                 from azure.identity.aio import DefaultAzureCredential
-                from azure.storage.blob.aio import BlobServiceClient
                 from azure.storage.blob import ContentSettings
+                from azure.storage.blob.aio import BlobServiceClient
 
                 storage_account = os.environ.get(
                     "AZURE_STORAGE_ACCOUNT_NAME",
@@ -1002,7 +1037,9 @@ class DevAgent:
                 )
                 if storage_account:
                     credential = DefaultAzureCredential()
-                    blob_url_base = f"https://{storage_account}.blob.core.windows.net"
+                    blob_url_base = (
+                        f"https://{storage_account}.blob.core.windows.net"
+                    )
                     blob_service = BlobServiceClient(
                         account_url=blob_url_base, credential=credential
                     )
@@ -1010,9 +1047,8 @@ class DevAgent:
                     try:
                         await container_client.create_container()
                     except Exception:
-                        pass  # Already exists
+                        pass
 
-                    # Read PDF from sandbox
                     pdf_content = await self._read_sandbox_file(
                         f"{work_dir}/output.pdf"
                     )
@@ -1032,9 +1068,10 @@ class DevAgent:
                     await credential.close()
                     await blob_service.close()
             except Exception:
-                logger.warning("PDF upload failed for task %s", task_id, exc_info=True)
+                logger.warning(
+                    "PDF upload failed for task %s", task_id, exc_info=True
+                )
 
-            # Store export artifacts
             if pdf_url:
                 await svc.set_export_artifacts(task_id, {"pdfUrl": pdf_url})
 

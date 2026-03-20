@@ -330,9 +330,11 @@ export default function DevelopmentPage() {
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
                     task.mode === "openspec"
                       ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+                      : task.mode === "slides"
+                      ? "bg-pink-500/10 text-pink-400 border-pink-500/20"
                       : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                   }`}>
-                    {task.mode === "openspec" ? "OpenSpec" : "Mockup"}
+                    {task.mode === "openspec" ? "OpenSpec" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
                   </span>
                   {task.mode === "openspec" && task.iterations.length > 1 && (
                     <span className="text-[10px] text-[var(--color-text-muted)]">
