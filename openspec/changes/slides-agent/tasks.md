@@ -35,7 +35,7 @@
 
 - [x] 6.1 Add PDF preview component in dev-task detail — embedded viewer with page navigation, shown after export stage completes
 - [x] 6.2 Add PDF download button in dev-task detail for completed slides tasks
-- [ ] 6.3 Add source code download endpoint — zip workspace and serve for download
+- [x] 6.3 Add source code download endpoint — zip workspace and serve for download
 - [x] 6.4 Store artifact URLs (pdfUrl, codeUrl) on dev-task after export completion
 
 ## 7. Dev-Task Archiving
@@ -48,7 +48,7 @@
 ## 8. Testing & Integration
 
 - [x] 8.1 Add backend tests for slides service CRUD and refinement
-- [ ] 8.2 Add backend tests for slides agent tool routing
+- [x] 8.2 Add backend tests for slides agent tool routing
 - [x] 8.3 Add backend tests for dev-task archiving endpoints
-- [ ] 8.4 Verify slides pipeline stages execute correctly in sandbox
-- [ ] 8.5 Test PDF export and blob storage upload end-to-end
+- [x] 8.4 Verify slides pipeline stages execute correctly in sandbox
+- [x] 8.5 Test PDF export and blob storage upload end-to-end
