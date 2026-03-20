@@ -125,20 +125,33 @@ function StagePipeline({ task }: { task: DevTask }) {
         </div>
       )}
 
-      {/* Working squad members + openspec progress */}
-      {(workingMembers.length > 0 || task.openspecStatus?.totalTasks) && (
-        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+      {/* OpenSpec progress + working squad members */}
+      {(task.openspecStatus?.totalTasks || workingMembers.length > 0 || (task.status === "running" && task.squad?.teamMembers?.length)) && (
+        <div className="space-y-1 pt-1">
           {task.openspecStatus && task.openspecStatus.totalTasks > 0 && (
-            <span className="inline-flex items-center gap-1 text-[9px] text-purple-400 bg-purple-500/5 px-1.5 py-0.5 rounded border border-purple-500/20">
-              📋 {task.openspecStatus.completedTasks}/{task.openspecStatus.totalTasks}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-purple-400 shrink-0">📋</span>
+              <div className="flex-1 h-1 rounded-full bg-[var(--color-bg-tertiary)] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                  style={{ width: `${(task.openspecStatus.completedTasks / task.openspecStatus.totalTasks) * 100}%` }}
+                />
+              </div>
+              <span className="text-[9px] text-purple-400 tabular-nums shrink-0">
+                {task.openspecStatus.completedTasks}/{task.openspecStatus.totalTasks}
+              </span>
+            </div>
           )}
-          {workingMembers.map((m) => (
-            <span key={m.name} className="inline-flex items-center gap-0.5 text-[9px] text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/5 px-1 py-0.5 rounded border border-[var(--color-brand-cyan)]/20">
-              <span>{ROLE_EMOJI[m.role] ?? "👤"}</span>
-              {m.name}
-            </span>
-          ))}
+          {workingMembers.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {workingMembers.map((m) => (
+                <span key={m.name} className="inline-flex items-center gap-0.5 text-[9px] text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/5 px-1 py-0.5 rounded border border-[var(--color-brand-cyan)]/20">
+                  <span>{ROLE_EMOJI[m.role] ?? "👤"}</span>
+                  {m.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
