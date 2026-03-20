@@ -377,7 +377,8 @@ async def stream_pipeline_output(task_id: str, request: Request):
     """Stream real-time pipeline output as Server-Sent Events.
 
     Reads from the pipeline output buffer populated by the dev agent
-    during sandbox execution.
+    during sandbox execution. Supports reconnection via Last-Event-ID header
+    or ?cursor= query param so clients resume without duplicate data.
     """
     from app.agents.dev_agent import get_pipeline_output
 
@@ -387,13 +388,28 @@ async def stream_pipeline_output(task_id: str, request: Request):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Resume cursor: Last-Event-ID header (SSE standard) or ?cursor= query param
+    resume_cursor = 0
+    last_event_id = request.headers.get("Last-Event-ID")
+    cursor_param = request.query_params.get("cursor")
+    if last_event_id:
+        try:
+            resume_cursor = int(last_event_id)
+        except ValueError:
+            pass
+    elif cursor_param:
+        try:
+            resume_cursor = int(cursor_param)
+        except ValueError:
+            pass
+
     logger.info(
-        "[SSE-DIAG] Stream opened task=%s user=%s status=%s",
-        task_id, user_id, task.status,
+        "[SSE-DIAG] Stream opened task=%s user=%s status=%s resume_cursor=%d",
+        task_id, user_id, task.status, resume_cursor,
     )
 
     async def event_stream():
-        cursor = 0
+        cursor = resume_cursor
         idle_count = 0
         keepalive_counter = 0
         first_data_sent = False
@@ -402,14 +418,15 @@ async def stream_pipeline_output(task_id: str, request: Request):
             if cursor < len(buf):
                 if not first_data_sent:
                     logger.info(
-                        "[SSE-DIAG] First data for task=%s buf_size=%d",
-                        task_id, len(buf),
+                        "[SSE-DIAG] First data for task=%s buf_size=%d cursor=%d",
+                        task_id, len(buf), cursor,
                     )
                     first_data_sent = True
                 while cursor < len(buf):
                     entry = buf[cursor]
                     cursor += 1
-                    yield f"data: {__import__('json').dumps(entry)}\n\n"
+                    # Include event ID so client can resume on reconnect
+                    yield f"id: {cursor}\ndata: {__import__('json').dumps(entry)}\n\n"
                     if entry.get("type") == "exit":
                         logger.info("[SSE-DIAG] Exit event, closing task=%s", task_id)
                         return

@@ -123,6 +123,7 @@ class DevAgent:
         self._sandbox_service = sandbox_service
         self._cosmos_skills = cosmos_skills
         self._slides_service = slides_service
+        self._squad_enabled_tasks: dict[str, bool] = {}  # Task-scoped squad flag
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -370,6 +371,8 @@ class DevAgent:
                     "Failed to set error status on task %s after pipeline failure", task_id
                 )
         finally:
+            # Clean up task-scoped squad flag
+            self._squad_enabled_tasks.pop(task_id, None)
             # Emit completion marker
             if task_id in _pipeline_outputs:
                 _buf_append(task_id, {
@@ -378,7 +381,7 @@ class DevAgent:
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
         """Mockup pipeline: init → openspec → skills → squad → propose → apply → archive → screenshots."""
-        self._squad_enabled = False
+        self._squad_enabled_tasks[task_id] = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -445,7 +448,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
-        self._squad_enabled = True  # Enable --agent squad for apply stages
+        self._squad_enabled_tasks[task_id] = True  # Enable --agent squad for apply stages
 
         # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
@@ -506,7 +509,7 @@ class DevAgent:
                         raise_on_error=False,
                         work_dir=work_dir,
                         continue_session=True,
-                        agent="squad" if self._squad_enabled else None,
+                        agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
                     )
                 except Exception as exc:
                     logger.warning("Mockup apply task %d failed: %s", i + 1, exc)
@@ -537,7 +540,7 @@ class DevAgent:
                         raise_on_error=False,
                         work_dir=work_dir,
                         continue_session=True,
-                        agent="squad" if self._squad_enabled else None,
+                        agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
                     )
                     break  # Success — no need to retry
                 except RuntimeError as exc:
@@ -610,7 +613,7 @@ class DevAgent:
 
     async def _run_openspec_pipeline(self, task_id: str, user_id: str) -> None:
         """OpenSpec pipeline: init → foundation propose/apply → features → archive → screenshots."""
-        self._squad_enabled = False
+        self._squad_enabled_tasks[task_id] = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -671,7 +674,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
-        self._squad_enabled = True  # Enable --agent squad for apply stages
+        self._squad_enabled_tasks[task_id] = True  # Enable --agent squad for apply stages
 
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
         logger.info("OpenSpec foundation propose: task=%s", task_id)
@@ -719,7 +722,7 @@ class DevAgent:
                     raise_on_error=False,
                     work_dir=work_dir,
                     continue_session=True,
-                    agent="squad" if self._squad_enabled else None,
+                    agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
                 )
                 await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
                 await self._poll_squad_status(task_id, work_dir, user_id)
@@ -739,7 +742,7 @@ class DevAgent:
                 raise_on_error=False,
                 work_dir=work_dir,
                 continue_session=True,
-                agent="squad" if self._squad_enabled else None,
+                agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
             )
             await self._checkpoint(task_id, "foundation-apply", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
@@ -1144,7 +1147,7 @@ class DevAgent:
                     stall_timeout=600,
                     raise_on_error=False,
                     work_dir=feature_work_dir,
-                    agent="squad" if self._squad_enabled else None,
+                    agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
                 )
                 await self._checkpoint(
                     task_id, f"feature-{iter_idx}-task-{ft_idx + 1}",
@@ -1166,7 +1169,7 @@ class DevAgent:
                 stall_timeout=600,
                 raise_on_error=False,
                 work_dir=feature_work_dir,
-                agent="squad" if self._squad_enabled else None,
+                agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
             )
             await self._checkpoint(
                 task_id, f"feature-{iter_idx}-apply", feature_work_dir,
@@ -1735,10 +1738,6 @@ class DevAgent:
             })
         except Exception as exc:
             logger.debug("openspec status poll failed (non-fatal): %s", exc)
-
-    def _has_squad(self, work_dir: str) -> bool:
-        """Check if squad config flag was set for this task."""
-        return getattr(self, "_squad_enabled", False)
 
     async def _checkpoint(
         self,

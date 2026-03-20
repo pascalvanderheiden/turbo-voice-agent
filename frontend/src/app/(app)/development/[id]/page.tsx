@@ -216,6 +216,7 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
   const termRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const partialRef = useRef<string>("");
+  const cursorRef = useRef<number>(0); // Track SSE cursor for reconnection
 
   // Connect when task is running OR was recently running (completed/failed may still have buffer data)
   const shouldConnect = isRunning || taskStatus === "completed" || taskStatus === "failed";
@@ -237,14 +238,23 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
       if (cancelled || (esRef.current && esRef.current.readyState !== EventSource.CLOSED)) return;
 
       const token = await getAccessToken();
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
-      const url = `${API_URL}/api/dev/${taskId}/stream${tokenParam}`;
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "" ;
+      // Pass cursor for reconnection to avoid duplicate data
+      const cursorParam = cursorRef.current > 0
+        ? `${tokenParam ? "&" : "?"}cursor=${cursorRef.current}`
+        : "";
+      const url = `${API_URL}/api/dev/${taskId}/stream${tokenParam}${cursorParam}`;
       const es = new EventSource(url);
       esRef.current = es;
       setConnected(true);
 
       es.onmessage = (ev) => {
         try {
+          // Track cursor from event ID for reconnection
+          if (ev.lastEventId) {
+            const id = parseInt(ev.lastEventId, 10);
+            if (!isNaN(id)) cursorRef.current = id;
+          }
           const entry = JSON.parse(ev.data);
           if (entry.type === "stdout" || entry.type === "stderr" || entry.type === "stage" || entry.type === "decision") {
             const chunk = entry.data as string;
