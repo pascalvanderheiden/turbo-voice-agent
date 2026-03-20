@@ -10,7 +10,17 @@ from azure.cosmos.aio import ContainerProxy, CosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from app.db.init import DATABASE_ID, DEV_TASKS_CONTAINER_ID
-from app.models.dev_task import DevArtifact, DevIteration, DevStage, DevTask, DevTaskCreate, SquadInfo, SquadMember
+from app.models.dev_task import (
+    DevArtifact,
+    DevDecision,
+    DevIteration,
+    DevStage,
+    DevTask,
+    DevTaskCreate,
+    OpenSpecStatus,
+    SquadInfo,
+    SquadMember,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +104,14 @@ class DevService:
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
             exportArtifacts=doc.get("exportArtifacts"),
+            screenshots=doc.get("screenshots", []),
+            sandboxTaskId=doc.get("sandboxTaskId"),
+            decisions=[DevDecision(**d) for d in doc.get("decisions", [])],
             squad=SquadInfo(
                 teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
             ) if (sq := doc.get("squad")) else None,
+            openspecStatus=OpenSpecStatus(**os_data)
+            if (os_data := doc.get("openspecStatus")) else None,
             premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],

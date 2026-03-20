@@ -547,9 +547,11 @@ export default function DevTaskDetailPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold truncate">{task.title}</h1>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 ${
-              task.mode === "openspec" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+              task.mode === "openspec" ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+              : task.mode === "slides" ? "bg-pink-500/10 text-pink-400 border-pink-500/20"
+              : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
             }`}>
-              {task.mode === "openspec" ? "OpenSpec" : "Mockup"}
+              {task.mode === "openspec" ? "OpenSpec" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
             </span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)]">Created {new Date(task.createdAt).toLocaleString()}</p>
