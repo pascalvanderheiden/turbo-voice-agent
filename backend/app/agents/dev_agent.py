@@ -1477,11 +1477,34 @@ class DevAgent:
     ) -> None:
         """Poll openspec status and update the dev task."""
         try:
+            # First discover the active change name
+            list_raw = await self._sandbox_exec(
+                task_id=task_id,
+                command=f"cd {work_dir} && openspec list --json 2>/dev/null || echo '[]'",
+                args=[],
+                stage_label="openspec-list",
+                work_dir=work_dir,
+                timeout=15,
+                raise_on_error=False,
+            )
+            import re
+            change_name = ""
+            try:
+                json_match = re.search(r'\[.*\]', list_raw.strip(), re.DOTALL)
+                if json_match:
+                    changes = json.loads(json_match.group())
+                    if isinstance(changes, list) and changes:
+                        change_name = changes[0].get("name", changes[0].get("changeName", ""))
+            except Exception:
+                pass
+            if not change_name:
+                return
+
             raw = await self._sandbox_exec(
                 task_id=task_id,
                 command=(
                     f"cd {work_dir} && "
-                    "openspec status --json 2>/dev/null || echo '{}'"
+                    f'openspec status --json --change "{change_name}" 2>/dev/null || echo \'{{}}\''
                 ),
                 args=[],
                 stage_label="openspec-status",
@@ -1491,14 +1514,11 @@ class DevAgent:
             )
             if not raw.strip() or raw.strip() == "{}":
                 return
-            import re
-            # Extract JSON from possible output noise
             json_match = re.search(r'\{.*\}', raw.strip(), re.DOTALL)
             if not json_match:
                 return
             data = json.loads(json_match.group())
             # Parse openspec status fields
-            change_name = data.get("name", data.get("changeName", ""))
             tasks = data.get("tasks", [])
             total = len(tasks) if isinstance(tasks, list) else data.get("totalTasks", 0)
             done = sum(1 for t in tasks if t.get("done") or t.get("status") == "done") if isinstance(tasks, list) else data.get("completedTasks", 0)
