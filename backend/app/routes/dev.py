@@ -47,9 +47,12 @@ def _get_service() -> InMemoryDevService:
 
 
 @router.get("", response_model=list[DevTask])
-async def list_dev_tasks(request: Request):
+async def list_dev_tasks(request: Request, archived: bool | None = None):
     user_id = getattr(request.state, "user_id", "default-user")
-    return await _get_service().with_user(user_id).list()
+    tasks = await _get_service().with_user(user_id).list()
+    if archived is not None:
+        tasks = [t for t in tasks if getattr(t, "archived", False) == archived]
+    return tasks
 
 
 @router.get("/suggest-skills")
@@ -220,6 +223,28 @@ async def delete_dev_task(task_id: str, request: Request):
     if not deleted:
         raise HTTPException(status_code=404, detail="Dev task not found")
     logger.info("Dev task %s deleted successfully", task_id)
+
+
+@router.patch("/{task_id}/archive", response_model=DevTask)
+async def archive_dev_task(task_id: str, request: Request):
+    """Archive a dev task."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+    task = await service.get_by_id(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Dev task not found")
+    return await service.set_archived(task_id, True)
+
+
+@router.patch("/{task_id}/unarchive", response_model=DevTask)
+async def unarchive_dev_task(task_id: str, request: Request):
+    """Unarchive a dev task."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+    task = await service.get_by_id(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Dev task not found")
+    return await service.set_archived(task_id, False)
 
 
 class TriggerRequest(BaseModel):

@@ -115,12 +115,14 @@ class DevAgent:
         skills_service=None,
         sandbox_service=None,
         cosmos_skills=None,
+        slides_service=None,
     ):
         self._service = dev_service
         self._spec_service = spec_service
         self._skills_service = skills_service
         self._sandbox_service = sandbox_service
         self._cosmos_skills = cosmos_skills
+        self._slides_service = slides_service
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -207,7 +209,12 @@ class DevAgent:
             from app.models.dev_task import DevTaskCreate
             mode = args.get("mode", "mockup")
             task = await service.create(
-                DevTaskCreate(title=args["title"], specId=args.get("spec_id"), mode=mode)
+                DevTaskCreate(
+                    title=args["title"],
+                    specId=args.get("spec_id"),
+                    slidesId=args.get("slides_id"),
+                    mode=mode,
+                )
             )
             # If linked to a spec, populate iterations and set bidirectional link
             if args.get("spec_id") and self._spec_service:
@@ -334,6 +341,8 @@ class DevAgent:
 
             if task.mode == "openspec" and len(task.iterations) > 1:
                 await self._run_openspec_pipeline(task_id, user_id)
+            elif task.mode == "slides":
+                await self._run_slides_pipeline(task_id, user_id)
             else:
                 await self._run_mockup_pipeline(task_id, user_id)
 
@@ -875,6 +884,171 @@ class DevAgent:
 
         await svc.set_status(task_id, "completed")
         logger.info("OpenSpec pipeline COMPLETED for task %s", task_id)
+
+    async def _run_slides_pipeline(self, task_id: str, user_id: str) -> None:
+        """Slides pipeline: init (clone deck-engine) → slides (generate) → export (PDF)."""
+        svc = self._service.with_user(user_id)
+        task = await svc.get_by_id(task_id)
+        if not task:
+            return
+
+        work_dir = f"/workspace/{task_id}"
+        model = await self._get_user_model(user_id)
+
+        # Gather slides content for the prompt
+        slides_prompt = f"Create a professional slide deck titled: {task.title}"
+        if self._slides_service and task.slides_id:
+            try:
+                ss = self._slides_service.with_user(user_id)
+                slides_data = await ss.get_by_id(task.slides_id)
+                if slides_data:
+                    parts = [f"# {slides_data.title}"]
+                    if slides_data.description:
+                        parts.append(slides_data.description)
+                    if slides_data.refined_draft:
+                        parts.append(f"\n## Refined Outline\n{slides_data.refined_draft}")
+                    for i, sec in enumerate(slides_data.sections):
+                        parts.append(
+                            f"\n### Slide {i + 1}: {sec.title}\n{sec.content}"
+                            + (f"\nNotes: {sec.notes}" if sec.notes else "")
+                        )
+                    slides_prompt = "\n".join(parts)
+            except Exception:
+                logger.warning("Could not load slides data for task %s", task_id)
+
+        await svc.set_status(task_id, "running")
+
+        # ── Stage 1: Init ──
+        await svc.set_iteration_stage_status(task_id, 0, "init", "running")
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"rm -rf {work_dir} && mkdir -p {work_dir} && cd {work_dir}"
+                    " && git clone https://github.com/deckio-art/deck-engine.git ."
+                    " && npm install --prefer-offline 2>&1 | tail -5"
+                ),
+                args=[],
+                stage_label="init",
+                work_dir=work_dir,
+                timeout=300,
+            )
+            await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+        except Exception as e:
+            logger.error("Slides init failed for %s: %s", task_id, e)
+            await svc.set_iteration_stage_status(
+                task_id, 0, "init", "failed", error=str(e)
+            )
+            await svc.set_status(task_id, "failed")
+            return
+
+        # ── Stage 2: Slides generation via Copilot CLI ──
+        await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
+        try:
+            prompt = (
+                f"Using the deck-engine project in the current directory, create a professional"
+                f" slide deck based on the following definition. Generate the slide content"
+                f" files and configure the deck:\n\n{slides_prompt}"
+            )
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=prompt,
+                model=model,
+                stage_label="slides",
+                work_dir=work_dir,
+                timeout=600,
+                stall_timeout=300,
+            )
+            await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
+        except Exception as e:
+            logger.error("Slides generation failed for %s: %s", task_id, e)
+            await svc.set_iteration_stage_status(
+                task_id, 0, "slides", "failed", error=str(e)
+            )
+            await svc.set_status(task_id, "failed")
+            return
+
+        # ── Stage 3: Export to PDF ──
+        await svc.set_iteration_stage_status(task_id, 0, "export", "running")
+        try:
+            # Build and export using deck-engine's export capability
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=(
+                    "Build and export the slide deck to PDF. Run the deck-engine build"
+                    " and export each page as a single PDF file. If the project has an"
+                    " export script, use it. Otherwise use playwright or puppeteer to"
+                    " render pages and export to PDF. Save the final PDF to ./output.pdf"
+                ),
+                model=model,
+                stage_label="export",
+                work_dir=work_dir,
+                timeout=600,
+                stall_timeout=300,
+                continue_session=True,
+            )
+
+            # Try to read and upload the PDF
+            pdf_url = None
+            try:
+                import os
+                from azure.identity.aio import DefaultAzureCredential
+                from azure.storage.blob.aio import BlobServiceClient
+                from azure.storage.blob import ContentSettings
+
+                storage_account = os.environ.get(
+                    "AZURE_STORAGE_ACCOUNT_NAME",
+                    os.environ.get("AZURE_STORAGE_ACCOUNT", ""),
+                )
+                if storage_account:
+                    credential = DefaultAzureCredential()
+                    blob_url_base = f"https://{storage_account}.blob.core.windows.net"
+                    blob_service = BlobServiceClient(
+                        account_url=blob_url_base, credential=credential
+                    )
+                    container_client = blob_service.get_container_client("slides")
+                    try:
+                        await container_client.create_container()
+                    except Exception:
+                        pass  # Already exists
+
+                    # Read PDF from sandbox
+                    pdf_content = await self._read_sandbox_file(
+                        f"{work_dir}/output.pdf"
+                    )
+                    if pdf_content:
+                        blob_name = f"{task_id}/output.pdf"
+                        blob_client = container_client.get_blob_client(blob_name)
+                        await blob_client.upload_blob(
+                            pdf_content.encode("latin-1")
+                            if isinstance(pdf_content, str)
+                            else pdf_content,
+                            overwrite=True,
+                            content_settings=ContentSettings(
+                                content_type="application/pdf"
+                            ),
+                        )
+                        pdf_url = f"{blob_url_base}/slides/{blob_name}"
+                    await credential.close()
+                    await blob_service.close()
+            except Exception:
+                logger.warning("PDF upload failed for task %s", task_id, exc_info=True)
+
+            # Store export artifacts
+            if pdf_url:
+                await svc.set_export_artifacts(task_id, {"pdfUrl": pdf_url})
+
+            await svc.set_iteration_stage_status(task_id, 0, "export", "completed")
+        except Exception as e:
+            logger.error("Slides export failed for %s: %s", task_id, e)
+            await svc.set_iteration_stage_status(
+                task_id, 0, "export", "failed", error=str(e)
+            )
+            await svc.set_status(task_id, "failed")
+            return
+
+        await svc.set_status(task_id, "completed")
+        logger.info("Slides pipeline COMPLETED for task %s", task_id)
 
     # ── Parallel feature helpers ────────────────────────────────
 

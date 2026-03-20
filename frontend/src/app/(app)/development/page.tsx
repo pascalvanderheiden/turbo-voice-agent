@@ -17,6 +17,8 @@ import {
   IconPhoto,
   IconChevronRight,
   IconSparkles,
+  IconPresentation,
+  IconFileExport,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -31,6 +33,8 @@ const STAGE_META: Record<string, { icon: typeof IconSettingsAutomation; label: s
   apply:       { icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
   archive:     { icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
   screenshots: { icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
+  slides:      { icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
+  export:      { icon: IconFileExport,         label: "Export",      color: "#22C55E" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -164,6 +168,7 @@ export default function DevelopmentPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTask, setDeleteTask] = useState<DevTask | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived" | "all">("active");
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -171,7 +176,8 @@ export default function DevelopmentPage() {
   const loadTasks = useCallback(async () => {
     try {
       setLoading(true);
-      const [data, specList] = await Promise.all([devApi.list(), specsApi.list().catch(() => [])]);
+      const archived = archiveFilter === "active" ? false : archiveFilter === "archived" ? true : undefined;
+      const [data, specList] = await Promise.all([devApi.list(archived), specsApi.list().catch(() => [])]);
       setTasks(data);
       setSpecs(specList);
     } catch {
@@ -179,7 +185,7 @@ export default function DevelopmentPage() {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, archiveFilter]);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
@@ -270,6 +276,23 @@ export default function DevelopmentPage() {
         </button>
       </div>
 
+      {/* Archive filter tabs */}
+      <div className="flex items-center gap-1 p-1 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] w-fit">
+        {(["active", "archived", "all"] as const).map((filter) => (
+          <button
+            key={filter}
+            onClick={() => setArchiveFilter(filter)}
+            className={`px-3 py-1.5 text-xs rounded-[var(--radius-sm)] transition-colors ${
+              archiveFilter === filter
+                ? "bg-[var(--color-brand-pink)]/15 text-[var(--color-brand-pink)] font-medium"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+            }`}
+          >
+            {filter === "active" ? "Active" : filter === "archived" ? "Archived" : "All"}
+          </button>
+        ))}
+      </div>
+
       {tasks.length === 0 ? (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-12 text-center">
           <IconCode size={48} className="mx-auto text-[var(--color-text-muted)] mb-4" />
@@ -340,6 +363,23 @@ export default function DevelopmentPage() {
                         <IconPlayerPlay size={16} />
                       </button>
                     )}
+                     <button
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        try {
+                          if (task.archived) {
+                            await devApi.unarchive(task.id);
+                          } else {
+                            await devApi.archive(task.id);
+                          }
+                          loadTasks();
+                        } catch { toast.error("Failed to update archive status"); }
+                      }}
+                      className="p-1.5 rounded-[var(--radius-sm)] hover:bg-yellow-500/10 text-[var(--color-text-muted)] hover:text-yellow-400 transition-colors"
+                      title={task.archived ? "Unarchive" : "Archive"}
+                    >
+                      <IconArchive size={14} />
+                    </button>
                     <button
                       onClick={() => setDeleteTask(task)}
                       className="p-1.5 rounded-[var(--radius-sm)] hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400 transition-colors"

@@ -17,10 +17,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_USER_ID = "default-user"
 
 STAGE_NAMES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive", "screenshots"]
+SLIDES_STAGE_NAMES = ["init", "slides", "export"]
 
 
 def _default_stages() -> list[dict]:
     return [{"name": n, "status": "pending"} for n in STAGE_NAMES]
+
+
+def _slides_stages() -> list[dict]:
+    return [{"name": n, "status": "pending"} for n in SLIDES_STAGE_NAMES]
 
 
 def _default_iteration(index: int, label: str, spec_part_id: str | None = None) -> dict:
@@ -29,6 +34,16 @@ def _default_iteration(index: int, label: str, spec_part_id: str | None = None) 
         "label": label,
         "specPartId": spec_part_id,
         "stages": _default_stages(),
+        "workspacePath": None,
+    }
+
+
+def _slides_iteration(index: int, label: str, slides_id: str | None = None) -> dict:
+    return {
+        "iterationIndex": index,
+        "label": label,
+        "specPartId": slides_id,
+        "stages": _slides_stages(),
         "workspacePath": None,
     }
 
@@ -69,13 +84,16 @@ class DevService:
             id=doc["id"],
             title=doc["title"],
             specId=doc.get("specId"),
+            slidesId=doc.get("slidesId"),
             mode=doc.get("mode", "mockup"),
             status=doc.get("status", "pending"),
+            archived=doc.get("archived", False),
             skillIds=doc.get("skillIds", []),
             currentIteration=doc.get("currentIteration", 0),
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            exportArtifacts=doc.get("exportArtifacts"),
             squad=SquadInfo(
                 teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
             ) if (sq := doc.get("squad")) else None,
@@ -90,20 +108,30 @@ class DevService:
             container = await self._container()
             now = datetime.now(UTC)
             task_id = str(uuid.uuid4())
-            iterations = [_default_iteration(0, data.title)]
+            if data.mode == "slides":
+                iterations = [_slides_iteration(
+                    0, data.title, getattr(data, "slides_id", None)
+                )]
+                flat_stages = _slides_stages()
+            else:
+                iterations = [_default_iteration(0, data.title)]
+                flat_stages = _default_stages()
             doc = {
                 "id": task_id,
                 "userId": self._user_id,
                 "docType": "dev_task",
                 "title": data.title,
                 "specId": data.spec_id,
+                "slidesId": getattr(data, "slides_id", None),
                 "mode": data.mode,
                 "status": "pending",
+                "archived": False,
                 "skillIds": data.skill_ids,
                 "currentIteration": 0,
                 "iterations": iterations,
-                "stages": _default_stages(),
+                "stages": flat_stages,
                 "artifacts": [],
+                "exportArtifacts": None,
                 "premiumRequests": 0,
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
@@ -229,6 +257,32 @@ class DevService:
             await container.upsert_item(doc)
         except Exception:
             logger.exception("Failed to set openspec status on dev task %s", task_id)
+
+    async def set_archived(self, task_id: str, archived: bool) -> DevTask | None:
+        """Set the archived status on a dev task."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=task_id, partition_key=self._user_id)
+            doc["archived"] = archived
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            result = await container.upsert_item(doc)
+            return self._doc_to_model(result)
+        except CosmosResourceNotFoundError:
+            return None
+        except Exception:
+            logger.exception("Failed to set archived on dev task %s", task_id)
+            return None
+
+    async def set_export_artifacts(self, task_id: str, artifacts: dict) -> None:
+        """Store export artifacts (PDF/code URLs) on a dev task."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=task_id, partition_key=self._user_id)
+            doc["exportArtifacts"] = artifacts
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            await container.upsert_item(doc)
+        except Exception:
+            logger.exception("Failed to set export artifacts on dev task %s", task_id)
 
     async def add_premium_requests(self, task_id: str, count: int) -> None:
         """Increment the premium request counter for a task."""

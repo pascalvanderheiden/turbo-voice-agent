@@ -46,7 +46,8 @@ class DevTaskCreate(BaseModel):
 
     title: str = Field(..., min_length=1)
     spec_id: str | None = Field(None, alias="specId")
-    mode: str = "mockup"  # mockup | openspec
+    slides_id: str | None = Field(None, alias="slidesId")
+    mode: str = "mockup"  # mockup | openspec | slides
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
 
     model_config = {"populate_by_name": True}
@@ -94,20 +95,32 @@ class OpenSpecStatus(BaseModel):
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
 
+class DevExportArtifacts(BaseModel):
+    """Export artifacts for slides dev-tasks."""
+
+    pdf_url: str | None = Field(None, alias="pdfUrl")
+    code_url: str | None = Field(None, alias="codeUrl")
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
 class DevTask(BaseModel):
     """API response model for a development task."""
 
     id: str
     title: str
     spec_id: str | None = Field(None, alias="specId")
-    mode: str = "mockup"  # mockup | openspec
+    slides_id: str | None = Field(None, alias="slidesId")
+    mode: str = "mockup"  # mockup | openspec | slides
     status: str = "pending"  # pending | running | completed | failed
+    archived: bool = False
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
     current_iteration: int = Field(0, alias="currentIteration")
     iterations: list[DevIteration] = Field(default_factory=list)
     # Legacy flat stages for backward compat (populated from iterations[0] for mockup)
     stages: list[DevStage] = Field(default_factory=list)
     artifacts: list[DevArtifact] = Field(default_factory=list)
+    export_artifacts: DevExportArtifacts | None = Field(None, alias="exportArtifacts")
     screenshots: list[str] = Field(default_factory=list)
     artifact_url: str | None = Field(None, alias="artifactUrl")
     sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")

@@ -165,6 +165,83 @@ export const ideasApi = {
   },
 };
 
+/* ── Slides (Presentations) ── */
+
+export interface SlideSection {
+  title: string;
+  content: string;
+  notes: string;
+  imageUrl?: string;
+}
+
+export interface SlidesItem {
+  id: string;
+  title: string;
+  description: string;
+  sections: SlideSection[];
+  images: string[];
+  attachments: string[];
+  status: string; // draft | refined
+  refinedDraft?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SlidesCreate {
+  title: string;
+  description?: string;
+  sections?: SlideSection[];
+  images?: string[];
+  attachments?: string[];
+}
+
+export interface SlidesUpdate {
+  title?: string;
+  description?: string;
+  sections?: SlideSection[];
+  images?: string[];
+  attachments?: string[];
+}
+
+export const slidesApi = {
+  list: () => fetchApi<SlidesItem[]>("/api/slides"),
+  get: (id: string) => fetchApi<SlidesItem>(`/api/slides/${id}`),
+  create: (data: SlidesCreate) =>
+    fetchApi<SlidesItem>("/api/slides", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: SlidesUpdate) =>
+    fetchApi<SlidesItem>(`/api/slides/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    fetchApi<void>(`/api/slides/${id}`, { method: "DELETE" }),
+  refine: (id: string) =>
+    fetchApi<SlidesItem>(`/api/slides/${id}/refine`, { method: "POST" }),
+  refineStream: async (id: string, onChunk: (text: string) => void): Promise<string> => {
+    const resp = await authFetch(`${API_BASE}/api/slides/${id}/refine/stream`, { method: "POST" });
+    if (!resp.ok) throw new Error(`Refine stream failed: ${resp.status}`);
+    const reader = resp.body?.getReader();
+    if (!reader) throw new Error("No response body");
+    const decoder = new TextDecoder();
+    let full = "";
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") break;
+          full += data;
+          onChunk(full);
+        }
+      }
+    }
+    return full;
+  },
+  listResearch: (slidesId: string) => fetchApi<Research[]>(`/api/slides/${slidesId}/research`),
+};
+
 export const researchApi = {
   list: () => fetchApi<Research[]>("/api/research"),
   get: (id: string) => fetchApi<Research>(`/api/research/${id}`),
@@ -365,12 +442,19 @@ export interface OpenSpecStatus {
   filesChanged: number;
 }
 
+export interface DevExportArtifacts {
+  pdfUrl?: string;
+  codeUrl?: string;
+}
+
 export interface DevTask {
   id: string;
   title: string;
   specId?: string;
-  mode: string; // mock | sequence
+  slidesId?: string;
+  mode: string; // mockup | openspec | slides
   status: string;
+  archived: boolean;
   skillIds?: string[];
   squad?: SquadInfo;
   openspecStatus?: OpenSpecStatus;
@@ -378,6 +462,7 @@ export interface DevTask {
   iterations: DevIteration[];
   stages: DevStage[]; // legacy flat view (iteration 0)
   artifacts: DevArtifact[];
+  exportArtifacts?: DevExportArtifacts;
   decisions?: { question: string; answer: string; stage: string; timestamp: string }[];
   premiumRequests?: number;
   createdAt: string;
@@ -387,12 +472,16 @@ export interface DevTask {
 export interface DevTaskCreate {
   title: string;
   specId?: string;
+  slidesId?: string;
   mode?: string;
   skillIds?: string[];
 }
 
 export const devApi = {
-  list: (): Promise<DevTask[]> => fetchApi("/api/dev"),
+  list: (archived?: boolean): Promise<DevTask[]> => {
+    const params = archived !== undefined ? `?archived=${archived}` : "";
+    return fetchApi(`/api/dev${params}`);
+  },
   get: (id: string): Promise<DevTask> => fetchApi(`/api/dev/${id}`),
   create: (data: DevTaskCreate): Promise<DevTask> =>
     fetchApi("/api/dev", { method: "POST", body: JSON.stringify(data) }),
@@ -400,6 +489,10 @@ export const devApi = {
     fetchApi(`/api/dev/${id}`, { method: "DELETE" }),
   trigger: (id: string, mode?: string): Promise<DevTask> =>
     fetchApi(`/api/dev/${id}/trigger`, { method: "POST", body: JSON.stringify(mode ? { mode } : {}), headers: { "Content-Type": "application/json" } }),
+  archive: (id: string): Promise<DevTask> =>
+    fetchApi(`/api/dev/${id}/archive`, { method: "PATCH" }),
+  unarchive: (id: string): Promise<DevTask> =>
+    fetchApi(`/api/dev/${id}/unarchive`, { method: "PATCH" }),
   downloadUrl: (id: string): string => `${API_BASE}/api/dev/${id}/download`,
 };
 

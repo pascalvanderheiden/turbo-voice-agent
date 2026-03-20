@@ -12,10 +12,15 @@ from app.services.json_persistence import JsonPersistenceMixin
 logger = logging.getLogger(__name__)
 
 STAGE_NAMES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive", "screenshots"]
+SLIDES_STAGE_NAMES = ["init", "slides", "export"]
 
 
 def _default_stages() -> list[dict]:
     return [{"name": n, "status": "pending"} for n in STAGE_NAMES]
+
+
+def _slides_stages() -> list[dict]:
+    return [{"name": n, "status": "pending"} for n in SLIDES_STAGE_NAMES]
 
 
 def _default_iteration(index: int, label: str, spec_part_id: str | None = None) -> dict:
@@ -24,6 +29,16 @@ def _default_iteration(index: int, label: str, spec_part_id: str | None = None) 
         "label": label,
         "specPartId": spec_part_id,
         "stages": _default_stages(),
+        "workspacePath": None,
+    }
+
+
+def _slides_iteration(index: int, label: str, slides_id: str | None = None) -> dict:
+    return {
+        "iterationIndex": index,
+        "label": label,
+        "specPartId": slides_id,
+        "stages": _slides_stages(),
         "workspacePath": None,
     }
 
@@ -58,13 +73,16 @@ class InMemoryDevService(JsonPersistenceMixin):
             id=doc["id"],
             title=doc["title"],
             specId=doc.get("specId"),
+            slidesId=doc.get("slidesId"),
             mode=doc.get("mode", "mockup"),
             status=doc.get("status", "pending"),
+            archived=doc.get("archived", False),
             skillIds=doc.get("skillIds", []),
             currentIteration=doc.get("currentIteration", 0),
             iterations=iterations,
             stages=flat_stages,
             artifacts=[DevArtifact(**a) for a in doc.get("artifacts", [])],
+            exportArtifacts=doc.get("exportArtifacts"),
             squad=SquadInfo(
                 teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
             ) if (sq := doc.get("squad")) else None,
@@ -76,20 +94,28 @@ class InMemoryDevService(JsonPersistenceMixin):
     async def create(self, data: DevTaskCreate) -> DevTask:
         now = datetime.now(UTC)
         task_id = str(uuid.uuid4())
-        # Create default single iteration for mock mode
-        iterations = [_default_iteration(0, data.title)]
+        # Use slides-specific stages for slides mode
+        if data.mode == "slides":
+            iterations = [_slides_iteration(0, data.title, getattr(data, "slides_id", None))]
+            flat_stages = _slides_stages()
+        else:
+            iterations = [_default_iteration(0, data.title)]
+            flat_stages = _default_stages()
         doc = {
             "id": task_id,
             "userId": self._user_id or "default-user",
             "title": data.title,
             "specId": data.spec_id,
+            "slidesId": getattr(data, "slides_id", None),
             "mode": data.mode,
             "status": "pending",
+            "archived": False,
             "skillIds": data.skill_ids,
             "currentIteration": 0,
             "iterations": iterations,
-            "stages": _default_stages(),  # legacy compat
+            "stages": flat_stages,
             "artifacts": [],
+            "exportArtifacts": None,
             "premiumRequests": 0,
             "createdAt": now.isoformat(),
             "updatedAt": now.isoformat(),
@@ -167,6 +193,25 @@ class InMemoryDevService(JsonPersistenceMixin):
         if not doc:
             return
         doc["openspecStatus"] = status_data
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
+
+    async def set_archived(self, task_id: str, archived: bool) -> DevTask | None:
+        """Set the archived status on a dev task."""
+        doc = self._store.get(task_id)
+        if not doc:
+            return None
+        doc["archived"] = archived
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
+        return self._doc_to_model(doc)
+
+    async def set_export_artifacts(self, task_id: str, artifacts: dict) -> None:
+        """Store export artifacts (PDF/code URLs) on a dev task."""
+        doc = self._store.get(task_id)
+        if not doc:
+            return
+        doc["exportArtifacts"] = artifacts
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
 

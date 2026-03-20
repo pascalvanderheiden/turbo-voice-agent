@@ -9,6 +9,7 @@ from app.agents.marketing_agent import MarketingAgent
 from app.agents.notes_agent import NotesAgent
 from app.agents.research_agent import ResearchAgent
 from app.agents.skills_agent import SkillsAgent
+from app.agents.slides_agent import SlidesAgent
 from app.agents.spec_agent import SpecAgent
 from app.agents.todo_agent import TodoAgent
 
@@ -28,6 +29,7 @@ class SupervisorAgent:
         skills_agent: SkillsAgent | None = None,
         marketing_agent: MarketingAgent | None = None,
         todo_agent: TodoAgent | None = None,
+        slides_agent: SlidesAgent | None = None,
     ):
         self._notes_agent = notes_agent
         self._brainstorm_agent = brainstorm_agent
@@ -37,9 +39,12 @@ class SupervisorAgent:
         self._skills_agent = skills_agent
         self._marketing_agent = marketing_agent
         self._todo_agent = todo_agent
+        self._slides_agent = slides_agent
         self._agents: dict[str, object] = {"notes": notes_agent}
         if brainstorm_agent:
             self._agents["brainstorm"] = brainstorm_agent
+        if slides_agent:
+            self._agents["slides"] = slides_agent
         if research_agent:
             self._agents["research"] = research_agent
         if spec_agent:
@@ -93,6 +98,10 @@ class SupervisorAgent:
         todo_functions = {
             "create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo",
         }
+        slides_functions = {
+            "create_slides", "get_slides_list", "get_slides", "update_slides",
+            "delete_slides", "refine_slides",
+        }
 
         if function_name in notes_functions:
             logger.info("Routing '%s' to Notes Agent", function_name)
@@ -134,11 +143,16 @@ class SupervisorAgent:
             result = await self._todo_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Todo Agent"
 
+        if function_name in slides_functions and self._slides_agent:
+            logger.info("Routing '%s' to Slides Agent", function_name)
+            result = await self._slides_agent.handle_function_call(function_name, arguments, user_id=user_id)
+            return result, "Slides Agent"
+
         logger.warning("Unknown function: %s", function_name)
         return json.dumps(
             {
                 "error": f"I don't know how to handle '{function_name}'. "
-                "I can help with notes, brainstorming ideas, research, specs, development tasks, "
+                "I can help with notes, brainstorming ideas, slide presentations, research, specs, development tasks, "
                 "skills management, marketing videos, and to-do tasks."
             }
         ), "Supervisor"

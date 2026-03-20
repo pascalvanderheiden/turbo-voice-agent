@@ -16,6 +16,7 @@ from app.agents.marketing_agent import MarketingAgent
 from app.agents.notes_agent import NotesAgent
 from app.agents.research_agent import ResearchAgent
 from app.agents.skills_agent import SkillsAgent
+from app.agents.slides_agent import SlidesAgent
 from app.agents.spec_agent import SpecAgent
 from app.agents.supervisor import SupervisorAgent
 from app.agents.todo_agent import TodoAgent
@@ -23,16 +24,18 @@ from app.db.cosmos import close_cosmos_client, get_cosmos_client
 from app.db.init import ensure_database_and_containers
 from app.mcp.todo_mcp_client import TodoMcpClient
 from app.middleware.auth_middleware import EntraAuthMiddleware
-from app.routes import chat, dev, ideas, marketing, notes, research, specs, todos, upload, voice_ws
+from app.routes import chat, dev, ideas, marketing, notes, research, slides, specs, todos, upload, voice_ws
 from app.routes import sandbox as sandbox_routes
 from app.routes.user import router as user_router
 from app.services.brainstorm_service import BrainstormService
+from app.services.slides_service import SlidesService
 from app.services.cosmos_dev_service import DevService
 from app.services.cosmos_marketing_service import MarketingService
 from app.services.cosmos_skills_service import CosmosSkillsService
 from app.services.dev_service import InMemoryDevService
 from app.services.inmemory_sandbox_service import InMemorySandboxService
 from app.services.memory_brainstorm_service import InMemoryBrainstormService
+from app.services.memory_slides_service import InMemorySlidesService
 from app.services.memory_marketing_service import InMemoryMarketingService
 from app.services.memory_research_service import InMemoryResearchService
 from app.services.memory_spec_service import InMemorySpecService
@@ -60,6 +63,7 @@ async def lifespan(app: FastAPI):
     # Initialize Cosmos DB
     notes_service = None
     brainstorm_service = None
+    slides_service = None
     research_service = None
     spec_service = None
     dev_service = None
@@ -69,6 +73,7 @@ async def lifespan(app: FastAPI):
         await ensure_database_and_containers(client)
         notes_service = NotesService(client)
         brainstorm_service = BrainstormService(client)
+        slides_service = SlidesService(client)
         research_service = ResearchService(client)
         spec_service = SpecService(client)
         dev_service = DevService(client)
@@ -110,6 +115,10 @@ async def lifespan(app: FastAPI):
         brainstorm_service = InMemoryBrainstormService()
         logger.info("In-memory brainstorm service initialized.")
 
+    if slides_service is None:
+        slides_service = InMemorySlidesService()
+        logger.info("In-memory slides service initialized.")
+
     if research_service is None:
         research_service = InMemoryResearchService()
         logger.info("In-memory research service initialized.")
@@ -141,9 +150,10 @@ async def lifespan(app: FastAPI):
     # Initialize agents
     notes_agent = NotesAgent(notes_service)
     brainstorm_agent = BrainstormAgent(brainstorm_service, research_service=research_service)
+    slides_agent = SlidesAgent(slides_service, research_service=research_service)
     research_agent = ResearchAgent(research_service)
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
-    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills)
+    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills, slides_service=slides_service)
     # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
     spec_agent._dev_agent = dev_agent
     skills_agent = SkillsAgent(skills_service, cosmos_skills=cosmos_skills)
@@ -163,12 +173,14 @@ async def lifespan(app: FastAPI):
     supervisor = SupervisorAgent(
         notes_agent, brainstorm_agent, research_agent, spec_agent,
         dev_agent, skills_agent, marketing_agent=marketing_agent,
-        todo_agent=todo_agent,
+        todo_agent=todo_agent, slides_agent=slides_agent,
     )
 
     notes.set_notes_service(notes_service)
     ideas.set_brainstorm_service(brainstorm_service, refine_fn=brainstorm_agent.refine, refine_stream_fn=brainstorm_agent.refine_stream)
     ideas.set_idea_research_service(research_service)
+    slides.set_slides_service(slides_service, refine_fn=slides_agent.refine, refine_stream_fn=slides_agent.refine_stream)
+    slides.set_slides_research_service(research_service)
     research.set_research_service(research_service, run_web_search, run_deep_research)
     specs.set_spec_service(
         spec_service,
@@ -250,6 +262,7 @@ if _static_dir.exists():
 # Register routes
 app.include_router(notes.router)
 app.include_router(ideas.router)
+app.include_router(slides.router)
 app.include_router(research.router)
 app.include_router(specs.router)
 app.include_router(dev.router)
