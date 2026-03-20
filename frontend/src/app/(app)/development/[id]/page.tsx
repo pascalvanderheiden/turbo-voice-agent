@@ -346,36 +346,36 @@ const STATUS_COLOR: Record<string, string> = {
   done: "#22C55E",
 };
 
-function StatusPanel({ squad, openspecStatus }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus }) {
+function StatusPanel({ squad, openspecStatus, taskStatus }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus; taskStatus?: string }) {
   const hasSquad = squad?.teamMembers?.length;
   const hasOpenspec = openspecStatus && openspecStatus.totalTasks > 0;
-  if (!hasSquad && !hasOpenspec) return null;
+  const isRunning = taskStatus === "running";
+  if (!hasSquad && !hasOpenspec && !isRunning) return null;
 
   const workingMembers = squad?.teamMembers?.filter(m => m.status === "working") ?? [];
-  const doneMembers = squad?.teamMembers?.filter(m => m.status === "done") ?? [];
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] p-4">
-      <div className="flex gap-4 flex-col sm:flex-row">
-        {/* OpenSpec status */}
-        {hasOpenspec && (
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <IconFileCode size={14} className="text-purple-400 shrink-0" />
-              <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">OpenSpec</span>
-              {openspecStatus.changeName && (
-                <span className="text-[10px] text-purple-400 truncate">{openspecStatus.changeName}</span>
-              )}
-            </div>
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] p-4 space-y-4">
+      {/* OpenSpec status */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <IconFileCode size={14} className="text-purple-400 shrink-0" />
+          <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">OpenSpec</span>
+          {hasOpenspec && openspecStatus.changeName && (
+            <span className="text-[10px] text-purple-400 truncate">{openspecStatus.changeName}</span>
+          )}
+        </div>
+        {hasOpenspec ? (
+          <>
             <div className="flex items-center gap-3 mb-1.5">
               <div className="flex-1 h-1.5 rounded-full bg-[var(--color-bg-tertiary)] overflow-hidden">
                 <div
                   className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                  style={{ width: `${openspecStatus.totalTasks > 0 ? (openspecStatus.completedTasks / openspecStatus.totalTasks) * 100 : 0}%` }}
+                  style={{ width: `${(openspecStatus.completedTasks / openspecStatus.totalTasks) * 100}%` }}
                 />
               </div>
               <span className="text-[10px] text-[var(--color-text-muted)] shrink-0 tabular-nums">
-                {openspecStatus.completedTasks}/{openspecStatus.totalTasks}
+                {openspecStatus.completedTasks}/{openspecStatus.totalTasks} tasks
               </span>
             </div>
             <div className="flex items-center gap-3 text-[10px]">
@@ -386,57 +386,65 @@ function StatusPanel({ squad, openspecStatus }: { squad?: SquadInfo; openspecSta
               )}
               {openspecStatus.filesChanged > 0 && (
                 <span className="text-[var(--color-text-muted)] shrink-0">
-                  {openspecStatus.filesChanged} files
+                  {openspecStatus.filesChanged} files changed
                 </span>
               )}
             </div>
-          </div>
-        )}
-
-        {/* Divider */}
-        {hasOpenspec && hasSquad ? <div className="hidden sm:block w-px bg-[var(--color-border-dark)]" /> : null}
-
-        {/* Squad status */}
-        {hasSquad && (
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <IconUsersGroup size={14} className="text-[var(--color-brand-pink)] shrink-0" />
-              <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">Squad</span>
-              <span className="text-[10px] text-[var(--color-text-muted)]">{squad!.teamMembers.length}</span>
-              {workingMembers.length > 0 && (
-                <span className="text-[10px] text-[var(--color-brand-cyan)]">
-                  {workingMembers.length} active
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {squad!.teamMembers.map((m) => (
-                <div
-                  key={m.name}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-[11px] ${
-                    m.status === "working"
-                      ? "border-[var(--color-brand-cyan)]/30 bg-[var(--color-brand-cyan)]/5"
-                      : m.status === "done"
-                      ? "border-green-500/20 bg-green-500/5"
-                      : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
-                  }`}
-                >
-                  <span className="text-sm leading-none">{ROLE_EMOJI[m.role] ?? "👤"}</span>
-                  <span className={`font-medium truncate max-w-[80px] ${
-                    m.status === "working" ? "text-[var(--color-brand-cyan)]"
-                    : m.status === "done" ? "text-green-400"
-                    : "text-[var(--color-text-muted)]"
-                  }`}>{m.name}</span>
-                  <span
-                    className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${m.status === "working" ? "animate-pulse" : ""}`}
-                    style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
+          </>
+        ) : (
+          <span className="text-[10px] text-[var(--color-text-muted)]">
+            {isRunning ? "Waiting for openspec status..." : "No openspec data"}
+          </span>
         )}
       </div>
+
+      {/* Squad members */}
+      {hasSquad && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <IconUsersGroup size={14} className="text-[var(--color-brand-pink)] shrink-0" />
+            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">Squad</span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">{squad!.teamMembers.length} members</span>
+            {workingMembers.length > 0 && (
+              <span className="text-[10px] text-[var(--color-brand-cyan)] font-medium">
+                {workingMembers.length} active
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            {squad!.teamMembers.map((m) => (
+              <div
+                key={m.name}
+                className={`flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] border ${
+                  m.status === "working"
+                    ? "border-[var(--color-brand-cyan)]/30 bg-[var(--color-brand-cyan)]/5"
+                    : m.status === "done"
+                    ? "border-green-500/20 bg-green-500/5"
+                    : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
+                }`}
+              >
+                <span className="text-base leading-none">{ROLE_EMOJI[m.role] ?? "👤"}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-xs font-medium truncate ${
+                      m.status === "working" ? "text-[var(--color-brand-cyan)]"
+                      : m.status === "done" ? "text-green-400"
+                      : "text-[var(--color-text-primary)]"
+                    }`}>{m.name}</span>
+                    <span
+                      className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${m.status === "working" ? "animate-pulse" : ""}`}
+                      style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-[var(--color-text-muted)] leading-tight block truncate">
+                    {m.role} · {m.expertise}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -641,7 +649,7 @@ export default function DevTaskDetailPage() {
       </div>
 
       {/* Squad & OpenSpec Status */}
-      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} />
+      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} taskStatus={task.status} />
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
