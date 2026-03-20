@@ -369,6 +369,7 @@ class DevAgent:
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
         """Mockup pipeline: init → openspec → skills → squad → propose → apply → archive → screenshots."""
+        self._squad_enabled = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -435,6 +436,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
+        self._squad_enabled = True  # Enable --agent squad for apply stages
 
         # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
         await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
@@ -495,6 +497,7 @@ class DevAgent:
                         raise_on_error=False,
                         work_dir=work_dir,
                         continue_session=True,
+                        agent="squad" if self._squad_enabled else None,
                     )
                 except Exception as exc:
                     logger.warning("Mockup apply task %d failed: %s", i + 1, exc)
@@ -525,6 +528,7 @@ class DevAgent:
                         raise_on_error=False,
                         work_dir=work_dir,
                         continue_session=True,
+                        agent="squad" if self._squad_enabled else None,
                     )
                     break  # Success — no need to retry
                 except RuntimeError as exc:
@@ -597,6 +601,7 @@ class DevAgent:
 
     async def _run_openspec_pipeline(self, task_id: str, user_id: str) -> None:
         """OpenSpec pipeline: init → foundation propose/apply → features → archive → screenshots."""
+        self._squad_enabled = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
 
@@ -709,6 +714,7 @@ class DevAgent:
                 )
                 await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
                 await self._poll_squad_status(task_id, work_dir, user_id)
+                await self._poll_openspec_status(task_id, work_dir, user_id)
         else:
             # Fallback: single apply if we couldn't parse tasks
             await self._sandbox_exec(
@@ -935,6 +941,7 @@ class DevAgent:
                 )
                 if user_id:
                     await self._poll_squad_status(task_id, feature_work_dir, user_id)
+                    await self._poll_openspec_status(task_id, feature_work_dir, user_id)
         else:
             await self._sandbox_exec(
                 task_id=task_id,
@@ -1465,6 +1472,68 @@ class DevAgent:
         except Exception as exc:
             logger.debug("squad status poll failed (non-fatal): %s", exc)
 
+    async def _poll_openspec_status(
+        self, task_id: str, work_dir: str, user_id: str,
+    ) -> None:
+        """Poll openspec status and update the dev task."""
+        try:
+            raw = await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"cd {work_dir} && "
+                    "openspec status --json 2>/dev/null || echo '{}'"
+                ),
+                args=[],
+                stage_label="openspec-status",
+                work_dir=work_dir,
+                timeout=15,
+                raise_on_error=False,
+            )
+            if not raw.strip() or raw.strip() == "{}":
+                return
+            import re
+            # Extract JSON from possible output noise
+            json_match = re.search(r'\{.*\}', raw.strip(), re.DOTALL)
+            if not json_match:
+                return
+            data = json.loads(json_match.group())
+            # Parse openspec status fields
+            change_name = data.get("name", data.get("changeName", ""))
+            tasks = data.get("tasks", [])
+            total = len(tasks) if isinstance(tasks, list) else data.get("totalTasks", 0)
+            done = sum(1 for t in tasks if t.get("done") or t.get("status") == "done") if isinstance(tasks, list) else data.get("completedTasks", 0)
+            current = ""
+            if isinstance(tasks, list):
+                for t in tasks:
+                    if not t.get("done") and t.get("status") != "done":
+                        current = t.get("title", t.get("name", ""))
+                        break
+            # Count changed files
+            files_raw = await self._sandbox_exec(
+                task_id=task_id,
+                command=f"cd {work_dir} && git diff --stat HEAD~1 2>/dev/null | tail -1 || echo '0'",
+                args=[],
+                stage_label="openspec-files",
+                work_dir=work_dir,
+                timeout=10,
+                raise_on_error=False,
+            )
+            files_changed = 0
+            file_match = re.search(r'(\d+)\s+file', files_raw)
+            if file_match:
+                files_changed = int(file_match.group(1))
+
+            svc = self._service.with_user(user_id)
+            await svc.set_openspec_status(task_id, {
+                "changeName": change_name,
+                "totalTasks": total,
+                "completedTasks": done,
+                "currentTask": current,
+                "filesChanged": files_changed,
+            })
+        except Exception as exc:
+            logger.debug("openspec status poll failed (non-fatal): %s", exc)
+
     def _has_squad(self, work_dir: str) -> bool:
         """Check if squad config flag was set for this task."""
         return getattr(self, "_squad_enabled", False)
@@ -1759,6 +1828,14 @@ class DevAgent:
 
     def _generate_squad_files(self, team: list[dict], spec_content: str) -> dict[str, str]:
         """Generate .squad/ config files from team and spec content."""
+        # config.json — must be valid JSON for squad-pr validation
+        config_json = json.dumps({
+            "teamRoot": ".",
+            "team": "team.md",
+            "routing": "routing.md",
+            "directives": "directives.md",
+        }, indent=2) + "\n"
+
         # team.md — squad-pr expects "## Members" header
         team_lines = ["## Members\n"]
         role_emojis = {
@@ -1800,6 +1877,7 @@ class DevAgent:
         directives_md = "\n".join(directives_lines) + "\n"
 
         return {
+            ".squad/config.json": config_json,
             ".squad/team.md": team_md,
             ".squad/routing.md": routing_md,
             ".squad/directives.md": directives_md,
@@ -1830,28 +1908,21 @@ class DevAgent:
         except Exception as exc:
             logger.warning("squad init failed (non-fatal): %s", exc)
 
-        # Ensure squad config uses relative teamRoot and casting/registry.json exists
+        # Ensure casting/registry.json exists for squad-pr validation
         try:
             await self._sandbox_exec(
                 task_id=task_id,
-                command=(
-                    f"mkdir -p {work_dir}/.squad/casting"
-                    f" && test -f {work_dir}/.squad/casting/registry.json"
-                    f" || echo '[]' > {work_dir}/.squad/casting/registry.json"
-                    f" && if [ -f {work_dir}/.squad/config.json ]; then"
-                    f"   sed -i 's|\"teamRoot\":.*|\"teamRoot\": \".\",|'"
-                    f"   {work_dir}/.squad/config.json; fi"
-                ),
+                command=f"mkdir -p {work_dir}/.squad/casting && echo '[]' > {work_dir}/.squad/casting/registry.json",
                 args=[],
-                stage_label="squad-config-fix",
+                stage_label="squad-registry",
                 work_dir=work_dir,
                 timeout=15,
                 raise_on_error=False,
             )
         except Exception as exc:
-            logger.warning("squad config fix failed (non-fatal): %s", exc)
+            logger.warning("squad registry init failed (non-fatal): %s", exc)
 
-        # Step 2: Generate team from spec
+        # Step 2: Generate team from spec (includes config.json with valid JSON)
         team = self._generate_squad_team(spec_content)
         squad_files = self._generate_squad_files(team, spec_content)
 

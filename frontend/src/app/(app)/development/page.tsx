@@ -125,9 +125,14 @@ function StagePipeline({ task }: { task: DevTask }) {
         </div>
       )}
 
-      {/* Working squad members */}
-      {workingMembers.length > 0 && (
-        <div className="flex items-center gap-1 flex-wrap pt-0.5">
+      {/* Working squad members + openspec progress */}
+      {(workingMembers.length > 0 || task.openspecStatus?.totalTasks) && (
+        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+          {task.openspecStatus && task.openspecStatus.totalTasks > 0 && (
+            <span className="inline-flex items-center gap-1 text-[9px] text-purple-400 bg-purple-500/5 px-1.5 py-0.5 rounded border border-purple-500/20">
+              📋 {task.openspecStatus.completedTasks}/{task.openspecStatus.totalTasks}
+            </span>
+          )}
           {workingMembers.map((m) => (
             <span key={m.name} className="inline-flex items-center gap-0.5 text-[9px] text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/5 px-1 py-0.5 rounded border border-[var(--color-brand-cyan)]/20">
               <span>{ROLE_EMOJI[m.role] ?? "👤"}</span>

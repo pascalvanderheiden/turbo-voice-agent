@@ -357,6 +357,14 @@ export interface SquadInfo {
   teamMembers: SquadMember[];
 }
 
+export interface OpenSpecStatus {
+  changeName: string;
+  totalTasks: number;
+  completedTasks: number;
+  currentTask: string;
+  filesChanged: number;
+}
+
 export interface DevTask {
   id: string;
   title: string;
@@ -365,6 +373,7 @@ export interface DevTask {
   status: string;
   skillIds?: string[];
   squad?: SquadInfo;
+  openspecStatus?: OpenSpecStatus;
   currentIteration: number;
   iterations: DevIteration[];
   stages: DevStage[]; // legacy flat view (iteration 0)

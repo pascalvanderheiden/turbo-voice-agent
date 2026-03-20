@@ -219,6 +219,17 @@ class DevService:
         except Exception:
             logger.exception("Failed to set squad on dev task %s", task_id)
 
+    async def set_openspec_status(self, task_id: str, status_data: dict) -> None:
+        """Store openspec change status on a dev task."""
+        try:
+            container = await self._container()
+            doc = await container.read_item(item=task_id, partition_key=self._user_id)
+            doc["openspecStatus"] = status_data
+            doc["updatedAt"] = datetime.now(UTC).isoformat()
+            await container.upsert_item(doc)
+        except Exception:
+            logger.exception("Failed to set openspec status on dev task %s", task_id)
+
     async def add_premium_requests(self, task_id: str, count: int) -> None:
         """Increment the premium request counter for a task."""
         try:

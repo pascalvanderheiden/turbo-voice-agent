@@ -27,7 +27,7 @@ import {
   IconUsersGroup,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
+import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, type OpenSpecStatus, getAccessToken } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
@@ -346,36 +346,96 @@ const STATUS_COLOR: Record<string, string> = {
   done: "#22C55E",
 };
 
-function SquadPanel({ squad }: { squad: SquadInfo }) {
-  if (!squad?.teamMembers?.length) return null;
+function StatusPanel({ squad, openspecStatus }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus }) {
+  const hasSquad = squad?.teamMembers?.length;
+  const hasOpenspec = openspecStatus && openspecStatus.totalTasks > 0;
+  if (!hasSquad && !hasOpenspec) return null;
+
+  const workingMembers = squad?.teamMembers?.filter(m => m.status === "working") ?? [];
+  const doneMembers = squad?.teamMembers?.filter(m => m.status === "done") ?? [];
+
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <IconUsersGroup size={18} className="text-[var(--color-brand-pink)]" />
-        <h3 className="text-sm font-semibold">Squad</h3>
-        <span className="text-xs text-[var(--color-text-muted)]">{squad.teamMembers.length} members</span>
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-        {squad.teamMembers.map((m) => (
-          <div
-            key={m.name}
-            className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-primary)] bg-[var(--color-bg-tertiary)] p-2.5"
-          >
-            <span className="text-lg leading-none mt-0.5">{ROLE_EMOJI[m.role] ?? "👤"}</span>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm font-medium truncate">{m.name}</span>
-                <span
-                  className={`inline-block w-2 h-2 rounded-full shrink-0 ${m.status === "working" ? "animate-pulse" : ""}`}
-                  style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
-                  title={m.status}
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] p-4">
+      <div className="flex gap-4 flex-col sm:flex-row">
+        {/* OpenSpec status */}
+        {hasOpenspec && (
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2">
+              <IconFileCode size={14} className="text-purple-400 shrink-0" />
+              <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">OpenSpec</span>
+              {openspecStatus.changeName && (
+                <span className="text-[10px] text-purple-400 truncate">{openspecStatus.changeName}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3 mb-1.5">
+              <div className="flex-1 h-1.5 rounded-full bg-[var(--color-bg-tertiary)] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                  style={{ width: `${openspecStatus.totalTasks > 0 ? (openspecStatus.completedTasks / openspecStatus.totalTasks) * 100 : 0}%` }}
                 />
               </div>
-              <span className="text-[11px] text-[var(--color-brand-cyan)] leading-tight block">{m.role}</span>
-              <span className="text-[10px] text-[var(--color-text-muted)] leading-tight block truncate">{m.expertise}</span>
+              <span className="text-[10px] text-[var(--color-text-muted)] shrink-0 tabular-nums">
+                {openspecStatus.completedTasks}/{openspecStatus.totalTasks}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[10px]">
+              {openspecStatus.currentTask && (
+                <span className="text-[var(--color-text-secondary)] truncate flex-1">
+                  → {openspecStatus.currentTask}
+                </span>
+              )}
+              {openspecStatus.filesChanged > 0 && (
+                <span className="text-[var(--color-text-muted)] shrink-0">
+                  {openspecStatus.filesChanged} files
+                </span>
+              )}
             </div>
           </div>
-        ))}
+        )}
+
+        {/* Divider */}
+        {hasOpenspec && hasSquad ? <div className="hidden sm:block w-px bg-[var(--color-border-dark)]" /> : null}
+
+        {/* Squad status */}
+        {hasSquad && (
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2">
+              <IconUsersGroup size={14} className="text-[var(--color-brand-pink)] shrink-0" />
+              <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">Squad</span>
+              <span className="text-[10px] text-[var(--color-text-muted)]">{squad!.teamMembers.length}</span>
+              {workingMembers.length > 0 && (
+                <span className="text-[10px] text-[var(--color-brand-cyan)]">
+                  {workingMembers.length} active
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {squad!.teamMembers.map((m) => (
+                <div
+                  key={m.name}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-[11px] ${
+                    m.status === "working"
+                      ? "border-[var(--color-brand-cyan)]/30 bg-[var(--color-brand-cyan)]/5"
+                      : m.status === "done"
+                      ? "border-green-500/20 bg-green-500/5"
+                      : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
+                  }`}
+                >
+                  <span className="text-sm leading-none">{ROLE_EMOJI[m.role] ?? "👤"}</span>
+                  <span className={`font-medium truncate max-w-[80px] ${
+                    m.status === "working" ? "text-[var(--color-brand-cyan)]"
+                    : m.status === "done" ? "text-green-400"
+                    : "text-[var(--color-text-muted)]"
+                  }`}>{m.name}</span>
+                  <span
+                    className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${m.status === "working" ? "animate-pulse" : ""}`}
+                    style={{ backgroundColor: STATUS_COLOR[m.status] ?? STATUS_COLOR.idle }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -580,8 +640,8 @@ export default function DevTaskDetailPage() {
         />
       </div>
 
-      {/* Squad Team */}
-      {task.squad && <SquadPanel squad={task.squad} />}
+      {/* Squad & OpenSpec Status */}
+      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} />
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
@@ -613,8 +673,8 @@ export default function DevTaskDetailPage() {
         </h2>
         {screenshots.length > 0 ? (
           <div className="space-y-6">
-            {/* Per-iteration screenshots (when sequence mode) */}
-            {isOpenSpec && (() => {
+            {/* For openspec with multiple iterations: group by iteration */}
+            {isOpenSpec ? (() => {
               const iterScreenshots = new Map<number, typeof screenshots>();
               for (const s of screenshots) {
                 const idx = s.iterationIndex ?? 0;
@@ -648,29 +708,24 @@ export default function DevTaskDetailPage() {
                   </div>
                 );
               });
-            })()}
-
-            {/* Combined gallery (always shown) */}
-            {isOpenSpec && screenshots.length > 0 && (
-              <div>
-                <h3 className="text-xs font-medium text-[var(--color-text-secondary)] mb-3">All Screenshots</h3>
+            })() : (
+              /* Mockup mode: single flat gallery */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {screenshots.map((artifact, i) => (
+                  <div
+                    key={i}
+                    className="border border-[var(--color-border-dark)] rounded-[var(--radius-md)] overflow-hidden cursor-pointer hover:border-[var(--color-brand-pink)]/50 transition-colors group"
+                    onClick={() => setLightboxSrc(`data:image/png;base64,${artifact.data}`)}
+                  >
+                    <img src={`data:image/png;base64,${artifact.data}`} alt={artifact.name} className="w-full group-hover:opacity-90 transition-opacity" />
+                    <div className="p-2 text-xs text-[var(--color-text-muted)] flex items-center justify-between">
+                      <span>{artifact.name}</span>
+                      <span className="text-[10px] text-[var(--color-brand-pink)]">Click to zoom</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {screenshots.map((artifact, i) => (
-                <div
-                  key={i}
-                  className="border border-[var(--color-border-dark)] rounded-[var(--radius-md)] overflow-hidden cursor-pointer hover:border-[var(--color-brand-pink)]/50 transition-colors group"
-                  onClick={() => setLightboxSrc(`data:image/png;base64,${artifact.data}`)}
-                >
-                  <img src={`data:image/png;base64,${artifact.data}`} alt={artifact.name} className="w-full group-hover:opacity-90 transition-opacity" />
-                  <div className="p-2 text-xs text-[var(--color-text-muted)] flex items-center justify-between">
-                    <span>{artifact.name}{artifact.iterationIndex != null && isOpenSpec ? ` (${iterations[artifact.iterationIndex]?.label || `Iter ${artifact.iterationIndex}`})` : ""}</span>
-                    <span className="text-[10px] text-[var(--color-brand-pink)]">Click to zoom</span>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-10 text-center">

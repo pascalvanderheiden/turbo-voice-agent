@@ -161,6 +161,15 @@ class InMemoryDevService(JsonPersistenceMixin):
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
 
+    async def set_openspec_status(self, task_id: str, status_data: dict) -> None:
+        """Store openspec change status on a dev task."""
+        doc = self._store.get(task_id)
+        if not doc:
+            return
+        doc["openspecStatus"] = status_data
+        doc["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save_to_disk()
+
     async def add_premium_requests(self, task_id: str, count: int) -> None:
         """Increment the premium request counter for a task."""
         doc = self._store.get(task_id)
