@@ -51,6 +51,8 @@ def _default_iteration(
 ) -> dict:
     if mode in ("sequential", "openspec"):
         stages = _sequential_stages(features)
+    elif mode == "slides":
+        stages = _slides_stages()
     else:
         stages = _mockup_stages()
     return {

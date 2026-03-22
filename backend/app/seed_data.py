@@ -297,7 +297,7 @@ async def seed_demo_data(
         )
     )
     if completed_task:
-        for stage_name in ("plan", "build", "run", "test"):
+        for stage_name in ("init", "skills", "implement", "screenshots"):
             await dev_svc.set_stage_status(
                 completed_task.id,
                 stage_name,
@@ -310,12 +310,12 @@ async def seed_demo_data(
                 mockup_spec.id, completed_task.id, status="developed"
             )
 
-    # Pending task linked to the openspec spec
+    # Pending task linked to the sequential spec
     await dev_svc.create(
         DevTaskCreate(
-            title="Skill Marketplace — OpenSpec Build",
+            title="Skill Marketplace — Sequential Build",
             spec_id=openspec_spec.id if openspec_spec else None,
-            mode="openspec",
+            mode="sequential",
         )
     )
 

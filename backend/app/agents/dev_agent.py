@@ -139,7 +139,7 @@ class DevAgent:
                         "properties": {
                             "title": {"type": "string", "description": "The task title"},
                             "spec_id": {"type": "string", "description": "Optional spec ID to develop"},
-                            "mode": {"type": "string", "enum": ["mockup", "openspec"], "description": "Pipeline mode: mockup (quick GUI) or openspec (iterative)"},
+                            "mode": {"type": "string", "enum": ["mockup", "sequential", "slides"], "description": "Pipeline mode: mockup (quick GUI), sequential (iterative), or slides (presentation deck)"},
                         },
                         "required": ["title"],
                     },
@@ -287,12 +287,16 @@ class DevAgent:
         if not spec:
             return
 
+        if mode == "slides":
+            # Slides mode doesn't populate iterations from spec hierarchy
+            return
+
         if mode == "mockup":
             # Single iteration for the full mockup
             full_label = f"Mockup: {spec.title}"
             iterations = [_default_iteration(0, full_label, spec_id)]
         else:
-            # OpenSpec: foundation first, then each feature from spec content
+            # Sequential: foundation first, then each feature from spec content
             iterations = [_default_iteration(0, f"Foundation: {spec.title}", spec_id)]
             # Parse feature prompts from spec content if available
             spec_content = spec.content or ""
