@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from openai import AsyncAzureOpenAI
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from app.models.marketing import MarketingVideo
 from app.services.memory_marketing_service import InMemoryMarketingService
@@ -48,84 +48,6 @@ def _resize_image_to_match(image_bytes: bytes, width: int, height: int) -> tuple
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue(), "image/png", "png"
-
-
-def _create_narrator_pip(
-    photo_bytes: bytes,
-    width: int = 240,
-    height: int = 240,
-    radius: int = 18,
-    border_w: int = 4,
-) -> bytes:
-    """Create a professional YouTube-style narrator PIP overlay.
-
-    Rounded rectangle with branded border, subtle shadow, and transparent background.
-    Designed to be placed bottom-right as a webcam-style narrator window.
-    """
-    img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
-
-    # Center-crop to target aspect ratio
-    target_ratio = width / height
-    img_ratio = img.width / img.height
-    if img_ratio > target_ratio:
-        new_w = int(img.height * target_ratio)
-        offset = (img.width - new_w) // 2
-        img = img.crop((offset, 0, offset + new_w, img.height))
-    else:
-        new_h = int(img.width / target_ratio)
-        offset = (img.height - new_h) // 2
-        img = img.crop((0, offset, img.width, offset + new_h))
-    img = img.resize((width, height), Image.LANCZOS)
-
-    # Rounded rectangle mask for the photo
-    mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=255)
-
-    rounded_photo = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    rounded_photo.paste(img, (0, 0), mask)
-
-    # Canvas: photo + border + shadow padding
-    shadow_offset = 6
-    total_w = width + border_w * 2 + shadow_offset
-    total_h = height + border_w * 2 + shadow_offset
-    canvas = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    cd = ImageDraw.Draw(canvas)
-
-    # Shadow — semi-transparent, slightly offset
-    cd.rounded_rectangle(
-        (border_w + shadow_offset, border_w + shadow_offset,
-         border_w + width + border_w - 1 + shadow_offset,
-         border_w + height + border_w - 1 + shadow_offset),
-        radius=radius + border_w, fill=(0, 0, 0, 70),
-    )
-
-    # Outer border frame — white with branded pink tint
-    cd.rounded_rectangle(
-        (0, 0, width + border_w * 2 - 1, height + border_w * 2 - 1),
-        radius=radius + border_w, fill=(255, 255, 255, 240),
-    )
-
-    # Inner dark background (prevents bleed if photo has transparency)
-    cd.rounded_rectangle(
-        (border_w, border_w, border_w + width - 1, border_w + height - 1),
-        radius=radius, fill=(15, 15, 26, 255),
-    )
-
-    # Paste the rounded photo
-    canvas.paste(rounded_photo, (border_w, border_w), rounded_photo)
-
-    # Subtle branded accent line at bottom of frame (pink → purple gradient feel)
-    accent_y = border_w + height + 1
-    for x in range(border_w, border_w + width):
-        t = (x - border_w) / max(width - 1, 1)
-        r = int(233 * (1 - t) + 123 * t)  # #E91E8C → #7B2FBE
-        g = int(30 * (1 - t) + 47 * t)
-        b = int(140 * (1 - t) + 190 * t)
-        cd.line([(x, accent_y), (x, accent_y + 1)], fill=(r, g, b, 200))
-
-    buf = io.BytesIO()
-    canvas.save(buf, format="PNG")
-    return buf.getvalue()
 
 
 class MarketingAgent:
@@ -638,8 +560,8 @@ class MarketingAgent:
                     "role": "system",
                     "content": (
                         "You are a creative marketing scriptwriter for software products. "
-                        "You will create a ~36 second promotional video script broken into "
-                        "3 individual segments of 12 seconds each.\n\n"
+                        "You will create a ~60 second promotional video script broken into "
+                        "3 individual segments of 20 seconds each.\n\n"
                         "Each segment will be generated as a separate Sora-2 video clip, "
                         "then stitched together into one final video.\n\n"
                         "IMPORTANT: Each segment will receive a reference image as input to Sora-2. "
@@ -746,7 +668,6 @@ class MarketingAgent:
 
         try:
             clip_paths: list[Path] = []
-            avatar_used = False
             async with aiohttp.ClientSession() as session:
                 for idx, seg in enumerate(segments):
                     seg_path = tmp_dir / f"seg_{idx:03d}.mp4"
@@ -764,7 +685,7 @@ class MarketingAgent:
                         "model": deployment,
                         "prompt": prompt,
                         "size": "1280x720",
-                        "seconds": 12,
+                        "seconds": 20,
                     }
 
                     section = seg.get("section", "").lower()
@@ -788,7 +709,6 @@ class MarketingAgent:
                             if avatar_bytes:
                                 seg_path.write_bytes(avatar_bytes)
                                 clip_paths.append(seg_path)
-                                avatar_used = True
                                 logger.info(
                                     "Segment %d [%s]: avatar video generated (%d bytes)",
                                     idx, section, len(avatar_bytes),
@@ -911,44 +831,7 @@ class MarketingAgent:
                 if proc.returncode != 0:
                     raise RuntimeError(f"ffmpeg failed: {proc.stderr[-500:]}")
 
-            # Narrator PIP overlay: only if avatar was NOT used (avatar already shows the user)
-            if profile_photo and not avatar_used:
-                logger.info("Applying narrator PIP overlay to composed video...")
-                try:
-                    pip_img = _create_narrator_pip(profile_photo, width=240, height=240)
-                    pip_path = tmp_dir / "pip_overlay.png"
-                    pip_path.write_bytes(pip_img)
-                    logger.info("Narrator PIP image created: %d bytes", len(pip_img))
-
-                    pip_output = tmp_dir / "output_pip.mp4"
-                    pip_proc = subprocess.run(
-                        [
-                            "ffmpeg", "-y",
-                            "-i", str(output_path),
-                            "-i", str(pip_path),
-                            "-filter_complex",
-                            "[1:v]format=rgba[pip];[0:v][pip]overlay=W-w-30:H-h-30",
-                            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                            "-c:a", "copy",
-                            "-movflags", "+faststart",
-                            str(pip_output),
-                        ],
-                        capture_output=True, text=True, timeout=180,
-                    )
-                    if pip_proc.returncode == 0 and pip_output.exists():
-                        import shutil
-                        shutil.move(str(pip_output), str(output_path))
-                        logger.info("✓ Narrator PIP overlay applied successfully")
-                    else:
-                        logger.error(
-                            "PIP overlay ffmpeg failed (rc=%d): %s",
-                            pip_proc.returncode,
-                            pip_proc.stderr[-500:] if pip_proc.stderr else "no stderr",
-                        )
-                except Exception as pip_exc:
-                    logger.error("PIP overlay error (continuing without): %s", pip_exc, exc_info=True)
-            else:
-                logger.warning("No profile photo — skipping narrator PIP overlay")
+            # PIP overlay removed — narration + avatar segments are sufficient
 
             # Calculate actual duration
             duration = len(clip_paths) * 10  # rough estimate
