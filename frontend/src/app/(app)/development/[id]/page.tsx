@@ -136,18 +136,6 @@ function StageConnector({ completed }: { completed: boolean }) {
   );
 }
 
-function PhaseBadge({ label, done, failed, running }: { label: string; done: boolean; failed?: boolean; running?: boolean }) {
-  const color = done ? "text-green-400 border-green-500/30 bg-green-500/5"
-    : failed ? "text-red-400 border-red-500/30 bg-red-500/5"
-    : running ? "text-blue-400 border-blue-500/30 bg-blue-500/5"
-    : "text-[var(--color-text-muted)] border-[var(--color-border-dark)]";
-  return (
-    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${color}`}>
-      {done ? <IconCircleCheck size={14} /> : running ? <IconLoader2 size={14} className="animate-spin" /> : failed ? <IconCircleX size={14} /> : <IconClock size={14} />}
-      {label}
-    </div>
-  );
-}
 
 function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
   stages: DevIteration["stages"];
@@ -159,26 +147,15 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
   const features = iterations?.slice(1) ?? [];
   const isSequential = iterations && iterations.length > 0;
 
-  // Foundation phase
-  const foundationStages = isSequential ? (foundation?.stages ?? []).filter(s => FOUNDATION_STAGES.includes(s.name)) : stages;
-  const foundationDone = foundationStages.every(s => s.status === "completed");
-  const foundationFailed = foundationStages.some(s => s.status === "failed");
-  const foundationRunning = foundationStages.some(s => s.status === "running");
-
-  // Features phase
-  const allFeaturesDone = features.length > 0 && features.every(f => {
-    const fStages = f.stages.filter(s => FEATURE_STAGES.includes(s.name));
-    return fStages.length > 0 && fStages.every(s => s.status === "completed");
-  });
-
-  // Screenshots stage (from foundation or first iteration)
-  const screenshotsStage = (foundation?.stages ?? stages).find(s => s.name === "screenshots");
-  const showScreenshots = features.length === 0 || allFeaturesDone || (screenshotsStage?.status !== "pending");
+  // Collect all stages in order — flat pipeline
+  const allStages = isSequential
+    ? (foundation?.stages ?? [])
+    : stages;
 
   const totalTime = calcTotalDuration(iterations ?? [{ iterationIndex: 0, label: "", stages, specPartId: undefined, workspacePath: undefined }]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Total elapsed time */}
       {totalTime && (
         <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
@@ -187,81 +164,52 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
           <span className="text-xs font-medium text-[var(--color-brand-cyan)]">{totalTime}</span>
         </div>
       )}
-      {/* Foundation phase */}
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Foundation</span>
-          {foundationDone && <PhaseBadge label="Complete" done />}
-          {foundationFailed && !foundationDone && <PhaseBadge label="Failed" done={false} failed />}
-        </div>
-        {foundationDone ? (
-          <div className="text-xs text-green-400/70 ml-1">All stages completed ✓</div>
-        ) : (
-          <div className="flex flex-wrap gap-1 items-start">
-            {foundationStages.map((stage, i) => {
-              const meta = getStageMeta(stage.name);
-              return (
-                <div key={stage.name} className="flex items-start">
-                  <StageNode stage={stage} meta={meta} taskFailed={taskFailed} />
-                  {i < foundationStages.length - 1 && <StageConnector completed={stage.status === "completed"} />}
-                </div>
-              );
-            })}
-          </div>
-        )}
+
+      {/* Pipeline stages — flat row */}
+      <div className="flex flex-wrap gap-1 items-start">
+        {allStages.map((stage, i) => {
+          const meta = getStageMeta(stage.name);
+          return (
+            <div key={stage.name} className="flex items-start">
+              <StageNode stage={stage} meta={meta} taskFailed={taskFailed} />
+              {i < allStages.length - 1 && <StageConnector completed={stage.status === "completed"} />}
+            </div>
+          );
+        })}
       </div>
 
-      {/* Features phase */}
+      {/* Feature iterations (sequential mode only) */}
       {features.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Features</span>
-            {allFeaturesDone && <PhaseBadge label="Complete" done />}
-          </div>
-          <div className="space-y-1.5">
-            {features.map((feat, i) => {
-              const fStages = feat.stages.filter(s => FEATURE_STAGES.includes(s.name));
-              const fDone = fStages.length > 0 && fStages.every(s => s.status === "completed");
-              const fFailed = fStages.some(s => s.status === "failed");
-              const fRunning = fStages.some(s => s.status === "running");
-              const fQueued = !foundationDone && fStages.every(s => s.status === "pending");
-              return (
-                <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
-                  <span className="text-xs font-medium truncate flex-1 min-w-0">{feat.label}</span>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {fQueued ? (
-                      <span className="text-[10px] text-amber-400 flex items-center gap-1">
-                        <IconClock size={12} /> Queued
-                      </span>
-                    ) : fDone ? (
-                      <span className="text-[10px] text-green-400 flex items-center gap-1">
-                        <IconCircleCheck size={12} /> Complete
-                      </span>
-                    ) : (
-                      fStages.map((s) => {
-                        const meta = getStageMeta(s.name);
-                        return <StageNode key={s.name} stage={s} meta={meta} taskFailed={taskFailed} />;
-                      })
-                    )}
-                  </div>
+        <div className="space-y-1.5">
+          {features.map((feat, i) => {
+            const fStages = feat.stages.filter(s => FEATURE_STAGES.includes(s.name));
+            const fDone = fStages.length > 0 && fStages.every(s => s.status === "completed");
+            const fFailed = fStages.some(s => s.status === "failed");
+            const fRunning = fStages.some(s => s.status === "running");
+            const foundationDone = allStages.filter(s => FOUNDATION_STAGES.includes(s.name)).every(s => s.status === "completed");
+            const fQueued = !foundationDone && fStages.every(s => s.status === "pending");
+            return (
+              <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
+                <span className="text-xs font-medium truncate flex-1 min-w-0">{feat.label}</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  {fQueued ? (
+                    <span className="text-[10px] text-amber-400 flex items-center gap-1">
+                      <IconClock size={12} /> Queued
+                    </span>
+                  ) : fDone ? (
+                    <span className="text-[10px] text-green-400 flex items-center gap-1">
+                      <IconCircleCheck size={12} /> Complete
+                    </span>
+                  ) : (
+                    fStages.map((s) => {
+                      const meta = getStageMeta(s.name);
+                      return <StageNode key={s.name} stage={s} meta={meta} taskFailed={taskFailed} />;
+                    })
+                  )}
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Screenshots phase */}
-      {screenshotsStage && showScreenshots && (
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Screenshots</span>
-          </div>
-          <StageNode
-            stage={screenshotsStage}
-            meta={STAGE_META.screenshots}
-            taskFailed={taskFailed}
-          />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -589,12 +537,10 @@ export default function DevTaskDetailPage() {
           </div>
           <div className="flex items-center gap-3 text-sm text-[var(--color-text-muted)]">
             <span>Created {new Date(task.createdAt).toLocaleString()}</span>
-            {(task.premiumRequests ?? 0) > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-pink-500/10 text-[var(--color-brand-pink)] border-pink-500/20">
-                <IconSparkles size={10} stroke={1.5} />
-                {task.premiumRequests} premium
-              </span>
-            )}
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-pink-500/10 text-[var(--color-brand-pink)] border-pink-500/20">
+              <IconSparkles size={10} stroke={1.5} />
+              {task.premiumRequests ?? 0} requests
+            </span>
           </div>
           {task.skillIds && task.skillIds.length > 0 && (
             <div className="flex items-center gap-1.5 mt-1">
