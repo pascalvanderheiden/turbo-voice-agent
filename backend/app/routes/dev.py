@@ -551,6 +551,9 @@ async def start_live_preview(task_id: str, request: Request):
             resp.raise_for_status()
             data = resp.json()
             sandbox_task_id = data.get("id", "")
+
+        # Give the dev server a few seconds to start up
+        await asyncio.sleep(4)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 
@@ -596,32 +599,41 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
     if query:
         target_url += f"?{query}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                headers={
-                    k: v for k, v in request.headers.items()
-                    if k.lower() not in ("host", "authorization")
-                },
-                content=await request.body() if request.method in ("POST", "PUT", "PATCH") else None,
-            )
-            # Strip hop-by-hop headers
-            excluded = {"transfer-encoding", "connection", "keep-alive"}
-            headers = {
-                k: v for k, v in resp.headers.items()
-                if k.lower() not in excluded
-            }
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=headers,
-            )
-    except httpx.ConnectError:
-        raise HTTPException(
-            status_code=502,
-            detail="Dev server not reachable — it may still be starting up. Try again in a few seconds.",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Proxy error: {e}")
+    body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
+    fwd_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "authorization")
+    }
+
+    # Retry a few times — dev server may still be starting
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=fwd_headers,
+                    content=body,
+                )
+                excluded = {"transfer-encoding", "connection", "keep-alive"}
+                headers = {
+                    k: v for k, v in resp.headers.items()
+                    if k.lower() not in excluded
+                }
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers=headers,
+                )
+        except httpx.ConnectError as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(2)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Proxy error: {e}")
+
+    raise HTTPException(
+        status_code=502,
+        detail="Dev server not reachable — it may still be starting up. Try again in a few seconds.",
+    )
