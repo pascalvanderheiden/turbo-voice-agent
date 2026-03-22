@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 
+# Theme directive appended to all autopilot prompts
+_STAR_WARS_THEME = (
+    "\n\nIMPORTANT — Use a Star Wars theme for all visual design, naming, and branding "
+    "throughout the project. Apply Star Wars-inspired colors, typography, imagery, "
+    "and naming conventions where appropriate."
+)
+
 # ── Pipeline output buffers (module-level, keyed by dev task ID) ──────────
 # Stores streaming output entries for the frontend terminal view.
 _pipeline_outputs: dict[str, list[dict]] = {}
@@ -381,7 +388,7 @@ class DevAgent:
         task = await svc.get_by_id(task_id)
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
-        mockup_desc = self._extract_mockup_description(spec_content)
+        mockup_desc = self._extract_mockup_description(spec_content) + _STAR_WARS_THEME
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -507,6 +514,8 @@ class DevAgent:
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
+        foundation_prompt += _STAR_WARS_THEME
+        feature_prompts = [fp + _STAR_WARS_THEME for fp in feature_prompts]
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -701,6 +710,8 @@ class DevAgent:
         deck_config.setdefault("theme", "shadcn/ui")
         deck_config.setdefault("appearance", "dark")
         deck_config.setdefault("palette", "arctic")
+
+        slides_prompt += _STAR_WARS_THEME
 
         await svc.set_status(task_id, "running")
 
@@ -926,7 +937,7 @@ class DevAgent:
             logger.info("Incremental feature implement: task=%s, iter=%d", task_id, iteration_index)
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=propose_instruction,
+                prompt=propose_instruction + _STAR_WARS_THEME,
                 model=model,
                 stage_label=f"feature-{iteration_index}-implement",
                 work_dir=work_dir,
@@ -1784,13 +1795,12 @@ class DevAgent:
     async def _install_skills_in_sandbox(
         self, task_id: str, task, work_dir: str, user_id: str | None = None,
     ) -> int:
-        """Install activated skills in sandbox.
+        """Sync activated skills from blob storage into the sandbox.
 
-        Marketplace skills are installed via their npx commands.
-        Local skills (source=blob storage) are already synced by entrypoint.sh
-        to ~/.copilot/skills/ and are skipped here.
-        After installation, runs a single CLI prompt to verify all skills.
-        Returns the number of skills successfully installed.
+        All skills (local and marketplace) are pre-uploaded to blob storage.
+        This method runs a quick blob sync to ensure the sandbox has the latest
+        files, handling the case where skills were activated after container start.
+        Returns the number of skills synced.
         """
         if not self._cosmos_skills or not task.skill_ids:
             return 0
@@ -1800,48 +1810,51 @@ class DevAgent:
         if not npx_map:
             return 0
 
-        installed = 0
-        for skill_name, npx_cmd in npx_map.items():
-            # Local skills are pre-synced from blob storage — skip npx install
-            # Also catch legacy records where repo was "local" but npxCommand wasn't fixed
-            is_local = npx_cmd == "__local__" or "local/" in npx_cmd
-            if is_local:
-                if task_id in _pipeline_outputs:
-                    _buf_append(task_id, {
-                        "type": "stdout",
-                        "data": f"── {skill_name} (local — pre-synced from blob) ──\n",
-                        "stage": "install-skills",
-                    })
-                installed += 1
-                logger.info("Skill '%s' is local (blob-synced), skipping npx install", skill_name)
-                continue
+        skill_names = list(npx_map.keys())
+        if task_id in _pipeline_outputs:
+            _buf_append(task_id, {
+                "type": "stdout",
+                "data": f"── Syncing {len(skill_names)} skill(s) from blob storage ──\n",
+                "stage": "install-skills",
+            })
 
-            if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stdout",
-                    "data": f"── install-skill-{skill_name} ──\n",
-                    "stage": "install-skills",
-                })
-            try:
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    command=npx_cmd,
-                    args=[],
-                    stage_label=f"install-skill-{skill_name}",
-                    work_dir=work_dir,
-                    timeout=120,
-                )
-                installed += 1
-                logger.info("Installed skill '%s' in sandbox via npx", skill_name)
-            except Exception as exc:
-                logger.warning("Failed to install skill '%s': %s", skill_name, exc)
-                if task_id in _pipeline_outputs:
-                    _buf_append(task_id, {
-                        "type": "stderr",
-                        "data": f"Skill install failed for {skill_name}: {exc}\n",
-                        "stage": "install-skills",
-                    })
+        # Single blob sync command for all skills — fast compared to npx installs
+        skills_list = " ".join(skill_names)
+        sync_cmd = (
+            'SKILLS_DIR="/home/agent/.copilot/skills" && '
+            f'for SKILL in {skills_list}; do '
+            'if [ ! -f "$SKILLS_DIR/$SKILL/SKILL.md" ]; then '
+            'BLOBS=$(az storage blob list --account-name "$AZURE_STORAGE_ACCOUNT_NAME" '
+            '--container-name skills --prefix "$SKILL/" --auth-mode login '
+            '--query "[].name" -o tsv 2>/dev/null); '
+            'if [ -n "$BLOBS" ]; then '
+            'while IFS= read -r blob; do '
+            '[ -z "$blob" ] && continue; '
+            'dest="$SKILLS_DIR/$blob"; '
+            'mkdir -p "$(dirname "$dest")"; '
+            'az storage blob download --account-name "$AZURE_STORAGE_ACCOUNT_NAME" '
+            '--container-name skills --name "$blob" --file "$dest" '
+            '--auth-mode login --no-progress 2>/dev/null; '
+            'done <<< "$BLOBS"; '
+            'echo "  ✓ $SKILL synced from blob"; '
+            'else echo "  ⚠ $SKILL not found in blob storage"; fi; '
+            'else echo "  ✓ $SKILL already present"; fi; '
+            'done'
+        )
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=sync_cmd,
+                args=[],
+                stage_label="sync-skills",
+                work_dir=work_dir,
+                timeout=60,
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("Blob skill sync failed: %s", exc)
 
+        installed = len(skill_names)
         if installed and task_id in _pipeline_outputs:
             _buf_append(task_id, {
                 "type": "stdout",

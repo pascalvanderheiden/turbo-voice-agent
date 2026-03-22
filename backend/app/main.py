@@ -491,18 +491,36 @@ class SkillInstallRequest(BaseModel):
 
 @app.post("/api/agents/skills/install")
 async def activate_skill(body: SkillInstallRequest, request: Request):
-    """Activate a skill — store metadata and npx command in Cosmos DB."""
+    """Activate a skill — store metadata and upload files to blob storage."""
     user_id = getattr(request.state, "user_id", "default-user")
     if not _cosmos_skills:
         return {"error": "Skills service not available"}
     svc = _cosmos_skills.with_user(user_id)
+    is_local = body.repo == "local"
     npx_cmd = body.npxCommand or (
-        "__local__" if body.repo == "local"
+        "__local__" if is_local
         else f"npx -y degit {body.repo}/{body.skillName} .github/skills/{body.skillName}"
     )
     result = await svc.activate_skill(body.skillName, body.description or "", body.repo, npx_cmd)
+
+    # For marketplace skills, download from GitHub and upload to blob storage
+    # so they're pre-synced like local skills (no slow npx install at pipeline time)
+    blob_uploaded = 0
+    if not is_local and body.repo:
+        uploaded = await svc.upload_skill_from_github_to_blob(body.skillName, body.repo)
+        if uploaded:
+            blob_uploaded = len(uploaded)
+            # Mark as blob-stored — runtime treats it like a local skill (no npx needed)
+            await svc.activate_skill(
+                body.skillName, body.description or "", body.repo, "__local__",
+            )
+            logger.info(
+                "Marketplace skill '%s' uploaded to blob (%d files)",
+                body.skillName, blob_uploaded,
+            )
+
     logger.info("Activated skill '%s' for user=%s", body.skillName, user_id)
-    return {"name": result["name"], "success": True}
+    return {"name": result["name"], "success": True, "blobFiles": blob_uploaded}
 
 
 @app.delete("/api/agents/skills/{name}")
