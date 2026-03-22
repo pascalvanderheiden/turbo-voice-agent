@@ -834,7 +834,7 @@ class DevAgent:
             )
 
             # Collect screenshots via existing mechanism
-            await self._collect_screenshots(task_id, work_dir, svc)
+            await self._collect_screenshots(task_id, work_dir, user_id=user_id)
 
             await svc.set_iteration_stage_status(task_id, 0, "export", "completed")
         except Exception as e:
@@ -1528,22 +1528,18 @@ class DevAgent:
         svc = self._service.with_user(user_id) if user_id else self._service
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Search for screenshot*.png files specifically
-                resp = await client.get(
-                    f"{SANDBOX_URL}/files",
-                    params={"glob": "screenshot*.png", "dir": work_dir},
-                )
-                resp.raise_for_status()
-                files = resp.json().get("files", [])
-                # Also search for any *.png at the root of work_dir
-                if not files:
-                    resp2 = await client.get(
+                files: list[str] = []
+                # Search with multiple glob patterns (screenshots, slides, any png)
+                for pattern in ("screenshot*.png", "slide-*.png", "slide_*.png", "*.png"):
+                    resp = await client.get(
                         f"{SANDBOX_URL}/files",
-                        params={"glob": "*.png", "dir": work_dir},
+                        params={"glob": pattern, "dir": work_dir},
                     )
-                    resp2.raise_for_status()
-                    files = resp2.json().get("files", [])
-                logger.info("Found %d screenshot files in sandbox", len(files))
+                    resp.raise_for_status()
+                    files = resp.json().get("files", [])
+                    if files:
+                        break
+                logger.info("Found %d screenshot files in sandbox for task %s", len(files), task_id)
 
                 for file_path in files:
                     # file_path is absolute, e.g. /workspace/abc/screenshot.png
