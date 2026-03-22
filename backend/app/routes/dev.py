@@ -171,8 +171,8 @@ async def create_dev_task(data: DevTaskCreate, request: Request):
             await _spec_service.with_user(user_id).set_dev_task_id(data.spec_id, task.id, "in-development")
         except Exception:
             logger.exception("Failed to populate iterations / link spec for task %s", task.id)
-    # Auto-attach skills if none were explicitly provided
-    if not data.skill_ids and _cosmos_skills:
+    # Auto-attach skills if none were explicitly provided (skip for slides)
+    if not data.skill_ids and _cosmos_skills and data.mode != "slides":
         try:
             content = data.title
             if data.spec_id and _spec_service:

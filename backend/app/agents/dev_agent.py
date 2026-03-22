@@ -703,9 +703,8 @@ class DevAgent:
         deck_config.setdefault("palette", "arctic")
 
         await svc.set_status(task_id, "running")
-        self._squad_enabled_tasks[task_id] = False
 
-        # ── Stage 1: Init — create-deckio + squad + skills ──
+        # ── Stage 1: Init — create-deckio scaffold ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
             # Scaffold the deck project with parsed config
@@ -749,14 +748,7 @@ class DevAgent:
                 raise_on_error=False,
             )
 
-            # Squad init + skills install
-            await self._run_squad_stage(task_id, work_dir, slides_prompt, user_id)
-            self._squad_enabled_tasks[task_id] = True
-            n_skills = await self._install_skills_in_sandbox(
-                task_id, task, work_dir, user_id=user_id,
-            )
-            if n_skills:
-                logger.info("Installed %d user skills for slides task %s", n_skills, task_id)
+            # Slides don't need squad or skills — skip straight to content generation
 
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
@@ -779,7 +771,6 @@ class DevAgent:
                 work_dir=work_dir,
                 timeout=600,
                 stall_timeout=300,
-                agent="squad",
                 autopilot=True,
             )
 
@@ -799,7 +790,6 @@ class DevAgent:
                     timeout=180,
                     stall_timeout=120,
                     continue_session=True,
-                    agent="squad",
                     autopilot=True,
                 )
 
@@ -830,7 +820,6 @@ class DevAgent:
                 timeout=300,
                 stall_timeout=180,
                 continue_session=True,
-                agent="squad",
                 autopilot=True,
             )
 
