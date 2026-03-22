@@ -710,7 +710,7 @@ class DevAgent:
         deck_config.setdefault("appearance", "dark")
         deck_config.setdefault("palette", "arctic")
 
-        slides_prompt += await self._get_squad_theme_directive(user_id)
+        # No squad theme for slides — slides use deck config (theme/palette/appearance)
 
         await svc.set_status(task_id, "running")
 
