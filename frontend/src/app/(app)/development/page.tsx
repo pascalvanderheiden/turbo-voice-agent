@@ -11,14 +11,12 @@ import {
   IconClock,
   IconCode,
   IconSettingsAutomation,
-  IconMessageChatbot,
-  IconPackage,
-  IconArchive,
   IconPhoto,
   IconChevronRight,
   IconSparkles,
   IconPresentation,
   IconFileExport,
+  IconArchive,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -29,10 +27,10 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const STAGE_META: Record<string, { icon: typeof IconSettingsAutomation; label: string; color: string }> = {
   init:        { icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
-  propose:     { icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
-  apply:       { icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
-  archive:     { icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
+  skills:      { icon: IconCode,               label: "Skills",      color: "var(--color-brand-cyan)" },
+  implement:   { icon: IconCode,               label: "Implement",   color: "var(--color-brand-cyan)" },
   screenshots: { icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
+  // Slides-specific stages
   slides:      { icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
   export:      { icon: IconFileExport,         label: "Export",      color: "#22C55E" },
 };
@@ -63,7 +61,7 @@ function StagePipeline({ task }: { task: DevTask }) {
   const foundationRunning = foundationStages.some(s => s.status === "running");
 
   const allFeaturesDone = features.length > 0 && features.every(f =>
-    f.stages.filter(s => s.name === "propose" || s.name === "apply").every(s => s.status === "completed")
+    f.stages.filter(s => s.name === "implement" || s.name.startsWith("implement")).every(s => s.status === "completed")
   );
 
   const screenshotsStage = foundation?.stages.find(s => s.name === "screenshots");
@@ -102,7 +100,7 @@ function StagePipeline({ task }: { task: DevTask }) {
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[9px] text-[var(--color-text-muted)] uppercase font-semibold w-12 shrink-0">Feat.</span>
           {features.map((f, i) => {
-            const fDone = f.stages.filter(s => s.name === "propose" || s.name === "apply").every(s => s.status === "completed");
+            const fDone = f.stages.filter(s => s.name === "implement" || s.name.startsWith("implement")).every(s => s.status === "completed");
             const fRunning = f.stages.some(s => s.status === "running");
             return (
               <span key={i} className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] border ${
@@ -129,23 +127,9 @@ function StagePipeline({ task }: { task: DevTask }) {
         </div>
       )}
 
-      {/* OpenSpec progress + working squad members */}
-      {(task.openspecStatus?.totalTasks || workingMembers.length > 0 || (task.status === "running" && task.squad?.teamMembers?.length)) && (
+      {/* Working squad members */}
+      {(workingMembers.length > 0 || (task.status === "running" && task.squad?.teamMembers?.length)) && (
         <div className="space-y-1 pt-1">
-          {task.openspecStatus && task.openspecStatus.totalTasks > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] text-purple-400 shrink-0">📋</span>
-              <div className="flex-1 h-1 rounded-full bg-[var(--color-bg-tertiary)] overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                  style={{ width: `${(task.openspecStatus.completedTasks / task.openspecStatus.totalTasks) * 100}%` }}
-                />
-              </div>
-              <span className="text-[9px] text-purple-400 tabular-nums shrink-0">
-                {task.openspecStatus.completedTasks}/{task.openspecStatus.totalTasks}
-              </span>
-            </div>
-          )}
           {workingMembers.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
               {workingMembers.map((m) => (
@@ -328,15 +312,15 @@ export default function DevelopmentPage() {
 
                 <div className="flex items-center gap-2 mb-3">
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                    task.mode === "openspec"
+                    task.mode === "sequential"
                       ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
                       : task.mode === "slides"
                       ? "bg-pink-500/10 text-pink-400 border-pink-500/20"
                       : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                   }`}>
-                    {task.mode === "openspec" ? "OpenSpec" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
+                    {task.mode === "sequential" ? "Sequential" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
                   </span>
-                  {task.mode === "openspec" && task.iterations.length > 1 && (
+                  {task.mode === "sequential" && task.iterations.length > 1 && (
                     <span className="text-[10px] text-[var(--color-text-muted)]">
                       {task.iterations.filter(it => it.stages.every(s => s.status === "completed")).length}/{task.iterations.length} iterations
                     </span>
@@ -492,7 +476,7 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
     estimatedPremium = premiumPerPipeline;
     estimateBreakdown = `1 pipeline × ${stagesPerPipeline} stages × ${premiumMultiplier} = ${estimatedPremium}`;
   } else {
-    // OpenSpec: 1 pipeline per iteration (foundation + each feature)
+    // Sequential: 1 pipeline per iteration (foundation + each feature)
     const pipelineCount = 1 + featureCount;
     estimatedPremium = premiumPerPipeline * pipelineCount;
     estimateBreakdown = `${pipelineCount} pipeline${pipelineCount > 1 ? "s" : ""} × ${stagesPerPipeline} stages × ${premiumMultiplier} = ${estimatedPremium}`;
@@ -540,14 +524,14 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Quick GUI preview from full spec</div>
               </button>
               <button
-                onClick={() => setMode("openspec")}
+                onClick={() => setMode("sequential")}
                 className={`p-3 rounded-[var(--radius-md)] border text-sm text-left transition-all ${
-                  mode === "openspec"
+                  mode === "sequential"
                     ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10"
                     : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
                 }`}
               >
-                <div className="font-medium text-[var(--color-text-primary)]">OpenSpec</div>
+                <div className="font-medium text-[var(--color-text-primary)]">Sequential</div>
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Iterative: foundation → features</div>
               </button>
             </div>

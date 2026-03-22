@@ -12,9 +12,7 @@ import {
   IconCircleX,
   IconClock,
   IconSettingsAutomation,
-  IconMessageChatbot,
   IconPackage,
-  IconArchive,
   IconPhoto,
   IconChevronDown,
   IconChevronRight,
@@ -22,25 +20,70 @@ import {
   IconVideo,
   IconX,
   IconTerminal2,
-  IconFileCode,
   IconPuzzle,
   IconUsersGroup,
+  IconCode,
+  IconPresentation,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, type OpenSpecStatus, getAccessToken } from "@/lib/api";
+import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
+function formatDuration(startedAt?: string | null, completedAt?: string | null): string | null {
+  if (!startedAt || !completedAt) return null;
+  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
+  if (ms < 0 || isNaN(ms)) return null;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function calcTotalDuration(iterations: DevIteration[]): string | null {
+  let earliest: number | null = null;
+  let latest: number | null = null;
+  for (const it of iterations) {
+    for (const stage of it.stages) {
+      if (stage.startedAt) {
+        const t = new Date(stage.startedAt).getTime();
+        if (earliest === null || t < earliest) earliest = t;
+      }
+      if (stage.completedAt) {
+        const t = new Date(stage.completedAt).getTime();
+        if (latest === null || t > latest) latest = t;
+      }
+    }
+  }
+  if (earliest === null || latest === null) return null;
+  const ms = latest - earliest;
+  if (ms < 0 || isNaN(ms)) return null;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: string; color: string }> = {
   init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
-  openspec:    { Icon: IconFileCode,           label: "OpenSpec",    color: "var(--color-brand-purple)" },
   skills:      { Icon: IconPuzzle,             label: "Skills",      color: "var(--color-brand-cyan)" },
-  squad:       { Icon: IconUsersGroup,         label: "Squad",       color: "var(--color-brand-pink)" },
-  propose:     { Icon: IconMessageChatbot,     label: "Propose",     color: "var(--color-brand-cyan)" },
-  apply:       { Icon: IconPackage,            label: "Apply",       color: "var(--color-brand-pink)" },
-  archive:     { Icon: IconArchive,            label: "Archive",     color: "#F59E0B" },
+  implement:   { Icon: IconCode,               label: "Implement",   color: "var(--color-brand-cyan)" },
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
+  // Slides-specific stages
+  slides:      { Icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
+  export:      { Icon: IconPackage,            label: "Export",       color: "#22C55E" },
 };
+
+function getStageMeta(stageName: string) {
+  if (stageName.startsWith("implement-")) return STAGE_META["implement"];
+  return STAGE_META[stageName] || { Icon: IconSettingsAutomation, label: stageName, color: "#666" };
+}
 
 function StageStatusIcon({ status }: { status: string }) {
   if (status === "completed") return <IconCircleCheck size={18} className="text-green-400" />;
@@ -51,18 +94,19 @@ function StageStatusIcon({ status }: { status: string }) {
 
 /* ── Phase-based pipeline visualization ── */
 
-const FOUNDATION_STAGES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive"];
-const FEATURE_STAGES = ["propose", "apply"];
+const FOUNDATION_STAGES = ["init", "skills", "implement-foundation"];
+const FEATURE_STAGES = ["implement"];
 
 const SHORT_LABELS: Record<string, string> = {
-  init: "Init", openspec: "Spec", skills: "Skills", squad: "Squad",
-  propose: "Prop", apply: "Apply", archive: "Arch", screenshots: "Screenshots",
+  init: "Init", skills: "Skills", implement: "Impl",
+  screenshots: "Screenshots", slides: "Slides", export: "Export",
 };
 
 function StageNode({ stage, meta, taskFailed }: { stage: { name: string; status: string; startedAt?: string | null; completedAt?: string | null }; meta: (typeof STAGE_META)[string]; taskFailed?: boolean }) {
   const s = taskFailed && stage.status === "running" ? "failed" : stage.status;
   const borderColor = s === "completed" ? "#22C55E" : s === "running" ? "#3B82F6" : s === "failed" ? "#EF4444" : "var(--color-border-dark)";
   const bgColor = s === "completed" ? "rgba(34,197,94,0.08)" : s === "running" ? "rgba(59,130,246,0.08)" : s === "failed" ? "rgba(239,68,68,0.08)" : "var(--color-bg-tertiary)";
+  const duration = formatDuration(stage.startedAt, stage.completedAt);
   return (
     <div className="flex flex-col items-center gap-1">
       <div className="w-9 h-9 rounded-lg flex items-center justify-center border" style={{ borderColor, backgroundColor: bgColor }}>
@@ -74,6 +118,11 @@ function StageNode({ stage, meta, taskFailed }: { stage: { name: string; status:
       <span className="text-[10px] text-[var(--color-text-muted)] leading-tight text-center">
         {SHORT_LABELS[stage.name] ?? stage.name}
       </span>
+      {duration && (
+        <span className="text-[9px] text-[var(--color-text-muted)]/70 leading-tight">
+          {duration}
+        </span>
+      )}
     </div>
   );
 }
@@ -107,10 +156,10 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
 }) {
   const foundation = iterations?.[0];
   const features = iterations?.slice(1) ?? [];
-  const isOpenSpec = iterations && iterations.length > 0;
+  const isSequential = iterations && iterations.length > 0;
 
   // Foundation phase
-  const foundationStages = isOpenSpec ? (foundation?.stages ?? []).filter(s => FOUNDATION_STAGES.includes(s.name)) : stages;
+  const foundationStages = isSequential ? (foundation?.stages ?? []).filter(s => FOUNDATION_STAGES.includes(s.name)) : stages;
   const foundationDone = foundationStages.every(s => s.status === "completed");
   const foundationFailed = foundationStages.some(s => s.status === "failed");
   const foundationRunning = foundationStages.some(s => s.status === "running");
@@ -125,8 +174,18 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
   const screenshotsStage = (foundation?.stages ?? stages).find(s => s.name === "screenshots");
   const showScreenshots = features.length === 0 || allFeaturesDone || (screenshotsStage?.status !== "pending");
 
+  const totalTime = calcTotalDuration(iterations ?? [{ iterationIndex: 0, label: "", stages, specPartId: undefined, workspacePath: undefined }]);
+
   return (
     <div className="space-y-4">
+      {/* Total elapsed time */}
+      {totalTime && (
+        <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)]">
+          <IconClock size={14} className="text-[var(--color-brand-cyan)]" />
+          <span className="text-xs text-[var(--color-text-muted)]">Total time:</span>
+          <span className="text-xs font-medium text-[var(--color-brand-cyan)]">{totalTime}</span>
+        </div>
+      )}
       {/* Foundation phase */}
       <div>
         <div className="flex items-center gap-2 mb-2">
@@ -139,7 +198,7 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
         ) : (
           <div className="flex flex-wrap gap-1 items-start">
             {foundationStages.map((stage, i) => {
-              const meta = STAGE_META[stage.name] || { Icon: IconSettingsAutomation, label: stage.name, color: "var(--color-text-muted)" };
+              const meta = getStageMeta(stage.name);
               return (
                 <div key={stage.name} className="flex items-start">
                   <StageNode stage={stage} meta={meta} taskFailed={taskFailed} />
@@ -179,7 +238,7 @@ function IterationStages({ stages, taskFailed, iterations, activeIteration }: {
                       </span>
                     ) : (
                       fStages.map((s) => {
-                        const meta = STAGE_META[s.name] || { Icon: IconSettingsAutomation, label: s.name, color: "var(--color-text-muted)" };
+                        const meta = getStageMeta(s.name);
                         return <StageNode key={s.name} stage={s} meta={meta} taskFailed={taskFailed} />;
                       })
                     )}
@@ -356,60 +415,15 @@ const STATUS_COLOR: Record<string, string> = {
   done: "#22C55E",
 };
 
-function StatusPanel({ squad, openspecStatus, taskStatus, mode }: { squad?: SquadInfo; openspecStatus?: OpenSpecStatus; taskStatus?: string; mode?: string }) {
+function StatusPanel({ squad, taskStatus }: { squad?: SquadInfo; taskStatus?: string; mode?: string }) {
   const hasSquad = squad?.teamMembers?.length;
-  const hasOpenspec = openspecStatus && openspecStatus.totalTasks > 0;
   const isRunning = taskStatus === "running";
-  const showOpenspec = mode !== "slides"; // OpenSpec not relevant for slides
-  if (!hasSquad && (!hasOpenspec || !showOpenspec) && !isRunning) return null;
+  if (!hasSquad && !isRunning) return null;
 
   const workingMembers = squad?.teamMembers?.filter(m => m.status === "working") ?? [];
 
   return (
     <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-dark)] bg-[var(--color-bg-card)] p-4 space-y-4">
-      {/* OpenSpec status — only for openspec/mockup modes */}
-      {showOpenspec && (
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <IconFileCode size={14} className="text-purple-400 shrink-0" />
-          <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase">OpenSpec</span>
-          {hasOpenspec && openspecStatus.changeName && (
-            <span className="text-[10px] text-purple-400 truncate">{openspecStatus.changeName}</span>
-          )}
-        </div>
-        {hasOpenspec ? (
-          <>
-            <div className="flex items-center gap-3 mb-1.5">
-              <div className="flex-1 h-1.5 rounded-full bg-[var(--color-bg-tertiary)] overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                  style={{ width: `${(openspecStatus.completedTasks / openspecStatus.totalTasks) * 100}%` }}
-                />
-              </div>
-              <span className="text-[10px] text-[var(--color-text-muted)] shrink-0 tabular-nums">
-                {openspecStatus.completedTasks}/{openspecStatus.totalTasks} tasks
-              </span>
-            </div>
-            <div className="flex items-center gap-3 text-[10px]">
-              {openspecStatus.currentTask && (
-                <span className="text-[var(--color-text-secondary)] truncate flex-1">
-                  → {openspecStatus.currentTask}
-                </span>
-              )}
-              {openspecStatus.filesChanged > 0 && (
-                <span className="text-[var(--color-text-muted)] shrink-0">
-                  {openspecStatus.filesChanged} files changed
-                </span>
-              )}
-            </div>
-          </>
-        ) : (
-          <span className="text-[10px] text-[var(--color-text-muted)]">
-            {isRunning ? "Waiting for openspec status..." : "No openspec data"}
-          </span>
-        )}
-      </div>
-      )}
 
       {/* Squad members */}
       {hasSquad && (
@@ -547,7 +561,7 @@ export default function DevTaskDetailPage() {
   const screenshots = task.artifacts.filter((a) => a.type === "screenshot" && a.name.endsWith(".png"));
   const hasArchive = task.artifacts.some((a) => a.type === "archive");
   const iterations = task.iterations.length > 0 ? task.iterations : [{ iterationIndex: 0, label: task.title, stages: task.stages, specPartId: undefined, workspacePath: undefined }];
-  const isOpenSpec = task.mode === "openspec" && iterations.length > 1;
+  const isSequential = task.mode === "sequential" && iterations.length > 1;
 
   return (
     <div className="space-y-6">
@@ -560,11 +574,11 @@ export default function DevTaskDetailPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold truncate">{task.title}</h1>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 ${
-              task.mode === "openspec" ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+              task.mode === "sequential" ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
               : task.mode === "slides" ? "bg-pink-500/10 text-pink-400 border-pink-500/20"
               : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
             }`}>
-              {task.mode === "openspec" ? "OpenSpec" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
+              {task.mode === "sequential" ? "Sequential" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
             </span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)]">Created {new Date(task.createdAt).toLocaleString()}</p>
@@ -611,8 +625,8 @@ export default function DevTaskDetailPage() {
         </div>
       )}
 
-      {/* Iteration tabs for openspec mode */}
-      {isOpenSpec && (
+      {/* Iteration tabs for sequential mode */}
+      {isSequential && (
         <div className="flex gap-1 overflow-x-auto pb-1">
           {iterations.map((it, i) => {
             const allDone = it.stages.every((s) => s.status === "completed");
@@ -653,18 +667,18 @@ export default function DevTaskDetailPage() {
       {/* Active iteration stages */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-6">
-          {isOpenSpec ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
+          {isSequential ? iterations[activeIteration]?.label || "Iteration" : t("dev.pipeline")}
         </h2>
         <IterationStages
           stages={iterations[activeIteration]?.stages || task.stages}
           taskFailed={task.status === "failed"}
-          iterations={isOpenSpec ? iterations : undefined}
+          iterations={isSequential ? iterations : undefined}
           activeIteration={activeIteration}
         />
       </div>
 
-      {/* Squad & OpenSpec Status */}
-      <StatusPanel squad={task.squad ?? undefined} openspecStatus={task.openspecStatus} taskStatus={task.status} mode={task.mode} />
+      {/* Squad Status */}
+      <StatusPanel squad={task.squad ?? undefined} taskStatus={task.status} mode={task.mode} />
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
@@ -696,8 +710,8 @@ export default function DevTaskDetailPage() {
         </h2>
         {screenshots.length > 0 ? (
           <div className="space-y-6">
-            {/* For openspec with multiple iterations: group by iteration */}
-            {isOpenSpec ? (() => {
+            {/* For sequential with multiple iterations: group by iteration */}
+            {isSequential ? (() => {
               const iterScreenshots = new Map<number, typeof screenshots>();
               for (const s of screenshots) {
                 const idx = s.iterationIndex ?? 0;

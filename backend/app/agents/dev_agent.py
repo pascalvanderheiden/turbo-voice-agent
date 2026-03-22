@@ -1,11 +1,11 @@
 """Turbo Dev Agent — specialist agent for development task operations.
 
 Delegates code generation to sandbox containers via the sandbox service.
-Each sandbox runs Copilot CLI with OpenSpec workflow for iterative development.
+Each sandbox runs Copilot CLI with simplified sequential pipelines.
 
 Supports two pipeline modes:
-- Mockup: single iteration from full spec → GUI-only mockup app
-- OpenSpec: iterative spec-driven development (foundation → parallel features)
+- Mockup: single iteration — init → skills → implement → screenshots
+- Sequential: multi-iteration — init → skills → implement-foundation → implement-feature-N → screenshots
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 import httpx
 
 from app.models.dev_task import DevArtifact, DevDecision
-from app.services.dev_service import InMemoryDevService, _default_iteration
+from app.services.dev_service import InMemoryDevService, _default_iteration, build_sequential_stages
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +340,8 @@ class DevAgent:
                 logger.error("Pipeline aborted: task %s not found", task_id)
                 return
 
-            if task.mode == "openspec" and len(task.iterations) > 1:
-                await self._run_openspec_pipeline(task_id, user_id)
+            if task.mode in ("sequential", "openspec") and len(task.iterations) > 1:
+                await self._run_sequential_pipeline(task_id, user_id)
             elif task.mode == "slides":
                 await self._run_slides_pipeline(task_id, user_id)
             else:
@@ -380,7 +380,7 @@ class DevAgent:
                 })
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
-        """Mockup pipeline: init → openspec → skills → squad → propose → apply → archive → screenshots."""
+        """Mockup pipeline: init → skills → implement → screenshots."""
         self._squad_enabled_tasks[task_id] = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
@@ -399,7 +399,7 @@ class DevAgent:
             raise_on_error=False,
         )
 
-        # Stage: init — workspace setup
+        # Stage: init — workspace setup + squad initialization
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
@@ -416,19 +416,9 @@ class DevAgent:
             work_dir=work_dir,
             raise_on_error=False,
         )
+        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
-
-        # Stage: openspec — initialize OpenSpec tooling
-        await svc.set_iteration_stage_status(task_id, 0, "openspec", "running")
-        logger.info("Mockup openspec: task=%s", task_id)
-        await self._sandbox_exec(
-            task_id=task_id,
-            command="openspec",
-            args=["init", "--tools", "github-copilot", "--force"],
-            stage_label="openspec",
-            work_dir=work_dir,
-        )
-        await svc.set_iteration_stage_status(task_id, 0, "openspec", "completed")
 
         # Stage: skills — install marketplace + local skills
         await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
@@ -444,137 +434,40 @@ class DevAgent:
                 })
         await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
 
-        # Stage: squad — initialize squad team from spec
-        await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
-        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
-        await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
-        self._squad_enabled_tasks[task_id] = True  # Enable --agent squad for apply stages
-
-        # Stage: propose — Copilot CLI proposes the mockup via openspec-propose
-        await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
-        logger.info("Mockup propose: task=%s, desc_len=%d", task_id, len(mockup_desc))
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-propose skill to create a complete proposal "
-                "for this mockup application. Generate design, specs, and tasks.\n\n"
-                f"{mockup_desc}"
-            ),
-            model=model,
-            stage_label="propose",
-            raise_on_error=False,
-            work_dir=work_dir,
-        )
-        await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
-
-        # Stage: apply — incremental per-task apply with retry on timeout
-        await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
-
-        # Try to find task list so we can apply incrementally (more reliable)
-        task_list: list[str] = []
-        try:
-            tasks_output = await self._sandbox_exec(
-                task_id=task_id,
-                command=f"cat {work_dir}/openspec/changes/*/tasks.md 2>/dev/null || echo ''",
-                args=[],
-                stage_label="find-tasks",
-                timeout=15,
-                stall_timeout=10,
-                raise_on_error=False,
-                work_dir=work_dir,
-            )
-            # Extract checkbox items: "- [ ] 1.1 Some task"
-            import re
-            task_list = re.findall(
-                r"-\s*\[[ x]\]\s*\d+\.\d+\s+(.+)", tasks_output,
-            )
-        except Exception:
-            pass
-
-        if task_list:
-            # Per-task incremental apply (smaller prompts, less likely to timeout)
-            logger.info("Mockup apply: %d tasks found, applying incrementally", len(task_list))
-            for i, task_desc in enumerate(task_list):
-                try:
-                    await self._sandbox_exec(
-                        task_id=task_id,
-                        prompt=(
-                            f"Use the openspec-apply-change skill. Implement this specific task "
-                            f"and mark it done: {task_desc}"
-                        ),
-                        model=model,
-                        stage_label=f"apply-{i + 1}",
-                        timeout=1200,
-                        stall_timeout=300,
-                        raise_on_error=False,
-                        work_dir=work_dir,
-                        continue_session=True,
-                        agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
-                    )
-                except Exception as exc:
-                    logger.warning("Mockup apply task %d failed: %s", i + 1, exc)
+        # Stage: implement — single Copilot CLI invocation with autopilot
+        await svc.set_iteration_stage_status(task_id, 0, "implement", "running")
+        logger.info("Mockup implement: task=%s, desc_len=%d", task_id, len(mockup_desc))
+        for attempt in range(2):
+            try:
+                await self._sandbox_exec(
+                    task_id=task_id,
+                    prompt=mockup_desc,
+                    model=model,
+                    stage_label=f"implement{'-retry' if attempt else ''}",
+                    stall_timeout=600,
+                    timeout=2400,
+                    raise_on_error=False,
+                    work_dir=work_dir,
+                    continue_session=(attempt > 0),
+                    agent="squad",
+                    autopilot=True,
+                )
+                break
+            except RuntimeError as exc:
+                if attempt == 0 and "timed out" in str(exc):
+                    logger.warning("Mockup implement timed out, retrying once...")
+                    await self._checkpoint(task_id, "mockup-implement-partial", work_dir)
                     if task_id in _pipeline_outputs:
                         _buf_append(task_id, {
                             "type": "stderr",
-                            "data": f"Apply task {i + 1} failed: {exc}\n",
-                            "stage": f"apply-{i + 1}",
+                            "data": "Implement timed out — retrying with continue...\n",
+                            "stage": "implement-retry",
                         })
-        else:
-            # Fallback: single apply with retry on timeout
-            logger.info("Mockup apply: no task list found, using single apply with retry")
-            for attempt in range(2):
-                try:
-                    await self._sandbox_exec(
-                        task_id=task_id,
-                        prompt=(
-                            "Use the openspec-apply-change skill to implement all tasks "
-                            "from the proposal. Work through every task until all are complete. "
-                            "Fix any build errors along the way."
-                            + (" Focus on the remaining incomplete tasks only."
-                               if attempt > 0 else "")
-                        ),
-                        model=model,
-                        stage_label=f"apply{'-retry' if attempt else ''}",
-                        stall_timeout=600,
-                        timeout=2400,
-                        raise_on_error=False,
-                        work_dir=work_dir,
-                        continue_session=True,
-                        agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
-                    )
-                    break  # Success — no need to retry
-                except RuntimeError as exc:
-                    if attempt == 0 and "timed out" in str(exc):
-                        logger.warning("Mockup apply timed out, retrying once...")
-                        await self._checkpoint(task_id, "mockup-apply-partial", work_dir)
-                        if task_id in _pipeline_outputs:
-                            _buf_append(task_id, {
-                                "type": "stderr",
-                                "data": "Apply timed out — retrying with continue...\n",
-                                "stage": "apply-retry",
-                            })
-                    else:
-                        logger.warning("Mockup apply failed: %s", exc)
-                        break
-
-        await self._checkpoint(task_id, "mockup-apply", work_dir)
-        await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
-
-        # Stage: archive — Copilot CLI archives the completed change
-        await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-archive-change skill to archive the completed "
-                "change. Update the generic specs with the final state."
-            ),
-            model=model,
-            stage_label="archive",
-            raise_on_error=False,
-            work_dir=work_dir,
-            continue_session=True,
-        )
-        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
+                else:
+                    logger.warning("Mockup implement failed: %s", exc)
+                    break
+        await self._checkpoint(task_id, "mockup-implement", work_dir)
+        await svc.set_iteration_stage_status(task_id, 0, "implement", "completed")
 
         # Stage: screenshots — Copilot CLI starts app + captures with Playwright
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
@@ -611,8 +504,8 @@ class DevAgent:
         await svc.set_status(task_id, "completed")
         logger.info("Mockup pipeline COMPLETED for task %s", task_id)
 
-    async def _run_openspec_pipeline(self, task_id: str, user_id: str) -> None:
-        """OpenSpec pipeline: init → foundation propose/apply → features → archive → screenshots."""
+    async def _run_sequential_pipeline(self, task_id: str, user_id: str) -> None:
+        """Sequential pipeline: init → skills → implement-foundation → implement-feature-N → screenshots."""
         self._squad_enabled_tasks[task_id] = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
@@ -631,9 +524,9 @@ class DevAgent:
             raise_on_error=False,
         )
 
-        # ── Foundation: init → openspec → skills → squad → propose → apply ──
+        # ── Init: workspace setup + squad ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
-        logger.info("OpenSpec init: task=%s, model=%s", task_id, model)
+        logger.info("Sequential init: task=%s, model=%s", task_id, model)
         await self._sandbox_exec(
             task_id=task_id,
             command=(
@@ -648,20 +541,11 @@ class DevAgent:
             work_dir=work_dir,
             raise_on_error=False,
         )
+        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
-        # OpenSpec stage
-        await svc.set_iteration_stage_status(task_id, 0, "openspec", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            command="openspec",
-            args=["init", "--tools", "github-copilot", "--force"],
-            stage_label="openspec",
-            work_dir=work_dir,
-        )
-        await svc.set_iteration_stage_status(task_id, 0, "openspec", "completed")
-
-        # Skills stage
+        # ── Skills ──
         await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
         n_skills = await self._install_skills_in_sandbox(
             task_id, task, work_dir, user_id=user_id,
@@ -670,162 +554,50 @@ class DevAgent:
             logger.info("Installed %d user skills for task %s", n_skills, task_id)
         await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
 
-        # Squad stage
-        await svc.set_iteration_stage_status(task_id, 0, "squad", "running")
-        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
-        await svc.set_iteration_stage_status(task_id, 0, "squad", "completed")
-        self._squad_enabled_tasks[task_id] = True  # Enable --agent squad for apply stages
-
-        await svc.set_iteration_stage_status(task_id, 0, "propose", "running")
-        logger.info("OpenSpec foundation propose: task=%s", task_id)
+        # ── Implement foundation ──
+        await svc.set_iteration_stage_status(task_id, 0, "implement-foundation", "running")
+        logger.info("Sequential foundation implement: task=%s", task_id)
         await self._sandbox_exec(
             task_id=task_id,
-            prompt=(
-                "Use the openspec-propose skill to create a proposal for the "
-                "foundation of this application. Generate design, specs, and tasks.\n\n"
-                f"{foundation_prompt}"
-            ),
+            prompt=foundation_prompt,
             model=model,
-            stage_label="foundation-propose",
+            stage_label="implement-foundation",
+            stall_timeout=600,
             raise_on_error=False,
             work_dir=work_dir,
+            agent="squad",
+            autopilot=True,
         )
-        await svc.set_iteration_stage_status(task_id, 0, "propose", "completed")
+        await self._checkpoint(task_id, "foundation-implement", work_dir)
+        await svc.set_iteration_stage_status(task_id, 0, "implement-foundation", "completed")
 
-        await self._checkpoint(task_id, "foundation-propose", work_dir)
-
-        await svc.set_iteration_stage_status(task_id, 0, "apply", "running")
-        # Try task-by-task apply: read tasks.md, apply individually with checkpoints
-        task_titles = await self._parse_openspec_tasks(work_dir)
-        if len(task_titles) > 1:
-            logger.info(
-                "Decomposed apply into %d tasks: %s",
-                len(task_titles),
-                [t[:50] for t in task_titles],
-            )
-            for t_idx, t_title in enumerate(task_titles):
-                logger.info(
-                    "Apply task %d/%d: %s", t_idx + 1, len(task_titles), t_title
-                )
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    prompt=(
-                        "Use the openspec-apply-change skill. Focus on completing "
-                        "the next incomplete task from the proposal. Do NOT skip "
-                        "ahead to other tasks. Once this task is done, stop.\n\n"
-                        f"Current task: {t_title}"
-                    ),
-                    model=model,
-                    stage_label=f"foundation-apply-{t_idx + 1}",
-                    timeout=1200,
-                    stall_timeout=600,
-                    raise_on_error=False,
-                    work_dir=work_dir,
-                    continue_session=True,
-                    agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
-                )
-                await self._checkpoint(task_id, f"foundation-task-{t_idx + 1}", work_dir)
-                await self._poll_squad_status(task_id, work_dir, user_id)
-                await self._poll_openspec_status(task_id, work_dir, user_id)
-        else:
-            # Fallback: single apply if we couldn't parse tasks
+        # ── Implement features sequentially with --continue ──
+        for idx, feat_prompt in enumerate(feature_prompts, start=1):
+            stage_name = f"implement-feature-{idx}"
+            await svc.set_iteration_stage_status(task_id, 0, stage_name, "running")
+            logger.info("Sequential feature %d implement: task=%s", idx, task_id)
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=(
-                    "Use the openspec-apply-change skill to implement all tasks "
-                    "from the foundation proposal. Work through every task until done. "
-                    "Fix any build errors along the way."
-                ),
+                prompt=feat_prompt,
                 model=model,
-                stage_label="foundation-apply",
+                stage_label=stage_name,
                 stall_timeout=600,
                 raise_on_error=False,
                 work_dir=work_dir,
                 continue_session=True,
-                agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
+                agent="squad",
+                autopilot=True,
             )
-            await self._checkpoint(task_id, "foundation-apply", work_dir)
-        await svc.set_iteration_stage_status(task_id, 0, "apply", "completed")
-
-        # Mark foundation archive as completed before moving to features
-        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
+            await self._checkpoint(task_id, f"feature-{idx}-implement", work_dir)
+            await self._poll_squad_status(task_id, work_dir, user_id)
+            await svc.set_iteration_stage_status(task_id, 0, stage_name, "completed")
 
         # ── Post-foundation hook: pick up any queued feature iterations ──
-        # Features may have been added via add_feature_to_spec while foundation was running
-        task = await svc.get_by_id(task_id)
-        queued_iterations = []
-        if task:
-            for it in task.iterations:
-                if it.iteration_index > len(feature_prompts) and hasattr(it, '_raw_data'):
-                    queued_iterations.append(it)
-
-        # ── Features: PARALLEL propose/apply ─────────────────────────
-        # Each feature gets its own copy of the foundation workspace.
-        # All features run concurrently via asyncio.gather(), then a merge
-        # step consolidates the results into the main workspace.
-        MAX_PARALLEL_FEATURES = 2  # Consumption plan: 2 CPU / 4GB
-        if feature_prompts:
-            logger.info(
-                "Starting %d features in parallel (max %d concurrent) for task %s",
-                len(feature_prompts), MAX_PARALLEL_FEATURES, task_id,
-            )
-
-            # Create per-feature workspace copies
-            feature_dirs: list[str] = []
-            for idx in range(len(feature_prompts)):
-                feat_dir = f"{work_dir}-feat-{idx + 1}"
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    command=f"cp -r {work_dir} {feat_dir}",
-                    args=[],
-                    stage_label=f"copy-workspace-feat-{idx + 1}",
-                    work_dir="/workspace",
-                    timeout=60,
-                    raise_on_error=False,
-                )
-                feature_dirs.append(feat_dir)
-
-            # Run all features concurrently with a semaphore
-            sem = asyncio.Semaphore(MAX_PARALLEL_FEATURES)
-
-            async def _run_feature_with_limit(idx: int, prompt: str, feat_dir: str):
-                async with sem:
-                    await self._run_single_feature(
-                        task_id=task_id,
-                        iter_idx=idx + 1,
-                        feat_prompt=prompt,
-                        model=model,
-                        svc=svc,
-                        feature_work_dir=feat_dir,
-                        user_id=user_id,
-                    )
-
-            await asyncio.gather(
-                *[
-                    _run_feature_with_limit(idx, prompt, feat_dir)
-                    for idx, (prompt, feat_dir) in enumerate(
-                        zip(feature_prompts, feature_dirs)
-                    )
-                ],
-                return_exceptions=True,
-            )
-
-            # Merge all feature workspaces back into main
-            await self._merge_feature_workspaces(
-                task_id=task_id,
-                main_dir=work_dir,
-                feature_dirs=feature_dirs,
-                feature_prompts=feature_prompts,
-                model=model,
-            )
-
-        # ── Execute any queued iterations added during pipeline ──────
         task = await svc.get_by_id(task_id)
         if task:
             known_count = len(feature_prompts) + 1  # foundation + original features
             for it in task.iterations:
                 if it.iteration_index >= known_count:
-                    # This is a dynamically added feature — check for stored instruction
                     doc = await svc.get_raw(task_id) if hasattr(svc, 'get_raw') else None
                     propose_instr = ""
                     if doc:
@@ -838,23 +610,7 @@ class DevAgent:
                             task_id, it.iteration_index, propose_instr, user_id
                         )
 
-        # ── Archive ──────────────────────────────────────────────────
-        await svc.set_iteration_stage_status(task_id, 0, "archive", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-archive-change skill to archive the completed "
-                "change. Update the generic specs with the final state."
-            ),
-            model=model,
-            stage_label="archive",
-            raise_on_error=False,
-            work_dir=work_dir,
-            continue_session=True,
-        )
-        await svc.set_iteration_stage_status(task_id, 0, "archive", "completed")
-
-        # ── Screenshots — Copilot CLI starts app + captures ─────────
+        # ── Screenshots ──
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
             task_id=task_id,
@@ -886,7 +642,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
         await svc.set_status(task_id, "completed")
-        logger.info("OpenSpec pipeline COMPLETED for task %s", task_id)
+        logger.info("Sequential pipeline COMPLETED for task %s", task_id)
 
     async def _run_slides_pipeline(self, task_id: str, user_id: str) -> None:
         """Slides pipeline: init (create-deckio) → slides (Copilot CLI + deck skills) → export (PDF)."""
@@ -1090,169 +846,6 @@ class DevAgent:
         await svc.set_status(task_id, "completed")
         logger.info("Slides pipeline COMPLETED for task %s", task_id)
 
-    # ── Parallel feature helpers ────────────────────────────────
-
-    async def _run_single_feature(
-        self,
-        *,
-        task_id: str,
-        iter_idx: int,
-        feat_prompt: str,
-        model: str,
-        svc,
-        feature_work_dir: str,
-        user_id: str = "",
-    ) -> None:
-        """Run propose + apply for a single feature in its own workspace copy."""
-        logger.info(
-            "Feature %d START (parallel): task=%s, dir=%s",
-            iter_idx, task_id, feature_work_dir,
-        )
-        await svc.set_iteration_stage_status(
-            task_id, iter_idx, "propose", "running"
-        )
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Use the openspec-propose skill to create a proposal for "
-                "adding this feature to the existing application.\n\n"
-                f"{feat_prompt}"
-            ),
-            model=model,
-            stage_label=f"feature-{iter_idx}-propose",
-            raise_on_error=False,
-            work_dir=feature_work_dir,
-        )
-        await svc.set_iteration_stage_status(
-            task_id, iter_idx, "propose", "completed"
-        )
-
-        await svc.set_iteration_stage_status(
-            task_id, iter_idx, "apply", "running"
-        )
-        feat_tasks = await self._parse_openspec_tasks(feature_work_dir)
-        if len(feat_tasks) > 1:
-            for ft_idx, ft_title in enumerate(feat_tasks):
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    prompt=(
-                        "Use the openspec-apply-change skill. Focus on completing "
-                        "the next incomplete task from the latest proposal. Do NOT "
-                        "skip ahead to other tasks. Once this task is done, stop.\n\n"
-                        f"Current task: {ft_title}"
-                    ),
-                    model=model,
-                    stage_label=f"feature-{iter_idx}-apply-{ft_idx + 1}",
-                    timeout=1200,
-                    stall_timeout=600,
-                    raise_on_error=False,
-                    work_dir=feature_work_dir,
-                    agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
-                )
-                await self._checkpoint(
-                    task_id, f"feature-{iter_idx}-task-{ft_idx + 1}",
-                    feature_work_dir,
-                )
-                if user_id:
-                    await self._poll_squad_status(task_id, feature_work_dir, user_id)
-                    await self._poll_openspec_status(task_id, feature_work_dir, user_id)
-        else:
-            await self._sandbox_exec(
-                task_id=task_id,
-                prompt=(
-                    "Use the openspec-apply-change skill to implement all tasks "
-                    "from the latest proposal. Work through every task until done. "
-                    "Fix any build errors."
-                ),
-                model=model,
-                stage_label=f"feature-{iter_idx}-apply",
-                stall_timeout=600,
-                raise_on_error=False,
-                work_dir=feature_work_dir,
-                agent="squad" if self._squad_enabled_tasks.get(task_id, False) else None,
-            )
-            await self._checkpoint(
-                task_id, f"feature-{iter_idx}-apply", feature_work_dir,
-            )
-        await svc.set_iteration_stage_status(
-            task_id, iter_idx, "apply", "completed"
-        )
-        logger.info("Feature %d DONE: task=%s", iter_idx, task_id)
-
-    async def _merge_feature_workspaces(
-        self,
-        *,
-        task_id: str,
-        main_dir: str,
-        feature_dirs: list[str],
-        feature_prompts: list[str],
-        model: str,
-    ) -> None:
-        """Merge completed feature workspaces back into the main workspace.
-
-        Uses rsync to layer each feature's changes on top of the foundation,
-        then a Copilot CLI call to resolve any integration conflicts.
-        """
-        logger.info(
-            "Merging %d feature workspaces into %s for task %s",
-            len(feature_dirs), main_dir, task_id,
-        )
-        # Layer each feature's changes onto the main workspace.
-        # rsync --update ensures newer files from features overwrite foundation,
-        # while preserving files only modified by one feature.
-        for idx, feat_dir in enumerate(feature_dirs):
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=(
-                    f"rsync -a --exclude='.github/openspec' --exclude='node_modules' "
-                    f"--exclude='.git' {feat_dir}/ {main_dir}/"
-                ),
-                args=[],
-                stage_label=f"merge-feat-{idx + 1}",
-                work_dir="/workspace",
-                timeout=60,
-                raise_on_error=False,
-            )
-
-        # Use Copilot CLI to verify integration and fix any conflicts
-        feature_summary = "\n".join(
-            f"- Feature {i + 1}: {p[:120]}"
-            for i, p in enumerate(feature_prompts)
-        )
-        await self._sandbox_exec(
-            task_id=task_id,
-            prompt=(
-                "Multiple features were implemented in parallel and merged into "
-                "this project. Review the codebase for any integration issues:\n"
-                "1. Check for duplicate imports, conflicting component names, or "
-                "missing cross-references between features.\n"
-                "2. Ensure the app builds and runs correctly (try `npm run build` "
-                "or equivalent).\n"
-                "3. Fix any TypeScript/ESLint errors.\n"
-                "4. Only make changes if there are actual conflicts or build errors. "
-                "Do NOT refactor or restructure working code.\n\n"
-                f"Features that were merged:\n{feature_summary}"
-            ),
-            model=model,
-            stage_label="merge-integration",
-            stall_timeout=180,
-            raise_on_error=False,
-            work_dir=main_dir,
-        )
-
-        # Clean up feature directories
-        for feat_dir in feature_dirs:
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=f"rm -rf {feat_dir}",
-                args=[],
-                stage_label="cleanup-feat-dirs",
-                work_dir="/workspace",
-                timeout=30,
-                raise_on_error=False,
-            )
-        logger.info("Feature merge completed for task %s", task_id)
-
     # ── Incremental feature addition ─────────────────────────────
 
     async def append_feature_iteration(
@@ -1271,8 +864,8 @@ class DevAgent:
         task = await svc.get_by_id(task_id)
         if not task:
             return {"error": "Dev task not found", "extended": False, "pipeline_triggered": False}
-        if task.mode != "openspec":
-            return {"error": "Only openspec mode supports incremental features", "extended": False, "pipeline_triggered": False}
+        if task.mode not in ("sequential", "openspec"):
+            return {"error": "Only sequential mode supports incremental features", "extended": False, "pipeline_triggered": False}
 
         # Determine foundation status
         foundation_completed = False
@@ -1284,7 +877,7 @@ class DevAgent:
             )
 
         # Create the new iteration
-        iteration_data = _default_iteration(0, f"Feature: {feature_name}", spec_id)
+        iteration_data = _default_iteration(0, f"Feature: {feature_name}", spec_id, mode="sequential")
         # Store the propose instruction in the iteration for later use
         iteration_data["proposeInstruction"] = propose_instruction
         new_index = await svc.add_iteration(task_id, iteration_data)
@@ -1335,37 +928,21 @@ class DevAgent:
                 work_dir = foundation_ws
 
         try:
-            # Propose
-            await svc.set_iteration_stage_status(task_id, iteration_index, "propose", "running")
-            logger.info("Incremental feature propose: task=%s, iter=%d", task_id, iteration_index)
+            # Implement feature with --continue
+            stage_name = f"implement-feature-{iteration_index}"
+            await svc.set_iteration_stage_status(task_id, iteration_index, stage_name, "running")
+            logger.info("Incremental feature implement: task=%s, iter=%d", task_id, iteration_index)
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=(
-                    "Use the openspec-propose skill to create a proposal for "
-                    "adding this feature to the existing application.\n\n"
-                    f"{propose_instruction}"
-                ),
+                prompt=propose_instruction,
                 model=model,
-                stage_label=f"feature-{iteration_index}-propose",
-                work_dir=work_dir,
-            )
-            await svc.set_iteration_stage_status(task_id, iteration_index, "propose", "completed")
-
-            # Apply
-            await svc.set_iteration_stage_status(task_id, iteration_index, "apply", "running")
-            await self._sandbox_exec(
-                task_id=task_id,
-                prompt=(
-                    "Use the openspec-apply-change skill to implement all tasks "
-                    "from the latest proposal. Work through every task until done. "
-                    "Fix any build errors."
-                ),
-                model=model,
-                stage_label=f"feature-{iteration_index}-apply",
+                stage_label=f"feature-{iteration_index}-implement",
                 work_dir=work_dir,
                 continue_session=True,
+                agent="squad",
+                autopilot=True,
             )
-            await svc.set_iteration_stage_status(task_id, iteration_index, "apply", "completed")
+            await svc.set_iteration_stage_status(task_id, iteration_index, stage_name, "completed")
 
             # Screenshots
             await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "running")
@@ -1389,11 +966,12 @@ class DevAgent:
             await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
             await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "completed")
 
-            # Check if all iterations are done — if so, mark task completed
+            # Check if all iterations are done
             task = await svc.get_by_id(task_id)
             if task:
                 all_done = all(
-                    all(s.status == "completed" for s in it.stages if s.name in ("propose", "apply"))
+                    all(s.status == "completed" for s in it.stages
+                        if s.name.startswith("implement"))
                     for it in task.iterations
                 )
                 if all_done:
@@ -1404,8 +982,9 @@ class DevAgent:
         except Exception as e:
             logger.exception("Incremental feature pipeline FAILED: task=%s, iter=%d", task_id, iteration_index)
             try:
+                stage_name = f"implement-feature-{iteration_index}"
                 await svc.set_iteration_stage_status(
-                    task_id, iteration_index, "apply", "failed", error=str(e)
+                    task_id, iteration_index, stage_name, "failed", error=str(e)
                 )
             except Exception:
                 pass
@@ -1427,6 +1006,7 @@ class DevAgent:
         work_dir: str = "/workspace",
         continue_session: bool = False,
         agent: str | None = None,
+        autopilot: bool = False,
     ) -> str:
         """Submit a task to the sandbox and stream output via SSE.
 
@@ -1449,6 +1029,8 @@ class DevAgent:
                 payload["continueSession"] = True
             if agent:
                 payload["agent"] = agent
+            if autopilot:
+                payload["autopilot"] = True
             # Track premium request cost for this Copilot CLI invocation
             premium_cost = _get_premium_multiplier(model)
             if task_id:
@@ -1685,59 +1267,6 @@ class DevAgent:
             await svc.set_squad(task_id, {"teamMembers": [m.model_dump(by_alias=True) for m in updated_members]})
         except Exception as exc:
             logger.debug("squad status poll failed (non-fatal): %s", exc)
-
-    async def _poll_openspec_status(
-        self, task_id: str, work_dir: str, user_id: str,
-    ) -> None:
-        """Poll openspec status via `openspec list --json` and update the dev task."""
-        try:
-            import re
-            raw = await self._sandbox_exec(
-                task_id=task_id,
-                command=f"cd {work_dir} && openspec list --json 2>/dev/null || echo '[]'",
-                args=[],
-                stage_label="openspec-status",
-                work_dir=work_dir,
-                timeout=15,
-                raise_on_error=False,
-            )
-            json_match = re.search(r'\[.*\]', raw.strip(), re.DOTALL)
-            if not json_match:
-                return
-            changes = json.loads(json_match.group())
-            if not isinstance(changes, list) or not changes:
-                return
-            change = changes[0]
-            change_name = change.get("name", change.get("changeName", ""))
-            total = change.get("totalTasks", change.get("total", 0))
-            done = change.get("completedTasks", change.get("complete", 0))
-            current = change.get("currentTask", "")
-
-            # Count changed files via git
-            files_raw = await self._sandbox_exec(
-                task_id=task_id,
-                command=f"cd {work_dir} && git diff --stat HEAD~1 2>/dev/null | tail -1 || echo '0'",
-                args=[],
-                stage_label="openspec-files",
-                work_dir=work_dir,
-                timeout=10,
-                raise_on_error=False,
-            )
-            files_changed = 0
-            file_match = re.search(r'(\d+)\s+file', files_raw)
-            if file_match:
-                files_changed = int(file_match.group(1))
-
-            svc = self._service.with_user(user_id)
-            await svc.set_openspec_status(task_id, {
-                "changeName": change_name,
-                "totalTasks": total,
-                "completedTasks": done,
-                "currentTask": current,
-                "filesChanged": files_changed,
-            })
-        except Exception as exc:
-            logger.debug("openspec status poll failed (non-fatal): %s", exc)
 
     async def _checkpoint(
         self,

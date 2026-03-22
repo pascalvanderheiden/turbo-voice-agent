@@ -47,7 +47,7 @@ class DevTaskCreate(BaseModel):
     title: str = Field(..., min_length=1)
     spec_id: str | None = Field(None, alias="specId")
     slides_id: str | None = Field(None, alias="slidesId")
-    mode: str = "mockup"  # mockup | openspec | slides
+    mode: str = "mockup"  # mockup | sequential | slides (legacy: openspec → sequential)
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
 
     model_config = {"populate_by_name": True}
@@ -83,18 +83,6 @@ class SquadInfo(BaseModel):
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
 
-class OpenSpecStatus(BaseModel):
-    """Status of the OpenSpec change being applied."""
-
-    change_name: str = Field("", alias="changeName")
-    total_tasks: int = Field(0, alias="totalTasks")
-    completed_tasks: int = Field(0, alias="completedTasks")
-    current_task: str = Field("", alias="currentTask")
-    files_changed: int = Field(0, alias="filesChanged")
-
-    model_config = {"populate_by_name": True, "serialize_by_alias": True}
-
-
 class DevExportArtifacts(BaseModel):
     """Export artifacts for slides dev-tasks."""
 
@@ -111,7 +99,7 @@ class DevTask(BaseModel):
     title: str
     spec_id: str | None = Field(None, alias="specId")
     slides_id: str | None = Field(None, alias="slidesId")
-    mode: str = "mockup"  # mockup | openspec | slides
+    mode: str = "mockup"  # mockup | sequential | slides (legacy: openspec → sequential)
     status: str = "pending"  # pending | running | completed | failed
     archived: bool = False
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
@@ -126,7 +114,6 @@ class DevTask(BaseModel):
     sandbox_task_id: str | None = Field(None, alias="sandboxTaskId")
     decisions: list[DevDecision] = Field(default_factory=list)
     squad: SquadInfo | None = None
-    openspec_status: OpenSpecStatus | None = Field(None, alias="openspecStatus")
     premium_requests: int = Field(0, alias="premiumRequests")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")

@@ -13,7 +13,6 @@ from app.models.dev_task import (
     DevStage,
     DevTask,
     DevTaskCreate,
-    OpenSpecStatus,
     SquadInfo,
     SquadMember,
 )
@@ -21,24 +20,44 @@ from app.services.json_persistence import JsonPersistenceMixin
 
 logger = logging.getLogger(__name__)
 
-STAGE_NAMES = ["init", "openspec", "skills", "squad", "propose", "apply", "archive", "screenshots"]
+MOCKUP_STAGE_NAMES = ["init", "skills", "implement", "screenshots"]
 SLIDES_STAGE_NAMES = ["init", "slides", "export"]
 
 
-def _default_stages() -> list[dict]:
-    return [{"name": n, "status": "pending"} for n in STAGE_NAMES]
+def build_sequential_stages(features: list[str] | None = None) -> list[str]:
+    """Build dynamic stage names for sequential mode."""
+    stages = ["init", "skills", "implement-foundation"]
+    for i, _feat in enumerate(features or [], start=1):
+        stages.append(f"implement-feature-{i}")
+    stages.append("screenshots")
+    return stages
+
+
+def _mockup_stages() -> list[dict]:
+    return [{"name": n, "status": "pending"} for n in MOCKUP_STAGE_NAMES]
+
+
+def _sequential_stages(features: list[str] | None = None) -> list[dict]:
+    return [{"name": n, "status": "pending"} for n in build_sequential_stages(features)]
 
 
 def _slides_stages() -> list[dict]:
     return [{"name": n, "status": "pending"} for n in SLIDES_STAGE_NAMES]
 
 
-def _default_iteration(index: int, label: str, spec_part_id: str | None = None) -> dict:
+def _default_iteration(
+    index: int, label: str, spec_part_id: str | None = None, mode: str = "mockup",
+    features: list[str] | None = None,
+) -> dict:
+    if mode in ("sequential", "openspec"):
+        stages = _sequential_stages(features)
+    else:
+        stages = _mockup_stages()
     return {
         "iterationIndex": index,
         "label": label,
         "specPartId": spec_part_id,
-        "stages": _default_stages(),
+        "stages": stages,
         "workspacePath": None,
     }
 
@@ -63,12 +82,16 @@ class InMemoryDevService(JsonPersistenceMixin):
         self._load_from_disk()
 
     def _doc_to_model(self, doc: dict) -> DevTask:
+        # Normalize legacy "openspec" mode to "sequential"
+        mode = doc.get("mode", "mockup")
+        if mode == "openspec":
+            mode = "sequential"
         iterations = [
             DevIteration(
                 iterationIndex=it["iterationIndex"],
                 label=it.get("label", f"Iteration {it['iterationIndex']}"),
                 specPartId=it.get("specPartId"),
-                stages=[DevStage(**s) for s in it.get("stages", _default_stages())],
+                stages=[DevStage(**s) for s in it.get("stages", _mockup_stages())],
                 workspacePath=it.get("workspacePath"),
             )
             for it in doc.get("iterations", [])
@@ -77,14 +100,14 @@ class InMemoryDevService(JsonPersistenceMixin):
         if iterations:
             flat_stages = iterations[0].stages
         else:
-            flat_stages = [DevStage(**s) for s in doc.get("stages", _default_stages())]
+            flat_stages = [DevStage(**s) for s in doc.get("stages", _mockup_stages())]
 
         return DevTask(
             id=doc["id"],
             title=doc["title"],
             specId=doc.get("specId"),
             slidesId=doc.get("slidesId"),
-            mode=doc.get("mode", "mockup"),
+            mode=mode,
             status=doc.get("status", "pending"),
             archived=doc.get("archived", False),
             skillIds=doc.get("skillIds", []),
@@ -99,8 +122,6 @@ class InMemoryDevService(JsonPersistenceMixin):
             squad=SquadInfo(
                 teamMembers=[SquadMember(**m) for m in sq["teamMembers"]]
             ) if (sq := doc.get("squad")) else None,
-            openspecStatus=OpenSpecStatus(**os_data)
-            if (os_data := doc.get("openspecStatus")) else None,
             premiumRequests=doc.get("premiumRequests", 0),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
@@ -114,8 +135,10 @@ class InMemoryDevService(JsonPersistenceMixin):
             iterations = [_slides_iteration(0, data.title, getattr(data, "slides_id", None))]
             flat_stages = _slides_stages()
         else:
-            iterations = [_default_iteration(0, data.title)]
-            flat_stages = _default_stages()
+            # Normalize legacy "openspec" to "sequential"
+            mode = data.mode if data.mode != "openspec" else "sequential"
+            iterations = [_default_iteration(0, data.title, mode=mode)]
+            flat_stages = iterations[0]["stages"]
         doc = {
             "id": task_id,
             "userId": self._user_id or "default-user",
@@ -199,15 +222,6 @@ class InMemoryDevService(JsonPersistenceMixin):
         if not doc:
             return
         doc["squad"] = squad_data
-        doc["updatedAt"] = datetime.now(UTC).isoformat()
-        self._save_to_disk()
-
-    async def set_openspec_status(self, task_id: str, status_data: dict) -> None:
-        """Store openspec change status on a dev task."""
-        doc = self._store.get(task_id)
-        if not doc:
-            return
-        doc["openspecStatus"] = status_data
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
 

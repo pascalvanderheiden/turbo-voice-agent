@@ -22,18 +22,18 @@ def agent(dev_service):
 
 
 async def _create_openspec_task(service, with_foundation_complete=False):
-    """Helper to create an openspec dev task with iterations."""
-    task = await service.create(DevTaskCreate(title="Test App", specId="spec-1", mode="openspec"))
+    """Helper to create a sequential dev task with iterations."""
+    task = await service.create(DevTaskCreate(title="Test App", specId="spec-1", mode="sequential"))
 
     # Add foundation and feature iterations
     iterations = [
-        _default_iteration(0, "Foundation: Test App", "spec-1"),
-        _default_iteration(1, "Feature: Dashboard", "spec-1"),
+        _default_iteration(0, "Foundation: Test App", "spec-1", mode="sequential"),
+        _default_iteration(1, "Feature: Dashboard", "spec-1", mode="sequential"),
     ]
     await service.set_iterations(task.id, iterations)
 
     if with_foundation_complete:
-        for stage_name in ["init", "propose", "apply"]:
+        for stage_name in ["init", "skills", "implement-foundation"]:
             await service.set_iteration_stage_status(task.id, 0, stage_name, "completed")
         await service.set_status(task.id, "completed")
 
@@ -103,7 +103,7 @@ class TestAppendFeatureIteration:
         )
 
         assert result["extended"] is False
-        assert "openspec" in result["error"].lower()
+        assert "sequential" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_append_to_nonexistent_task(self, agent):

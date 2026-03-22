@@ -73,10 +73,10 @@ async def test_dev_task_archive(dev_service):
 
 
 @pytest.mark.asyncio
-async def test_default_dev_task_has_openspec_stages(dev_service):
+async def test_default_dev_task_has_mockup_stages(dev_service):
     task = await dev_service.create(DevTaskCreate(title="Regular"))
     stage_names = [s.name for s in task.iterations[0].stages]
     assert "init" in stage_names
-    assert "propose" in stage_names
-    assert "apply" in stage_names
+    assert "skills" in stage_names
+    assert "implement" in stage_names
     assert "screenshots" in stage_names
