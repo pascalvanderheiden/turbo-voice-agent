@@ -218,6 +218,175 @@ async def disconnect_todo(request: Request):
     return {"connected": False}
 
 
+# ── Work Account (WorkIQ) Connection ──────────────────────────
+
+
+def _work_oauth_config() -> dict:
+    """Return OAuth config for Work Account (WorkIQ) consent."""
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    return {
+        "client_id": os.environ.get("WORKIQ_OAUTH_CLIENT_ID")
+        or os.environ.get("ENTRA_CLIENT_ID", ""),
+        "tenant_id": os.environ.get("WORKIQ_OAUTH_TENANT_ID", "common"),
+        "redirect_uri": os.environ.get(
+            "WORKIQ_OAUTH_REDIRECT_URI",
+            f"{frontend_url}/api/auth/callback/work-account",
+        ),
+        "scope": "offline_access Mail.Read Calendars.Read Files.Read.All Chat.Read User.Read",
+    }
+
+
+@router.get("/me/connections/work-account")
+async def get_work_connection_status(request: Request):
+    """Check whether the user has connected their Work Account."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    conn = _connection_store.get(f"work:{user_id}")
+    if conn:
+        return {"connected": True, "connectedAt": conn.get("connectedAt", "")}
+
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        profile = await svc.get_profile(user_id)
+        if profile and profile.get("workRefreshToken"):
+            _connection_store[f"work:{user_id}"] = {
+                "refreshToken": profile["workRefreshToken"],
+                "connectedAt": profile.get("workConnectedAt", ""),
+            }
+            return {"connected": True, "connectedAt": profile.get("workConnectedAt", "")}
+
+    return {"connected": False}
+
+
+@router.post("/me/connections/work-account")
+async def initiate_work_connection(request: Request):
+    """Start Microsoft OAuth consent flow for Work Account (WorkIQ) access."""
+    import datetime
+
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    if os.environ.get("AUTH_DISABLED", "").lower() == "true":
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        _connection_store[f"work:{user_id}"] = {
+            "refreshToken": "mock-token-auth-disabled",
+            "connectedAt": now,
+        }
+        logger.info("Auto-connected Work Account for user %s (AUTH_DISABLED)", user_id)
+        return {"connected": True, "connectedAt": now}
+
+    cfg = _work_oauth_config()
+    if not cfg["client_id"]:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Work Account connection is not configured. Set ENTRA_CLIENT_ID."},
+        )
+
+    from urllib.parse import urlencode
+
+    params = urlencode({
+        "client_id": cfg["client_id"],
+        "response_type": "code",
+        "redirect_uri": cfg["redirect_uri"],
+        "scope": cfg["scope"],
+        "state": user_id,
+        "prompt": "consent",
+    })
+    auth_url = (
+        f"https://login.microsoftonline.com/{cfg['tenant_id']}"
+        f"/oauth2/v2.0/authorize?{params}"
+    )
+    return {"authUrl": auth_url}
+
+
+@router.get("/auth/callback/work-account")
+async def work_oauth_callback(request: Request, code: str = "", error: str = "", state: str = ""):
+    """Handle OAuth callback from Microsoft for Work Account consent."""
+    import datetime
+
+    from fastapi.responses import RedirectResponse
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+    if error or not code:
+        logger.warning("Work Account OAuth error: %s", error)
+        return RedirectResponse(f"{frontend_url}/settings?work_connected=error")
+
+    user_id = state
+    if not user_id:
+        return RedirectResponse(f"{frontend_url}/settings?work_connected=error")
+
+    cfg = _work_oauth_config()
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://login.microsoftonline.com/{cfg['tenant_id']}/oauth2/v2.0/token",
+                data={
+                    "client_id": cfg["client_id"],
+                    "client_secret": os.environ.get("ENTRA_CLIENT_SECRET", ""),
+                    "code": code,
+                    "redirect_uri": cfg["redirect_uri"],
+                    "grant_type": "authorization_code",
+                    "scope": cfg["scope"],
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error("Work token exchange failed (%d): %s", resp.status, body)
+                    return RedirectResponse(f"{frontend_url}/settings?work_connected=error")
+
+                tokens = await resp.json()
+    except Exception:
+        logger.exception("Work token exchange request failed")
+        return RedirectResponse(f"{frontend_url}/settings?work_connected=error")
+
+    refresh_token = tokens.get("refresh_token", "")
+    if not refresh_token:
+        logger.error("No refresh_token in work token response")
+        return RedirectResponse(f"{frontend_url}/settings?work_connected=error")
+
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    _connection_store[f"work:{user_id}"] = {
+        "refreshToken": refresh_token,
+        "connectedAt": now,
+    }
+
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        try:
+            await svc.update_work_connection(user_id, refresh_token, now)
+        except Exception:
+            logger.exception("Failed to persist Work token to Cosmos for user %s", user_id)
+
+    logger.info("Work Account connected for user %s", user_id)
+    return RedirectResponse(f"{frontend_url}/settings?work_connected=success")
+
+
+@router.delete("/me/connections/work-account")
+async def disconnect_work(request: Request):
+    """Disconnect Work Account — remove stored tokens."""
+    user_id, _ = _get_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    _connection_store.pop(f"work:{user_id}", None)
+
+    svc = getattr(request.app.state, "user_profile_service", None)
+    if svc:
+        try:
+            await svc.update_work_connection(user_id, None, None)
+        except Exception:
+            logger.exception("Failed to clear Work token in Cosmos for user %s", user_id)
+
+    logger.info("Work Account disconnected for user %s", user_id)
+    return {"connected": False}
+
+
 # ── GitHub Copilot Sandbox Connection ─────────────────────────
 
 
@@ -353,6 +522,28 @@ async def get_todo_user_token(user_id: str, app_state=None) -> str | None:
                 "connectedAt": profile.get("todoConnectedAt", ""),
             }
             return profile["todoRefreshToken"]
+    return None
+
+
+async def get_work_user_token(user_id: str, app_state=None) -> str | None:
+    """Retrieve the stored Work Account refresh token for a user.
+
+    Called by the WorkAgent to get the user's delegated token for WorkIQ MCP calls.
+    Falls back to Cosmos DB if not in the in-memory cache.
+    """
+    conn = _connection_store.get(f"work:{user_id}")
+    if conn:
+        return conn.get("refreshToken")
+
+    svc = getattr(app_state, "user_profile_service", None) if app_state else None
+    if svc:
+        profile = await svc.get_profile(user_id)
+        if profile and profile.get("workRefreshToken"):
+            _connection_store[f"work:{user_id}"] = {
+                "refreshToken": profile["workRefreshToken"],
+                "connectedAt": profile.get("workConnectedAt", ""),
+            }
+            return profile["workRefreshToken"]
     return None
 
 

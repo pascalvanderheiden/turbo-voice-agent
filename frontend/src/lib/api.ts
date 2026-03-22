@@ -698,4 +698,14 @@ export const connectionsApi = {
     disconnect: () =>
       fetchApi<ConnectionStatus>("/api/me/connections/microsoft-todo", { method: "DELETE" }),
   },
+  workAccount: {
+    status: () => fetchApi<ConnectionStatus>("/api/me/connections/work-account"),
+    connect: () =>
+      fetchApi<{ authUrl?: string; connected?: boolean; connectedAt?: string }>(
+        "/api/me/connections/work-account",
+        { method: "POST" },
+      ),
+    disconnect: () =>
+      fetchApi<ConnectionStatus>("/api/me/connections/work-account", { method: "DELETE" }),
+  },
 };

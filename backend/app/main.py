@@ -20,9 +20,11 @@ from app.agents.slides_agent import SlidesAgent
 from app.agents.spec_agent import SpecAgent
 from app.agents.supervisor import SupervisorAgent
 from app.agents.todo_agent import TodoAgent
+from app.agents.work_agent import WorkAgent
 from app.db.cosmos import close_cosmos_client, get_cosmos_client
 from app.db.init import ensure_database_and_containers
 from app.mcp.todo_mcp_client import TodoMcpClient
+from app.mcp.work_mcp_client import WorkMcpClient
 from app.middleware.auth_middleware import EntraAuthMiddleware
 from app.routes import chat, dev, ideas, marketing, notes, research, slides, specs, todos, upload, voice_ws
 from app.routes import sandbox as sandbox_routes
@@ -170,10 +172,22 @@ async def lifespan(app: FastAPI):
 
     todo_agent = TodoAgent(todo_mcp_client, get_user_token=_todo_token_resolver)
 
+    # Initialize Work MCP client and Work Agent
+    from app.routes.user import get_work_user_token
+
+    work_mcp_client = WorkMcpClient()
+    await work_mcp_client.start()
+
+    async def _work_token_resolver(user_id: str) -> str | None:
+        return await get_work_user_token(user_id, app_state=app.state)
+
+    work_agent = WorkAgent(work_mcp_client, get_user_token=_work_token_resolver)
+
     supervisor = SupervisorAgent(
         notes_agent, brainstorm_agent, research_agent, spec_agent,
         dev_agent, skills_agent, marketing_agent=marketing_agent,
         todo_agent=todo_agent, slides_agent=slides_agent,
+        work_agent=work_agent,
     )
 
     notes.set_notes_service(notes_service)
@@ -217,6 +231,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await todo_mcp_client.stop()
+    await work_mcp_client.stop()
     await close_cosmos_client()
     logger.info("Backend shut down.")
 
@@ -417,6 +432,15 @@ async def agent_status():
                 "tools": ["create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo"],
                 "mcpServers": ["microsoft-todo"],
             },
+            {
+                "id": "work",
+                "name": "Work Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["ask_work_question"],
+                "mcpServers": ["workiq"],
+            },
         ],
         "edges": [
             {"from": "voice", "to": "supervisor"},
@@ -430,6 +454,7 @@ async def agent_status():
             {"from": "supervisor", "to": "marketing"},
             {"from": "supervisor", "to": "slides"},
             {"from": "supervisor", "to": "todo"},
+            {"from": "supervisor", "to": "work"},
         ],
     }
 

@@ -14,6 +14,7 @@ import {
   IconMoon,
   IconUser,
   IconSparkles,
+  IconBriefcase,
 } from "@tabler/icons-react";
 import { useTheme } from "next-themes";
 import { useI18n, type Locale } from "@/lib/i18n";
@@ -38,9 +39,12 @@ export default function SettingsPage() {
   const [githubConnectedAt, setGithubConnectedAt] = useState("");
   const [todoConnected, setTodoConnected] = useState(false);
   const [todoConnectedAt, setTodoConnectedAt] = useState("");
+  const [workConnected, setWorkConnected] = useState(false);
+  const [workConnectedAt, setWorkConnectedAt] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connectingTodo, setConnectingTodo] = useState(false);
+  const [connectingWork, setConnectingWork] = useState(false);
 
   // Premium usage
   const [premiumTotal, setPremiumTotal] = useState(0);
@@ -59,6 +63,16 @@ export default function SettingsPage() {
       window.history.replaceState({}, "", "/settings");
     } else if (todoResult === "error") {
       toast.error("Microsoft To-Do connection failed");
+      window.history.replaceState({}, "", "/settings");
+    }
+    const workResult = params.get("work_connected");
+    if (workResult === "success") {
+      toast.success("Work Account connected!");
+      setWorkConnected(true);
+      setWorkConnectedAt(new Date().toISOString());
+      window.history.replaceState({}, "", "/settings");
+    } else if (workResult === "error") {
+      toast.error("Work Account connection failed");
       window.history.replaceState({}, "", "/settings");
     }
   }, []);
@@ -84,14 +98,17 @@ export default function SettingsPage() {
 
   const fetchConnections = useCallback(async () => {
     try {
-      const [sandbox, todo] = await Promise.all([
+      const [sandbox, todo, work] = await Promise.all([
         sandboxApi.getSandboxConnection().catch(() => ({ connected: false, connectedAt: "" })),
         connectionsApi.microsoftTodo.status().catch(() => ({ connected: false, connectedAt: "" })),
+        connectionsApi.workAccount.status().catch(() => ({ connected: false, connectedAt: "" })),
       ]);
       setGithubConnected(sandbox.connected || false);
       setGithubConnectedAt((sandbox as { connectedAt?: string }).connectedAt || "");
       setTodoConnected(todo.connected || false);
       setTodoConnectedAt((todo as { connectedAt?: string }).connectedAt || "");
+      setWorkConnected(work.connected || false);
+      setWorkConnectedAt((work as { connectedAt?: string }).connectedAt || "");
     } catch {
       // ignore
     }
@@ -195,6 +212,35 @@ export default function SettingsPage() {
       setTodoConnected(false);
       setTodoConnectedAt("");
       toast.success("Microsoft To-Do disconnected");
+    } catch {
+      toast.error("Failed to disconnect");
+    }
+  };
+
+  const handleConnectWork = async () => {
+    setConnectingWork(true);
+    try {
+      const result = await connectionsApi.workAccount.connect();
+      if (result.connected) {
+        setWorkConnected(true);
+        setWorkConnectedAt(result.connectedAt || "");
+        toast.success("Work Account connected");
+        setConnectingWork(false);
+      } else if (result.authUrl) {
+        window.location.href = result.authUrl;
+      }
+    } catch {
+      toast.error("Failed to start Work Account connection");
+      setConnectingWork(false);
+    }
+  };
+
+  const handleDisconnectWork = async () => {
+    try {
+      await connectionsApi.workAccount.disconnect();
+      setWorkConnected(false);
+      setWorkConnectedAt("");
+      toast.success("Work Account disconnected");
     } catch {
       toast.error("Failed to disconnect");
     }
@@ -406,6 +452,51 @@ export default function SettingsPage() {
                   {connectingTodo
                     ? (t("connections.connecting") || "Connecting…")
                     : (t("connections.connectTodo") || "Connect Microsoft To-Do")}
+                </span>
+              </button>
+            )}
+          </div>
+
+          {/* Work Account (WorkIQ) */}
+          <div className="p-4 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
+            <div className="flex items-center gap-3 mb-3">
+              <IconBriefcase size={20} stroke={1.5} className="text-[var(--color-brand-cyan)]" />
+              <div>
+                <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+                  Work Account
+                </h3>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  Connect your Microsoft 365 work account for WorkIQ
+                </p>
+              </div>
+            </div>
+
+            {workConnected ? (
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-xs text-green-400">
+                  <IconCheck size={14} stroke={1.5} />
+                  Connected{" "}
+                  {workConnectedAt &&
+                    `· ${new Date(workConnectedAt).toLocaleDateString()}`}
+                </span>
+                <button
+                  onClick={handleDisconnectWork}
+                  className="rounded-[var(--radius-md)] border border-red-500/30 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleConnectWork}
+                disabled={connectingWork}
+                className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-brand-cyan)] transition-colors disabled:opacity-50"
+              >
+                <IconPlugConnectedX size={16} stroke={1.5} />
+                <span>
+                  {connectingWork
+                    ? "Connecting…"
+                    : "Connect Work Account"}
                 </span>
               </button>
             )}

@@ -92,6 +92,21 @@ class UserProfileService:
             logger.exception("Failed to update To-Do connection for user %s", user_id)
             return None
 
+    async def update_work_connection(
+        self, user_id: str, refresh_token: str | None, connected_at: str | None
+    ) -> dict[str, Any] | None:
+        """Persist or clear the Work Account refresh token on the user profile."""
+        try:
+            profile = await self._container.read_item(item=user_id, partition_key=user_id)
+            profile["workRefreshToken"] = refresh_token
+            profile["workConnectedAt"] = connected_at
+            await self._container.upsert_item(profile)
+            logger.info("Updated Work Account connection for user %s", user_id)
+            return profile
+        except Exception:
+            logger.exception("Failed to update Work connection for user %s", user_id)
+            return None
+
     async def update_profile_photo_url(
         self, user_id: str, photo_url: str
     ) -> dict[str, Any] | None:

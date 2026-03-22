@@ -24,6 +24,7 @@ import {
   IconUpload,
   IconPresentation,
   IconVideo,
+  IconBriefcase,
 } from "@tabler/icons-react";
 import { agentsApi, notesApi, ideasApi, researchApi, specsApi, devApi, skillsApi, type AgentInfo, type AgentEdge, type InstalledSkill } from "@/lib/api";
 import { SandboxConfig } from "@/components/agents/sandbox-config";
@@ -52,6 +53,7 @@ const AGENT_ICONS: Record<string, typeof IconBrain> = {
   skills: IconSettings,
   slides: IconPresentation,
   marketing: IconVideo,
+  work: IconBriefcase,
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -66,6 +68,7 @@ const AGENT_COLORS: Record<string, string> = {
   skills: "var(--color-brand-cyan)",
   slides: "var(--color-brand-cyan)",
   marketing: "var(--color-brand-pink)",
+  work: "var(--color-brand-cyan)",
 };
 
 export default function AgentsPage() {

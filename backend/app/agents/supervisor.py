@@ -12,6 +12,7 @@ from app.agents.skills_agent import SkillsAgent
 from app.agents.slides_agent import SlidesAgent
 from app.agents.spec_agent import SpecAgent
 from app.agents.todo_agent import TodoAgent
+from app.agents.work_agent import WorkAgent
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class SupervisorAgent:
         marketing_agent: MarketingAgent | None = None,
         todo_agent: TodoAgent | None = None,
         slides_agent: SlidesAgent | None = None,
+        work_agent: WorkAgent | None = None,
     ):
         self._notes_agent = notes_agent
         self._brainstorm_agent = brainstorm_agent
@@ -40,6 +42,7 @@ class SupervisorAgent:
         self._marketing_agent = marketing_agent
         self._todo_agent = todo_agent
         self._slides_agent = slides_agent
+        self._work_agent = work_agent
         self._agents: dict[str, object] = {"notes": notes_agent}
         if brainstorm_agent:
             self._agents["brainstorm"] = brainstorm_agent
@@ -57,6 +60,8 @@ class SupervisorAgent:
             self._agents["marketing"] = marketing_agent
         if todo_agent:
             self._agents["todo"] = todo_agent
+        if work_agent:
+            self._agents["work"] = work_agent
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -101,6 +106,9 @@ class SupervisorAgent:
         slides_functions = {
             "create_slides", "get_slides_list", "get_slides", "update_slides",
             "delete_slides", "refine_slides",
+        }
+        work_functions = {
+            "ask_work_question",
         }
 
         if function_name in notes_functions:
@@ -148,11 +156,16 @@ class SupervisorAgent:
             result = await self._slides_agent.handle_function_call(function_name, arguments, user_id=user_id)
             return result, "Slides Agent"
 
+        if function_name in work_functions and self._work_agent:
+            logger.info("Routing '%s' to Work Agent", function_name)
+            result = await self._work_agent.handle_function_call(function_name, arguments, user_id=user_id)
+            return result, "Work Agent"
+
         logger.warning("Unknown function: %s", function_name)
         return json.dumps(
             {
                 "error": f"I don't know how to handle '{function_name}'. "
                 "I can help with notes, brainstorming ideas, slide presentations, research, specs, development tasks, "
-                "skills management, marketing videos, and to-do tasks."
+                "skills management, marketing videos, to-do tasks, and work-related questions."
             }
         ), "Supervisor"
