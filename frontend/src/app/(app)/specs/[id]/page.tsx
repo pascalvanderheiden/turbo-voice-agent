@@ -536,12 +536,12 @@ function DevelopDialog({
             <div className="text-xs text-[var(--color-text-muted)] mt-1">Quick GUI preview from full spec in one pass</div>
           </button>
           <button
-            onClick={() => setMode("openspec")}
+            onClick={() => setMode("sequential")}
             className={`p-4 rounded-[var(--radius-md)] border text-left transition-all ${
-              mode === "openspec" ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
+              mode === "sequential" ? "border-[var(--color-brand-purple)] bg-[var(--color-brand-purple)]/10" : "border-[var(--color-border-dark)] bg-[var(--color-bg-tertiary)]"
             }`}
           >
-            <div className="font-medium">OpenSpec</div>
+            <div className="font-medium">Sequential</div>
             <div className="text-xs text-[var(--color-text-muted)] mt-1">Iterative: foundation first, then each feature</div>
           </button>
         </div>
