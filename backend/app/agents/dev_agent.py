@@ -689,10 +689,12 @@ class DevAgent:
             ]
 
         await svc.set_status(task_id, "running")
+        self._squad_enabled_tasks[task_id] = False
 
-        # ── Stage 1: Init — create-deckio scaffolds a new deck project ──
+        # ── Stage 1: Init — create-deckio + squad + skills ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
+            # Scaffold the deck project
             await self._sandbox_exec(
                 task_id=task_id,
                 command=(
@@ -713,6 +715,32 @@ class DevAgent:
             )
             # Move into the created deck directory
             work_dir = f"/workspace/{task_id}/{deck_name}"
+
+            # Git init (required for squad / Copilot CLI)
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"cd {work_dir} && git init -q"
+                    " && git config user.email 'agent@sandbox'"
+                    " && git config user.name 'Sandbox Agent'"
+                    " && git commit --allow-empty -m 'init' -q"
+                    " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
+                ),
+                args=[],
+                stage_label="init-git",
+                work_dir=work_dir,
+                raise_on_error=False,
+            )
+
+            # Squad init + skills install
+            await self._run_squad_stage(task_id, work_dir, slides_context, user_id)
+            self._squad_enabled_tasks[task_id] = True
+            n_skills = await self._install_skills_in_sandbox(
+                task_id, task, work_dir, user_id=user_id,
+            )
+            if n_skills:
+                logger.info("Installed %d user skills for slides task %s", n_skills, task_id)
+
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
             logger.error("Slides init failed for %s: %s", task_id, e)
@@ -744,6 +772,8 @@ class DevAgent:
                     timeout=120,
                     stall_timeout=90,
                     continue_session=(i > 0),
+                    agent="squad",
+                    autopilot=True,
                 )
 
             # Validate the project
@@ -756,6 +786,8 @@ class DevAgent:
                 timeout=60,
                 stall_timeout=45,
                 continue_session=True,
+                agent="squad",
+                autopilot=True,
             )
             await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
         except Exception as e:
@@ -783,6 +815,8 @@ class DevAgent:
                 timeout=300,
                 stall_timeout=180,
                 continue_session=True,
+                agent="squad",
+                autopilot=True,
             )
 
             # Try to upload the PDF to blob storage
