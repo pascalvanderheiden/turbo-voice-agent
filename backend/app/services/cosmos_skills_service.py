@@ -67,16 +67,53 @@ class CosmosSkillsService:
             raise
 
     async def deactivate_skill(self, name: str) -> None:
-        """Delete the skill document from Cosmos DB."""
+        """Delete the skill document from Cosmos DB and blob storage if local."""
         try:
             container = await self._container()
+            # Read the skill first to check if it's local (has blob files)
+            skill = await self.get_skill(name)
             await container.delete_item(item=name, partition_key=self._user_id)
+
+            # Clean up blob storage for locally-uploaded skills
+            if skill and skill.get("source") == "local":
+                await self._delete_skill_blobs(name)
+
             logger.info("Deactivated skill '%s' for user %s", name, self._user_id)
         except CosmosResourceNotFoundError:
             logger.debug("Skill '%s' not found — nothing to deactivate", name)
         except Exception:
             logger.exception("Failed to deactivate skill '%s'", name)
             raise
+
+    async def _delete_skill_blobs(self, skill_name: str) -> None:
+        """Delete all blobs for a local skill from Azure Blob Storage."""
+        import os
+
+        storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+        if not storage_account:
+            logger.warning("AZURE_STORAGE_ACCOUNT_NAME not set — skipping blob cleanup for '%s'", skill_name)
+            return
+
+        try:
+            from azure.identity.aio import DefaultAzureCredential
+            from azure.storage.blob.aio import BlobServiceClient
+
+            credential = DefaultAzureCredential()
+            blob_service = BlobServiceClient(
+                account_url=f"https://{storage_account}.blob.core.windows.net",
+                credential=credential,
+            )
+            deleted = 0
+            async with blob_service:
+                container = blob_service.get_container_client("skills")
+                async for blob in container.list_blobs(name_starts_with=f"{skill_name}/"):
+                    await container.delete_blob(blob.name)
+                    deleted += 1
+                    logger.info("Deleted skill blob: %s", blob.name)
+            await credential.close()
+            logger.info("Cleaned up %d blob(s) for local skill '%s'", deleted, skill_name)
+        except Exception:
+            logger.exception("Failed to delete blobs for skill '%s' — Cosmos record already removed", skill_name)
 
     # ── Read ──────────────────────────────────────────────────────────
 
