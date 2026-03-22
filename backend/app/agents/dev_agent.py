@@ -321,6 +321,7 @@ class DevAgent:
             await service.set_status(task_id, "completed")
             return
 
+        pipeline_failed = False
         try:
             task = await service.get_by_id(task_id)
             if not task:
@@ -335,6 +336,7 @@ class DevAgent:
                 await self._run_mockup_pipeline(task_id, user_id)
 
         except Exception as e:
+            pipeline_failed = True
             logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
             # Emit error to terminal
             if task_id in _pipeline_outputs:
@@ -360,11 +362,17 @@ class DevAgent:
         finally:
             # Clean up task-scoped squad flag
             self._squad_enabled_tasks.pop(task_id, None)
-            # Emit completion marker
+            # Always emit exit marker — this is the ONLY way SSE consumers know
+            # the pipeline is done. Without this, the frontend stream hangs forever.
             if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "exit", "code": 0, "ts": time.time()
-                })
+                buf = _pipeline_outputs[task_id]
+                # Only add if not already present (avoid duplicates)
+                if not any(e.get("type") == "exit" for e in buf[-5:] if isinstance(e, dict)):
+                    _buf_append(task_id, {
+                        "type": "exit",
+                        "code": 1 if pipeline_failed else 0,
+                        "ts": time.time(),
+                    })
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
         """Mockup pipeline: init → skills → implement → screenshots."""
@@ -1078,7 +1086,8 @@ class DevAgent:
         # (Azure Container Apps proxy may kill idle connections without TCP RST)
         SSE_LINE_TIMEOUT = 60  # no line (incl. keepalive) for 60s → dead connection
         start = time.monotonic()
-        last_output_time = time.monotonic()
+        last_output_time = time.monotonic()  # tracks meaningful stdout/stderr
+        last_any_traffic = time.monotonic()  # tracks any SSE traffic (incl keepalive)
         exit_code = -1
         output_lines: list[str] = []
         accumulated_text = ""
@@ -1117,7 +1126,8 @@ class DevAgent:
                             raise RuntimeError(
                                 f"Sandbox task timed out: {stage_label}"
                             )
-                        # Stall detection: no meaningful output for too long
+                        # Stall detection: no meaningful stdout/stderr for too long
+                        # (keepalives don't count — they just prove the connection is alive)
                         if now - last_output_time > stall_timeout:
                             await self._kill_sandbox_task(sandbox_task_id, stage_label)
                             raise RuntimeError(
@@ -1126,9 +1136,9 @@ class DevAgent:
                             )
 
                         if not raw_line.startswith("data: "):
-                            # Any SSE traffic (keepalive/comment) proves connection is alive
+                            # Keepalive/comment — proves connection alive but NOT real output
                             if raw_line.strip():
-                                last_output_time = now
+                                last_any_traffic = now
                             continue
 
                         line_count += 1
@@ -1259,6 +1269,18 @@ class DevAgent:
             stage_label, exit_code, len(combined),
             line_count, len(output_buf), time.monotonic() - start,
         )
+
+        # Emit a per-stage exit marker so SSE consumers see the stage ended.
+        # The pipeline-level exit event is emitted in run_pipeline's finally block,
+        # but individual stage completion must also be signalled — especially when
+        # the SSE stream fell back to polling and the original exit event was lost.
+        if task_id and task_id in _pipeline_outputs:
+            _buf_append(task_id, {
+                "type": "stage_exit",
+                "stage": stage_label,
+                "code": exit_code,
+                "ts": time.time(),
+            })
 
         if exit_code != 0 and raise_on_error:
             raise RuntimeError(

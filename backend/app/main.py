@@ -401,6 +401,14 @@ async def agent_status():
                 "tools": ["create_marketing_video", "get_marketing_videos", "get_marketing_video", "delete_marketing_video", "trigger_video_generation"],
             },
             {
+                "id": "slides",
+                "name": "Slides Agent",
+                "type": "specialist",
+                "model": "gpt-5.2",
+                "status": "online",
+                "tools": ["create_slides", "get_slides_list", "get_slides", "update_slides", "delete_slides", "refine_slides"],
+            },
+            {
                 "id": "todo",
                 "name": "Todo Agent",
                 "type": "specialist",
@@ -420,6 +428,7 @@ async def agent_status():
             {"from": "supervisor", "to": "dev"},
             {"from": "supervisor", "to": "skills"},
             {"from": "supervisor", "to": "marketing"},
+            {"from": "supervisor", "to": "slides"},
             {"from": "supervisor", "to": "todo"},
         ],
     }

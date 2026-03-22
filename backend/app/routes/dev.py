@@ -266,8 +266,17 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
     task = await service.get_by_id(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Dev task not found")
-    if task.status not in ("pending", "failed", "paused", "running"):
-        raise HTTPException(status_code=400, detail="Task already running or completed")
+    if task.status == "completed":
+        raise HTTPException(status_code=400, detail="Task already completed")
+    # If task is "running" but no active pipeline asyncio task exists,
+    # it's an orphan from a server restart — allow re-trigger
+    if task.status == "running" and task_id in _running_pipelines:
+        atask = _running_pipelines[task_id]
+        if not atask.done():
+            raise HTTPException(status_code=400, detail="Task is already running")
+        # Pipeline task finished but status wasn't updated — clean up
+        _running_pipelines.pop(task_id, None)
+        logger.warning("Orphaned pipeline task %s found done, allowing re-trigger", task_id)
 
     # Check sandbox availability before starting the pipeline
     from app.routes.sandbox import _probe_sandbox_health
@@ -448,15 +457,26 @@ async def stream_pipeline_output(task_id: str, request: Request):
                 if keepalive_counter >= 30:
                     yield ": keepalive\n\n"
                     keepalive_counter = 0
-                # Check if the task is done (no buffer = never started or already cleaned up)
-                if idle_count > 10 and not buf:
-                    # Check task status to decide whether to keep waiting
+                # Check task status — do this regardless of buffer state.
+                # Previously only checked when buf was empty, which caused streams
+                # to hang forever when the buffer had unread data but no exit event.
+                if idle_count > 10:
                     t = await svc.get_by_id(task_id)
                     if not t or t.status not in ("running", "pending"):
                         logger.info(
-                            "[SSE-DIAG] Task gone/done, closing stream task=%s status=%s",
-                            task_id, t.status if t else "None",
+                            "[SSE-DIAG] Task done/gone, injecting exit task=%s status=%s buf=%d cursor=%d",
+                            task_id, t.status if t else "None", len(buf), cursor,
                         )
+                        # Flush remaining buffer entries before closing
+                        while cursor < len(buf):
+                            entry = buf[cursor]
+                            cursor += 1
+                            yield f"id: {cursor}\ndata: {__import__('json').dumps(entry)}\n\n"
+                            if entry.get("type") == "exit":
+                                return
+                        # Inject synthetic exit if pipeline never emitted one
+                        code = 1 if (t and t.status == "failed") else 0
+                        yield f"data: {__import__('json').dumps({'type': 'exit', 'code': code})}\n\n"
                         return
                 # Stop after 10 min of no new output
                 if idle_count > 1200:
