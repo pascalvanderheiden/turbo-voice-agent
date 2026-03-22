@@ -22,8 +22,13 @@ class SlidesBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="")
     sections: list[SlideSection] = Field(default_factory=list)
-    images: list[str] = Field(default_factory=list)
     attachments: list[str] = Field(default_factory=list)
+    # Deck config fields (from create-deckio)
+    subtitle: str = Field(default="")
+    icon: str = Field(default="")
+    theme: str = Field(default="shadcn/ui")
+    appearance: str = Field(default="dark")
+    palette: str = Field(default="arctic")
 
 
 class SlidesCreate(SlidesBase):
@@ -38,8 +43,12 @@ class SlidesUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=500)
     description: str | None = None
     sections: list[SlideSection] | None = None
-    images: list[str] | None = None
     attachments: list[str] | None = None
+    subtitle: str | None = None
+    icon: str | None = None
+    theme: str | None = None
+    appearance: str | None = None
+    palette: str | None = None
 
 
 class Slides(SlidesBase):

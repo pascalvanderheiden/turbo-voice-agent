@@ -125,3 +125,32 @@ async def test_invalid_arguments(agent):
     result = await agent.handle_function_call("create_slides", "not-json")
     data = json.loads(result)
     assert "error" in data
+
+
+def test_parse_deck_config():
+    draft = """## Deck Config
+```yaml
+title: My Presentation
+subtitle: A great deck
+icon: rocket
+theme: shadcn/ui
+appearance: dark
+palette: arctic
+```
+
+## Slides
+1. **Intro** — Welcome to the talk.
+2. **Demo** — Live coding session.
+"""
+    config = SlidesAgent.parse_deck_config(draft)
+    assert config["title"] == "My Presentation"
+    assert config["subtitle"] == "A great deck"
+    assert config["icon"] == "rocket"
+    assert config["theme"] == "shadcn/ui"
+    assert config["appearance"] == "dark"
+    assert config["palette"] == "arctic"
+
+
+def test_parse_deck_config_empty():
+    config = SlidesAgent.parse_deck_config("No config here")
+    assert config == {}

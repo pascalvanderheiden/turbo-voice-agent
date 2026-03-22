@@ -27,6 +27,10 @@ async def test_create_and_list_slides(slides_service):
     result = await slides_service.create(SlidesCreate(title="Test Deck", description="A test"))
     assert result.id
     assert result.title == "Test Deck"
+    # Verify deck config defaults
+    assert result.theme == "shadcn/ui"
+    assert result.appearance == "dark"
+    assert result.palette == "arctic"
     items = await slides_service.list()
     assert len(items) == 1
 
@@ -37,12 +41,26 @@ async def test_get_update_delete_slides(slides_service):
     fetched = await slides_service.get_by_id(created.id)
     assert fetched.title == "Deck"
 
-    updated = await slides_service.update(created.id, SlidesUpdate(title="Updated Deck"))
+    updated = await slides_service.update(created.id, SlidesUpdate(title="Updated Deck", subtitle="Sub", icon="rocket", theme="custom", appearance="light", palette="ocean"))
     assert updated.title == "Updated Deck"
+    assert updated.subtitle == "Sub"
+    assert updated.icon == "rocket"
+    assert updated.theme == "custom"
+    assert updated.appearance == "light"
+    assert updated.palette == "ocean"
 
     deleted = await slides_service.delete(created.id)
     assert deleted is True
     assert await slides_service.get_by_id(created.id) is None
+
+
+@pytest.mark.asyncio
+async def test_slides_pptx_attachments(slides_service):
+    result = await slides_service.create(SlidesCreate(
+        title="With Template",
+        attachments=["uploads/template.pptx"],
+    ))
+    assert result.attachments == ["uploads/template.pptx"]
 
 
 @pytest.mark.asyncio

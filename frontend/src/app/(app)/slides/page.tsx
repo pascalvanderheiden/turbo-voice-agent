@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconPresentation, IconX, IconFileTypePdf, IconPlayerPlay } from "@tabler/icons-react";
+import { IconPlus, IconPencil, IconTrash, IconSparkles, IconArrowLeft, IconPresentation, IconX, IconPlayerPlay } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { slidesApi, devApi, getUploadUrl, type SlidesItem, type SlidesCreate, type Research } from "@/lib/api";
 import { ImageUpload } from "@/components/ui/image-upload";
@@ -55,9 +55,9 @@ export default function SlidesPage() {
     }
   };
 
-  const handleDetailFilesChange = async (item: SlidesItem, images: string[], attachments: string[]) => {
+  const handleDetailFilesChange = async (item: SlidesItem, attachments: string[]) => {
     try {
-      const updated = await slidesApi.update(item.id, { images, attachments });
+      const updated = await slidesApi.update(item.id, { attachments });
       setSlides((prev) => prev.map((s) => (s.id === item.id ? updated : s)));
       setViewSlides(updated);
     } catch {
@@ -414,8 +414,8 @@ export default function SlidesPage() {
         isMobile ? (
           <MobileBottomSheet open={showCreate} onClose={() => setShowCreate(false)} title="New Presentation">
             <SlidesForm
-              onSubmit={async (title, description, images, attachments) => {
-                await slidesApi.create({ title, description, images, attachments });
+              onSubmit={async (title, description, attachments) => {
+                await slidesApi.create({ title, description, attachments });
                 toast.success("Presentation created");
                 setShowCreate(false);
                 loadSlides();
@@ -425,8 +425,8 @@ export default function SlidesPage() {
         ) : (
           <SlidesDialog
             onClose={() => setShowCreate(false)}
-            onSubmit={async (title, description, images, attachments) => {
-              await slidesApi.create({ title, description, images, attachments });
+            onSubmit={async (title, description, attachments) => {
+              await slidesApi.create({ title, description, attachments });
               toast.success("Presentation created");
               setShowCreate(false);
               loadSlides();
@@ -442,10 +442,9 @@ export default function SlidesPage() {
             <SlidesForm
               initialTitle={editSlides.title}
               initialDescription={editSlides.description}
-              initialImages={editSlides.images}
               initialAttachments={editSlides.attachments}
-              onSubmit={async (title, description, images, attachments) => {
-                const updated = await slidesApi.update(editSlides.id, { title, description, images, attachments });
+              onSubmit={async (title, description, attachments) => {
+                const updated = await slidesApi.update(editSlides.id, { title, description, attachments });
                 toast.success("Presentation updated");
                 setEditSlides(null);
                 setSlides((prev) => prev.map((s) => (s.id === editSlides.id ? updated : s)));
@@ -457,11 +456,10 @@ export default function SlidesPage() {
           <SlidesDialog
             initialTitle={editSlides.title}
             initialDescription={editSlides.description}
-            initialImages={editSlides.images}
             initialAttachments={editSlides.attachments}
             onClose={() => setEditSlides(null)}
-            onSubmit={async (title, description, images, attachments) => {
-              const updated = await slidesApi.update(editSlides.id, { title, description, images, attachments });
+            onSubmit={async (title, description, attachments) => {
+              const updated = await slidesApi.update(editSlides.id, { title, description, attachments });
               toast.success("Presentation updated");
               setEditSlides(null);
               setSlides((prev) => prev.map((s) => (s.id === editSlides.id ? updated : s)));
@@ -505,46 +503,36 @@ export default function SlidesPage() {
 
 /* ── Sub-components ── */
 
-function SlidesFilesSection({ slides, onFilesChange }: { slides: SlidesItem; onFilesChange: (item: SlidesItem, images: string[], attachments: string[]) => Promise<void> }) {
+function SlidesFilesSection({ slides, onFilesChange }: { slides: SlidesItem; onFilesChange: (item: SlidesItem, attachments: string[]) => Promise<void> }) {
   return (
     <div className="space-y-3">
-      {slides.images?.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {slides.images.map((url, i) => (
-            <div key={`img-${i}`} className="relative group w-16 h-16 rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]">
-              <img src={getUploadUrl(url)} alt="" className="w-full h-full object-cover" />
-            </div>
-          ))}
-        </div>
-      )}
       {slides.attachments?.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {slides.attachments.map((url, i) => {
-            const name = url.split("/").pop() || "document.pdf";
+            const name = url.split("/").pop() || "template.pptx";
             const shortName = name.length > 24 ? name.slice(0, 21) + "..." : name;
             return (
-              <a key={`pdf-${i}`} href={getUploadUrl(url)} target="_blank" rel="noopener noreferrer"
+              <a key={`pptx-${i}`} href={getUploadUrl(url)} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-xs hover:border-[var(--color-brand-pink)]/30 transition-colors">
-                <IconFileTypePdf size={14} className="text-red-400 shrink-0" />
+                <IconPresentation size={14} className="text-blue-400 shrink-0" />
                 <span className="text-[var(--color-text-secondary)] truncate max-w-[140px]">{shortName}</span>
               </a>
             );
           })}
         </div>
       )}
-      <ImageUpload images={slides.images || []} onChange={(images) => onFilesChange(slides, images, slides.attachments || [])}
-        attachments={slides.attachments || []} onAttachmentsChange={(attachments) => onFilesChange(slides, slides.images || [], attachments)} acceptPdf />
+      <ImageUpload images={[]} onChange={() => {}}
+        attachments={slides.attachments || []} onAttachmentsChange={(attachments) => onFilesChange(slides, attachments)} acceptPdf={false} accept=".pptx" label="PowerPoint Template" />
     </div>
   );
 }
 
-function SlidesForm({ initialTitle = "", initialDescription = "", initialImages = [] as string[], initialAttachments = [] as string[], onSubmit }: {
-  initialTitle?: string; initialDescription?: string; initialImages?: string[]; initialAttachments?: string[];
-  onSubmit: (title: string, description: string, images: string[], attachments: string[]) => Promise<void>;
+function SlidesForm({ initialTitle = "", initialDescription = "", initialAttachments = [] as string[], onSubmit }: {
+  initialTitle?: string; initialDescription?: string; initialAttachments?: string[];
+  onSubmit: (title: string, description: string, attachments: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
-  const [images, setImages] = useState<string[]>(initialImages);
   const [attachments, setAttachments] = useState<string[]>(initialAttachments);
   const [submitting, setSubmitting] = useState(false);
 
@@ -554,8 +542,11 @@ function SlidesForm({ initialTitle = "", initialDescription = "", initialImages 
         className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors min-h-[44px]" />
       <textarea placeholder="Describe your presentation — topic, audience, key points..." value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
         className="w-full px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none" />
-      <ImageUpload images={images} onChange={setImages} attachments={attachments} onAttachmentsChange={setAttachments} acceptPdf />
-      <button onClick={async () => { if (!title.trim()) return; setSubmitting(true); try { await onSubmit(title, description, images, attachments); } catch { toast.error("Failed"); } finally { setSubmitting(false); } }}
+      <div>
+        <label className="text-xs text-[var(--color-text-muted)] mb-1 block">PowerPoint Template (.pptx)</label>
+        <ImageUpload images={[]} onChange={() => {}} attachments={attachments} onAttachmentsChange={setAttachments} acceptPdf={false} accept=".pptx" label="PowerPoint Template" />
+      </div>
+      <button onClick={async () => { if (!title.trim()) return; setSubmitting(true); try { await onSubmit(title, description, attachments); } catch { toast.error("Failed"); } finally { setSubmitting(false); } }}
         disabled={submitting || !title.trim()}
         className="w-full px-4 py-3 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50 min-h-[44px]">
         {submitting ? "Saving..." : "Save"}
@@ -564,14 +555,13 @@ function SlidesForm({ initialTitle = "", initialDescription = "", initialImages 
   );
 }
 
-function SlidesDialog({ initialTitle = "", initialDescription = "", initialImages = [] as string[], initialAttachments = [] as string[], onClose, onSubmit }: {
-  initialTitle?: string; initialDescription?: string; initialImages?: string[]; initialAttachments?: string[];
+function SlidesDialog({ initialTitle = "", initialDescription = "", initialAttachments = [] as string[], onClose, onSubmit }: {
+  initialTitle?: string; initialDescription?: string; initialAttachments?: string[];
   onClose: () => void;
-  onSubmit: (title: string, description: string, images: string[], attachments: string[]) => Promise<void>;
+  onSubmit: (title: string, description: string, attachments: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
-  const [images, setImages] = useState<string[]>(initialImages);
   const [attachments, setAttachments] = useState<string[]>(initialAttachments);
   const [submitting, setSubmitting] = useState(false);
   const isEdit = !!initialTitle;
@@ -587,10 +577,13 @@ function SlidesDialog({ initialTitle = "", initialDescription = "", initialImage
           className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors" />
         <textarea placeholder="Describe your presentation — topic, audience, key points..." value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
           className="w-full px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] text-sm focus:outline-none focus:border-[var(--color-brand-pink)] transition-colors resize-none" />
-        <ImageUpload images={images} onChange={setImages} attachments={attachments} onAttachmentsChange={setAttachments} acceptPdf />
+        <div>
+          <label className="text-xs text-[var(--color-text-muted)] mb-1 block">PowerPoint Template (.pptx)</label>
+          <ImageUpload images={[]} onChange={() => {}} attachments={attachments} onAttachmentsChange={setAttachments} acceptPdf={false} accept=".pptx" label="PowerPoint Template" />
+        </div>
         <div className="flex gap-3 justify-end">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-white transition-colors">Cancel</button>
-          <button onClick={async () => { if (!title.trim()) return; setSubmitting(true); try { await onSubmit(title, description, images, attachments); } catch { toast.error("Failed"); } finally { setSubmitting(false); } }}
+          <button onClick={async () => { if (!title.trim()) return; setSubmitting(true); try { await onSubmit(title, description, attachments); } catch { toast.error("Failed"); } finally { setSubmitting(false); } }}
             disabled={submitting || !title.trim()}
             className="px-4 py-2 text-sm rounded-[var(--radius-md)] bg-[var(--color-brand-pink)] text-white hover:opacity-90 transition-opacity disabled:opacity-50">
             {submitting ? "Saving..." : isEdit ? "Update" : "Create"}

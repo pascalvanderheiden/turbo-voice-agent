@@ -27,8 +27,12 @@ class InMemorySlidesService(JsonPersistenceMixin):
             title=doc["title"],
             description=doc.get("description", ""),
             sections=doc.get("sections", []),
-            images=doc.get("images", []),
             attachments=doc.get("attachments", []),
+            subtitle=doc.get("subtitle", ""),
+            icon=doc.get("icon", ""),
+            theme=doc.get("theme", "shadcn/ui"),
+            appearance=doc.get("appearance", "dark"),
+            palette=doc.get("palette", "arctic"),
             status=doc.get("status", "draft"),
             refinedDraft=doc.get("refinedDraft"),
             createdAt=doc["createdAt"],
@@ -44,8 +48,12 @@ class InMemorySlidesService(JsonPersistenceMixin):
             "title": data.title,
             "description": data.description,
             "sections": [s.model_dump(by_alias=True) for s in data.sections],
-            "images": data.images,
             "attachments": data.attachments,
+            "subtitle": data.subtitle,
+            "icon": data.icon,
+            "theme": data.theme,
+            "appearance": data.appearance,
+            "palette": data.palette,
             "status": "draft",
             "refinedDraft": None,
             "createdAt": now.isoformat(),
@@ -74,10 +82,18 @@ class InMemorySlidesService(JsonPersistenceMixin):
             doc["description"] = data.description
         if data.sections is not None:
             doc["sections"] = [s.model_dump(by_alias=True) for s in data.sections]
-        if data.images is not None:
-            doc["images"] = data.images
         if data.attachments is not None:
             doc["attachments"] = data.attachments
+        if data.subtitle is not None:
+            doc["subtitle"] = data.subtitle
+        if data.icon is not None:
+            doc["icon"] = data.icon
+        if data.theme is not None:
+            doc["theme"] = data.theme
+        if data.appearance is not None:
+            doc["appearance"] = data.appearance
+        if data.palette is not None:
+            doc["palette"] = data.palette
         doc["updatedAt"] = datetime.now(UTC).isoformat()
         self._save_to_disk()
         logger.info("Updated slides %s (in-memory)", slides_id)

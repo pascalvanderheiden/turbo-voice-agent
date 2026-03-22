@@ -1,35 +1,42 @@
 """Slides Agent — specialist agent for presentation CRUD and refinement."""
 
-import base64
 import json
 import logging
 import os
-from pathlib import Path
 
 from openai import AsyncAzureOpenAI
 
 from app.models.slides import SlidesCreate, SlidesUpdate
 from app.services.memory_slides_service import InMemorySlidesService
-from app.utils.extraction import extract_attachment_context, extract_image_context
+from app.utils.extraction import extract_attachment_context
 
 logger = logging.getLogger(__name__)
 
 REFINE_SYSTEM_PROMPT = (
-    "You are an expert presentation designer and storytelling advisor. "
-    "The user will share a presentation idea with optional images, "
-    "PDF documents, and research findings.\n\n"
-    "Your job is to produce a structured slide deck outline with:\n"
-    "1. **Overview** — A clear one-paragraph summary of the presentation\n"
-    "2. **Slide Sections** — For each slide, provide:\n"
-    "   - **Title**: Clear, concise slide title\n"
-    "   - **Content**: Key points or narrative for the slide (use bullet points)\n"
-    "   - **Notes**: Speaker notes or talking points\n"
-    "3. **Design Recommendations** — Visual style, color palette, imagery suggestions\n"
-    "4. **Flow & Transitions** — How slides connect narratively\n\n"
-    "When PDF content or image descriptions are provided, "
-    "incorporate relevant details and visual style cues into your design.\n"
-    "When research findings are provided, weave key data points into slide content.\n"
-    "Be specific, visual, and presentation-ready. Use markdown formatting."
+    "You are an expert presentation designer. "
+    "The user will share a presentation idea with optional PowerPoint templates and research.\n\n"
+    "Produce a structured output with exactly two sections:\n\n"
+    "## Deck Config\n"
+    "```yaml\n"
+    "title: <presentation title>\n"
+    "subtitle: <short subtitle>\n"
+    "icon: <single emoji>\n"
+    "theme: shadcn/ui\n"
+    "appearance: dark\n"
+    "palette: arctic\n"
+    "```\n\n"
+    "## Slides\n"
+    "A numbered list of slides. Each slide has:\n"
+    "- **Title**: Clear, concise slide title\n"
+    "- **Content**: Exactly 2 sentences maximum — punchy and presentation-ready\n\n"
+    "Example:\n"
+    "1. **Introduction** — GitHub Copilot is an AI-powered coding assistant built into your editor. "
+    "It helps you write code faster by suggesting completions, generating tests, and explaining code.\n\n"
+    "Rules:\n"
+    "- Keep each slide to 2 sentences MAX. Be concise and impactful.\n"
+    "- Do NOT include speaker notes, design recommendations, or flow descriptions.\n"
+    "- When PowerPoint templates or research are provided, incorporate relevant context.\n"
+    "- Use markdown formatting."
 )
 
 
@@ -197,54 +204,42 @@ class SlidesAgent:
             logger.warning("Failed to load research for slides %s", slides_id)
             return ""
 
-    async def _extract_content(self, slides) -> tuple[str, str]:
-        """Extract text from PDF attachments and AI descriptions from images."""
-        import asyncio
+    async def _extract_content(self, slides) -> str:
+        """Extract text from PowerPoint attachments."""
+        attachment_text = await extract_attachment_context(
+            getattr(slides, "attachments", None) or []
+        )
+        return attachment_text
 
-        attachment_task = extract_attachment_context(getattr(slides, "attachments", None) or [])
-        image_task = extract_image_context(getattr(slides, "images", None) or [])
-        attachment_text, image_text = await asyncio.gather(attachment_task, image_task)
-        return attachment_text, image_text
+    @staticmethod
+    def parse_deck_config(refined_draft: str) -> dict:
+        """Extract Deck Config YAML block from refined draft."""
+        import re
+        import yaml
+
+        match = re.search(r"```yaml\s*\n(.*?)```", refined_draft, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            return yaml.safe_load(match.group(1)) or {}
+        except Exception:
+            return {}
 
     async def refine(self, slides) -> str:
-        """Refine a presentation using GPT-5.2 chat completions with PDF/image extraction."""
+        """Refine a presentation using GPT-5.2 chat completions."""
         client = self._get_openai()
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
 
         research_text = await self._gather_research_context(getattr(slides, "id", None))
-        attachment_text, image_text = await self._extract_content(slides)
+        attachment_text = await self._extract_content(slides)
 
         slides_text = f"**Presentation: {slides.title}**\n\n{slides.description}"
         if research_text:
             slides_text += research_text
         if attachment_text:
             slides_text += attachment_text
-        if image_text:
-            slides_text += image_text
 
         content_parts: list[dict] = [{"type": "text", "text": slides_text}]
-
-        if not image_text:
-            upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
-            for img_url in slides.images or []:
-                filename = img_url.split("/")[-1]
-                img_path = upload_dir / filename
-                if img_path.exists():
-                    data = base64.b64encode(img_path.read_bytes()).decode()
-                    ext = filename.rsplit(".", 1)[-1].lower()
-                    mime = {
-                        "png": "image/png",
-                        "jpg": "image/jpeg",
-                        "jpeg": "image/jpeg",
-                        "gif": "image/gif",
-                        "webp": "image/webp",
-                    }.get(ext, "image/png")
-                    content_parts.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{data}"},
-                        }
-                    )
 
         response = await client.chat.completions.create(
             model=deployment,
@@ -264,39 +259,15 @@ class SlidesAgent:
         deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.2")
 
         research_text = await self._gather_research_context(getattr(slides, "id", None))
-        attachment_text, image_text = await self._extract_content(slides)
+        attachment_text = await self._extract_content(slides)
 
         slides_text = f"**Presentation: {slides.title}**\n\n{slides.description}"
         if research_text:
             slides_text += research_text
         if attachment_text:
             slides_text += attachment_text
-        if image_text:
-            slides_text += image_text
 
         content_parts: list[dict] = [{"type": "text", "text": slides_text}]
-
-        if not image_text:
-            upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads"
-            for img_url in slides.images or []:
-                filename = img_url.split("/")[-1]
-                img_path = upload_dir / filename
-                if img_path.exists():
-                    data = base64.b64encode(img_path.read_bytes()).decode()
-                    ext = filename.rsplit(".", 1)[-1].lower()
-                    mime = {
-                        "png": "image/png",
-                        "jpg": "image/jpeg",
-                        "jpeg": "image/jpeg",
-                        "gif": "image/gif",
-                        "webp": "image/webp",
-                    }.get(ext, "image/png")
-                    content_parts.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{data}"},
-                        }
-                    )
 
         stream = await client.chat.completions.create(
             model=deployment,

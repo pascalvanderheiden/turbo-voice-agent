@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     notes.set_notes_service(notes_service)
     ideas.set_brainstorm_service(brainstorm_service, refine_fn=brainstorm_agent.refine, refine_stream_fn=brainstorm_agent.refine_stream)
     ideas.set_idea_research_service(research_service)
-    slides.set_slides_service(slides_service, refine_fn=slides_agent.refine, refine_stream_fn=slides_agent.refine_stream)
+    slides.set_slides_service(slides_service, refine_fn=slides_agent.refine, refine_stream_fn=slides_agent.refine_stream, parse_deck_config_fn=slides_agent.parse_deck_config)
     slides.set_slides_research_service(research_service)
     research.set_research_service(research_service, run_web_search, run_deep_research)
     specs.set_spec_service(

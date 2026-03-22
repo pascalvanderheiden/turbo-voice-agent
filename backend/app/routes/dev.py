@@ -29,6 +29,9 @@ _dev_agent = None
 # Track running pipeline asyncio tasks so they can be cancelled on delete
 _running_pipelines: dict[str, asyncio.Task] = {}  # task_id → asyncio.Task
 
+# Track live preview server processes
+_live_previews: dict[str, dict] = {}  # task_id → {url, sandbox_task_id}
+
 
 def set_dev_service(service: InMemoryDevService, pipeline_fn=None, skills_service=None, cosmos_skills=None, spec_service=None, dev_agent=None) -> None:
     global _dev_service, _pipeline_fn, _skills_service, _cosmos_skills, _spec_service, _dev_agent
@@ -493,3 +496,70 @@ async def stream_debug(task_id: str, request: Request):
             ._pipeline_outputs.keys()
         ),
     }
+
+
+# ── Live preview endpoints ───────────────────────────────────────────────────
+
+
+@router.post("/{task_id}/live")
+async def start_live_preview(task_id: str, request: Request):
+    """Start npm run dev in the sandbox and expose the URL."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service()
+    task = await service.with_user(user_id).get_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.mode != "slides":
+        raise HTTPException(status_code=400, detail="Live preview only available for slides tasks")
+    if task_id in _live_previews:
+        return _live_previews[task_id]
+
+    # Determine workspace path
+    deck_name = task.title.lower().replace(" ", "-")[:30]
+    work_dir = f"/workspace/{task_id}/{deck_name}"
+
+    try:
+        async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=30) as client:
+            resp = await client.post(
+                "/exec",
+                json={
+                    "command": f"cd {work_dir} && npm run dev -- --port 3333",
+                    "args": [],
+                    "workDir": work_dir,
+                    "background": True,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            sandbox_task_id = data.get("taskId", "")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
+
+    live_url = f"{SANDBOX_URL.rstrip('/')}/proxy/3333"
+    preview = {"url": live_url, "sandboxTaskId": sandbox_task_id, "taskId": task_id}
+    _live_previews[task_id] = preview
+    return preview
+
+
+@router.get("/{task_id}/live")
+async def get_live_preview(task_id: str):
+    """Check if a live preview is running for this task."""
+    if task_id not in _live_previews:
+        return {"running": False}
+    return {**_live_previews[task_id], "running": True}
+
+
+@router.delete("/{task_id}/live")
+async def stop_live_preview(task_id: str):
+    """Stop a running live preview."""
+    preview = _live_previews.pop(task_id, None)
+    if not preview:
+        raise HTTPException(status_code=404, detail="No live preview running")
+    sandbox_task_id = preview.get("sandboxTaskId")
+    if sandbox_task_id:
+        try:
+            async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=10) as client:
+                await client.post(f"/kill/{sandbox_task_id}")
+        except Exception:
+            pass
+    return {"stopped": True}

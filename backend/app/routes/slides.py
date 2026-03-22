@@ -11,13 +11,15 @@ router = APIRouter(prefix="/api/slides", tags=["slides"])
 _slides_service = None
 _refine_fn = None
 _refine_stream_fn = None
+_parse_deck_config_fn = None
 
 
-def set_slides_service(service, refine_fn=None, refine_stream_fn=None) -> None:
-    global _slides_service, _refine_fn, _refine_stream_fn
+def set_slides_service(service, refine_fn=None, refine_stream_fn=None, parse_deck_config_fn=None) -> None:
+    global _slides_service, _refine_fn, _refine_stream_fn, _parse_deck_config_fn
     _slides_service = service
     _refine_fn = refine_fn
     _refine_stream_fn = refine_stream_fn
+    _parse_deck_config_fn = parse_deck_config_fn
 
 
 def _get_service():
@@ -44,6 +46,7 @@ async def get_slides(slides_id: str, request: Request):
 @router.post("", response_model=Slides, status_code=201)
 async def create_slides(data: SlidesCreate, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
+    _validate_pptx_attachments(data.attachments)
     slides = await _get_service().with_user(user_id).create(data)
     if slides is None:
         raise HTTPException(status_code=500, detail="Failed to create presentation")
@@ -53,10 +56,24 @@ async def create_slides(data: SlidesCreate, request: Request):
 @router.put("/{slides_id}", response_model=Slides)
 async def update_slides(slides_id: str, data: SlidesUpdate, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
+    if data.attachments is not None:
+        _validate_pptx_attachments(data.attachments)
     slides = await _get_service().with_user(user_id).update(slides_id, data)
     if slides is None:
         raise HTTPException(status_code=404, detail="Presentation not found")
     return slides
+
+
+def _validate_pptx_attachments(attachments: list[str] | None) -> None:
+    """Reject non-.pptx files in attachments."""
+    if not attachments:
+        return
+    for url in attachments:
+        if not url.lower().endswith(".pptx"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only .pptx files are accepted as attachments.",
+            )
 
 
 @router.delete("/{slides_id}", status_code=204)
@@ -65,6 +82,23 @@ async def delete_slides(slides_id: str, request: Request):
     deleted = await _get_service().with_user(user_id).delete(slides_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Presentation not found")
+
+
+async def _apply_deck_config(service, slides_id: str, draft: str) -> None:
+    """Parse Deck Config from refined draft and update the slides model fields."""
+    if not _parse_deck_config_fn:
+        return
+    config = _parse_deck_config_fn(draft)
+    if not config:
+        return
+    update_data = SlidesUpdate(
+        subtitle=config.get("subtitle"),
+        icon=config.get("icon"),
+        theme=config.get("theme"),
+        appearance=config.get("appearance"),
+        palette=config.get("palette"),
+    )
+    await service.update(slides_id, update_data)
 
 
 @router.post("/{slides_id}/refine", response_model=Slides)
@@ -83,7 +117,8 @@ async def refine_slides(slides_id: str, request: Request):
     result = await service.set_refined(slides_id, draft)
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to store refined draft")
-    return result
+    await _apply_deck_config(service, slides_id, draft)
+    return await service.get_by_id(slides_id) or result
 
 
 @router.post("/{slides_id}/refine/stream")
@@ -117,6 +152,7 @@ async def refine_slides_stream(slides_id: str, request: Request):
             yield f"data: {chunk}\n\n"
         full = "".join(collected)
         await service.set_refined(slides_id, full)
+        await _apply_deck_config(service, slides_id, full)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream")

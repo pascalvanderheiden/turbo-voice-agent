@@ -13,6 +13,8 @@ interface ImageUploadProps {
   maxImages?: number;
   maxAttachments?: number;
   acceptPdf?: boolean;
+  accept?: string;
+  label?: string;
 }
 
 function isPdf(url: string): boolean {
@@ -27,6 +29,8 @@ export function ImageUpload({
   maxImages = 5,
   maxAttachments = 5,
   acceptPdf = false,
+  accept: customAccept,
+  label: customLabel,
 }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -39,6 +43,39 @@ export function ImageUpload({
       const fileArray = Array.from(files);
       const isPdfFile = (f: File) =>
         f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+      const isPptxFile = (f: File) =>
+        f.name.toLowerCase().endsWith(".pptx") || f.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+      // Custom accept mode (e.g. .pptx only)
+      if (customAccept) {
+        const attachFiles = customAccept === ".pptx"
+          ? fileArray.filter((f) => isPptxFile(f))
+          : fileArray;
+        const toUpload = attachFiles.slice(0, maxAttachments - attachments.length);
+        if (toUpload.length === 0) {
+          setError(`No valid files. Accepted: ${customAccept}`);
+          return;
+        }
+        setUploading(true);
+        try {
+          const urls: string[] = [];
+          for (const file of toUpload) {
+            const fd = new FormData();
+            fd.append("file", file);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/upload`, { method: "POST", body: fd });
+            if (!res.ok) throw new Error("Upload failed");
+            const data = await res.json();
+            urls.push(data.url || data.path);
+          }
+          onAttachmentsChange?.([...attachments, ...urls]);
+        } catch {
+          setError("Upload failed");
+        } finally {
+          setUploading(false);
+        }
+        return;
+      }
+
       const imageFiles = fileArray.filter((f) => f.type.startsWith("image/"));
       const pdfFiles = acceptPdf ? fileArray.filter((f) => isPdfFile(f) && !f.type.startsWith("image/")) : [];
 
@@ -77,7 +114,7 @@ export function ImageUpload({
         setUploading(false);
       }
     },
-    [images, onChange, attachments, onAttachmentsChange, maxImages, maxAttachments, acceptPdf]
+    [images, onChange, attachments, onAttachmentsChange, maxImages, maxAttachments, acceptPdf, customAccept]
   );
 
   const handleDrop = useCallback(
@@ -99,7 +136,8 @@ export function ImageUpload({
     }
   };
 
-  const acceptTypes = acceptPdf ? "image/*,application/pdf,.pdf" : "image/*";
+  const acceptTypes = customAccept || (acceptPdf ? "image/*,application/pdf,.pdf" : "image/*");
+  const dropLabel = customLabel || (acceptPdf ? "Drop images or PDFs, or click to upload" : "Drop images or click to upload");
   const totalSlots = images.length + attachments.length;
   const maxTotal = maxImages + maxAttachments;
 
@@ -185,7 +223,7 @@ export function ImageUpload({
           ) : (
             <>
               <IconPhoto size={16} />
-              <span>{acceptPdf ? "Drop images or PDFs, or click to upload" : "Drop images or click to upload"}</span>
+              <span>{dropLabel}</span>
             </>
           )}
         </div>

@@ -179,8 +179,12 @@ export interface SlidesItem {
   title: string;
   description: string;
   sections: SlideSection[];
-  images: string[];
   attachments: string[];
+  subtitle: string;
+  icon: string;
+  theme: string;
+  appearance: string;
+  palette: string;
   status: string; // draft | refined
   refinedDraft?: string;
   createdAt: string;
@@ -191,16 +195,24 @@ export interface SlidesCreate {
   title: string;
   description?: string;
   sections?: SlideSection[];
-  images?: string[];
   attachments?: string[];
+  subtitle?: string;
+  icon?: string;
+  theme?: string;
+  appearance?: string;
+  palette?: string;
 }
 
 export interface SlidesUpdate {
   title?: string;
   description?: string;
   sections?: SlideSection[];
-  images?: string[];
   attachments?: string[];
+  subtitle?: string;
+  icon?: string;
+  theme?: string;
+  appearance?: string;
+  palette?: string;
 }
 
 export const slidesApi = {
@@ -488,6 +500,12 @@ export const devApi = {
   unarchive: (id: string): Promise<DevTask> =>
     fetchApi(`/api/dev/${id}/unarchive`, { method: "PATCH" }),
   downloadUrl: (id: string): string => `${API_BASE}/api/dev/${id}/download`,
+  startLive: (id: string): Promise<{ url: string; sandboxTaskId: string; taskId: string }> =>
+    fetchApi(`/api/dev/${id}/live`, { method: "POST" }),
+  getLive: (id: string): Promise<{ running: boolean; url?: string }> =>
+    fetchApi(`/api/dev/${id}/live`),
+  stopLive: (id: string): Promise<{ stopped: boolean }> =>
+    fetchApi(`/api/dev/${id}/live`, { method: "DELETE" }),
 };
 
 /* ── Skills ── */
