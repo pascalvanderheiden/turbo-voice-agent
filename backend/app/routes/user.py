@@ -580,17 +580,29 @@ async def get_profile(request: Request):
 
 @router.patch("/me")
 async def update_profile(request: Request):
-    """Update profile fields (currently only locale)."""
+    """Update profile fields (locale, theme, squadTheme)."""
     user_id, _ = _get_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
     body = await request.json()
+    svc = request.app.state.user_profile_service
+
+    # Handle squadTheme update
+    squad_theme = body.get("squadTheme")
+    if squad_theme is not None:
+        if svc is None:
+            return {"squadTheme": squad_theme}
+        profile = await svc.update_squad_theme(user_id, squad_theme)
+        if profile is None:
+            return JSONResponse(status_code=404, content={"detail": "Profile not found"})
+        return profile
+
+    # Handle locale update (legacy)
     locale = body.get("locale")
     if not locale:
-        return JSONResponse(status_code=400, content={"detail": "locale is required"})
+        return JSONResponse(status_code=400, content={"detail": "locale or squadTheme is required"})
 
-    svc = request.app.state.user_profile_service
     if svc is None:
         return {"locale": locale}
 

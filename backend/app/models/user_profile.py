@@ -17,3 +17,5 @@ class UserProfile(BaseModel):
     githubSandboxConnectedAt: str | None = Field(None, description="ISO timestamp of sandbox token connection")
     # Sandbox config
     sandboxModel: str = Field("claude-sonnet-4", description="Default Copilot CLI model for sandbox")
+    # Squad theme
+    squadTheme: str = Field("Star Wars", description="Theme directive for squad/autopilot prompts")

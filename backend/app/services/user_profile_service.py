@@ -62,6 +62,24 @@ class UserProfileService:
         except Exception:
             return None
 
+    async def update_squad_theme(self, user_id: str, squad_theme: str) -> dict[str, Any] | None:
+        """Update the user's squad theme preference."""
+        try:
+            profile = await self._container.read_item(item=user_id, partition_key=user_id)
+            profile["squadTheme"] = squad_theme
+            await self._container.upsert_item(profile)
+            return profile
+        except Exception:
+            return None
+
+    async def get_squad_theme(self, user_id: str) -> str:
+        """Return the user's squad theme, defaulting to 'Star Wars'."""
+        try:
+            profile = await self._container.read_item(item=user_id, partition_key=user_id)
+            return profile.get("squadTheme", "Star Wars") or "Star Wars"
+        except Exception:
+            return "Star Wars"
+
     async def update_sandbox_token(
         self, user_id: str, token: str | None, connected_at: str | None
     ) -> dict[str, Any] | None:

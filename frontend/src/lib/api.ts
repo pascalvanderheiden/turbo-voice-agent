@@ -608,6 +608,7 @@ export interface UserProfile {
   avatarUrl: string | null;
   profilePhotoUrl: string | null;
   lastLoginAt?: string;
+  squadTheme?: string;
 }
 
 export const profileApi = {

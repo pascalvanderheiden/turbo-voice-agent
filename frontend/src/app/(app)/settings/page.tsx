@@ -15,6 +15,7 @@ import {
   IconUser,
   IconSparkles,
   IconBriefcase,
+  IconPalette,
 } from "@tabler/icons-react";
 import { useTheme } from "next-themes";
 import { useI18n, type Locale } from "@/lib/i18n";
@@ -32,6 +33,7 @@ export default function SettingsPage() {
   const [email, setEmail] = useState("");
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [squadTheme, setSquadTheme] = useState("Star Wars");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Connections
@@ -82,6 +84,7 @@ export default function SettingsPage() {
       const profile = await profileApi.get();
       setDisplayName(profile.displayName || "");
       setEmail(profile.email || "");
+      setSquadTheme(profile.squadTheme || "Star Wars");
     } catch {
       // ignore
     }
@@ -349,9 +352,31 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Connections Section */}
+        {/* Squad Theme */}
+        <div className="mt-4 flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)]">
+          <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] shrink-0">
+            <IconPalette size={16} stroke={1.5} />
+            <span>Squad Theme</span>
+          </div>
+          <input
+            type="text"
+            value={squadTheme}
+            onChange={(e) => setSquadTheme(e.target.value)}
+            onBlur={() => {
+              profileApi.updateProfile({ squadTheme }).catch(() => {});
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                profileApi.updateProfile({ squadTheme }).catch(() => {});
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            placeholder="e.g. Star Wars, Cyberpunk, Retro..."
+            className="flex-1 min-w-0 px-3 py-1 rounded-[var(--radius-md)] text-sm bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-brand-pink)]/50 transition-colors"
+          />
+        </div>
+      </div>
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <div className="flex items-center gap-3 mb-5">
           <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] bg-[var(--color-brand-cyan)]/15">

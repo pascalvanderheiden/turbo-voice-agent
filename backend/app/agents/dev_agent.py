@@ -27,12 +27,7 @@ logger = logging.getLogger(__name__)
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
 
-# Theme directive appended to all autopilot prompts
-_STAR_WARS_THEME = (
-    "\n\nIMPORTANT — Use a Star Wars theme for all visual design, naming, and branding "
-    "throughout the project. Apply Star Wars-inspired colors, typography, imagery, "
-    "and naming conventions where appropriate."
-)
+_DEFAULT_SQUAD_THEME = "Star Wars"
 
 # ── Pipeline output buffers (module-level, keyed by dev task ID) ──────────
 # Stores streaming output entries for the frontend terminal view.
@@ -105,6 +100,7 @@ class DevAgent:
         sandbox_service=None,
         cosmos_skills=None,
         slides_service=None,
+        profile_service=None,
     ):
         self._service = dev_service
         self._spec_service = spec_service
@@ -112,6 +108,7 @@ class DevAgent:
         self._sandbox_service = sandbox_service
         self._cosmos_skills = cosmos_skills
         self._slides_service = slides_service
+        self._profile_service = profile_service
         self._squad_enabled_tasks: dict[str, bool] = {}  # Task-scoped squad flag
 
     @property
@@ -388,7 +385,8 @@ class DevAgent:
         task = await svc.get_by_id(task_id)
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
-        mockup_desc = self._extract_mockup_description(spec_content) + _STAR_WARS_THEME
+        theme_directive = await self._get_squad_theme_directive(user_id)
+        mockup_desc = self._extract_mockup_description(spec_content) + theme_directive
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -514,8 +512,9 @@ class DevAgent:
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
-        foundation_prompt += _STAR_WARS_THEME
-        feature_prompts = [fp + _STAR_WARS_THEME for fp in feature_prompts]
+        theme_directive = await self._get_squad_theme_directive(user_id)
+        foundation_prompt += theme_directive
+        feature_prompts = [fp + theme_directive for fp in feature_prompts]
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -711,7 +710,7 @@ class DevAgent:
         deck_config.setdefault("appearance", "dark")
         deck_config.setdefault("palette", "arctic")
 
-        slides_prompt += _STAR_WARS_THEME
+        slides_prompt += await self._get_squad_theme_directive(user_id)
 
         await svc.set_status(task_id, "running")
 
@@ -935,9 +934,10 @@ class DevAgent:
             stage_name = f"implement-feature-{iteration_index}"
             await svc.set_iteration_stage_status(task_id, iteration_index, stage_name, "running")
             logger.info("Incremental feature implement: task=%s, iter=%d", task_id, iteration_index)
+            theme_directive = await self._get_squad_theme_directive(user_id)
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=propose_instruction + _STAR_WARS_THEME,
+                prompt=propose_instruction + theme_directive,
                 model=model,
                 stage_label=f"feature-{iteration_index}-implement",
                 work_dir=work_dir,
@@ -1949,3 +1949,19 @@ class DevAgent:
             except Exception:
                 logger.debug("Failed to read sandbox config for user %s", user_id)
         return "claude-opus-4.6"
+
+    async def _get_squad_theme_directive(self, user_id: str) -> str:
+        """Build the theme directive string from the user's profile setting."""
+        theme = _DEFAULT_SQUAD_THEME
+        if self._profile_service:
+            try:
+                theme = await self._profile_service.get_squad_theme(user_id)
+            except Exception:
+                logger.debug("Failed to read squad theme for user %s", user_id)
+        if not theme or not theme.strip():
+            return ""
+        return (
+            f"\n\nIMPORTANT — Use a {theme} theme for all visual design, naming, "
+            f"and branding throughout the project. Apply {theme}-inspired colors, "
+            "typography, imagery, and naming conventions where appropriate."
+        )

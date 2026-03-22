@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI):
     slides_agent = SlidesAgent(slides_service, research_service=research_service)
     research_agent = ResearchAgent(research_service)
     spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
-    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills, slides_service=slides_service)
+    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills, slides_service=slides_service, profile_service=app.state.user_profile_service)
     # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
     spec_agent._dev_agent = dev_agent
     skills_agent = SkillsAgent(skills_service, cosmos_skills=cosmos_skills)
