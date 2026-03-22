@@ -462,6 +462,166 @@ class MarketingAgent:
             logger.warning("Could not fetch profile photo for user %s", user_id, exc_info=True)
             return None
 
+    async def _generate_avatar_video(
+        self, narration_text: str, profile_photo: bytes, segment_id: str,
+    ) -> bytes | None:
+        """Generate a talking-head avatar video using Azure Speech Batch Avatar Synthesis.
+
+        Uses the photo avatar feature to animate the profile photo
+        with lip-synced narration from the given text.
+        Returns MP4 video bytes or None if avatar generation is unavailable/fails.
+        """
+        import aiohttp
+        import uuid
+
+        region = os.environ.get(
+            "SPEECH_AVATAR_REGION",
+            os.environ.get("SPEECH_REGION", "eastus2"),
+        )
+        speech_key = os.environ.get(
+            "SPEECH_AVATAR_KEY",
+            os.environ.get("SPEECH_API_KEY", ""),
+        )
+
+        # Managed identity fallback
+        if not speech_key:
+            try:
+                from azure.identity.aio import DefaultAzureCredential
+
+                credential = DefaultAzureCredential()
+                try:
+                    token = await credential.get_token(
+                        "https://cognitiveservices.azure.com/.default"
+                    )
+                    speech_key = token.token
+                finally:
+                    await credential.close()
+            except Exception as e:
+                logger.warning("No Speech API key and managed identity failed: %s", e)
+                return None
+
+        if not speech_key:
+            logger.warning("Speech avatar: no API key available, skipping")
+            return None
+
+        # Base64-encode the profile photo for the batch API
+        photo_b64 = base64.b64encode(profile_photo).decode("utf-8")
+
+        # Build SSML with the narration text and a neural voice
+        voice_name = os.environ.get("SPEECH_AVATAR_VOICE", "en-US-AvaMultilingualNeural")
+        ssml = (
+            f"<speak version='1.0' xml:lang='en-US'>"
+            f"<voice name='{voice_name}'>{narration_text}</voice>"
+            f"</speak>"
+        )
+
+        synthesis_id = f"turbo-mkt-{segment_id}-{uuid.uuid4().hex[:8]}"
+        base_url = f"https://{region}.api.cognitive.microsoft.com"
+        api_version = "2024-08-01"
+        create_url = (
+            f"{base_url}/avatar/batchsyntheses/{synthesis_id}?api-version={api_version}"
+        )
+
+        headers = {
+            "Ocp-Apim-Subscription-Key": speech_key,
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "inputKind": "SSML",
+            "inputs": [{"content": ssml}],
+            "avatarConfig": {
+                "talkingAvatarCharacter": "lisa",
+                "talkingAvatarStyle": "graceful-sitting",
+                "videoFormat": "mp4",
+                "videoCodec": "h264",
+                "backgroundColor": "#00000000",
+                "subtitleType": "soft_embedded",
+                "bitrateKbps": 2000,
+            },
+            "properties": {
+                "photoAvatarEnabled": True,
+                "photoAvatarImage": photo_b64,
+            },
+        }
+
+        logger.info(
+            "Creating avatar batch synthesis: %s (voice=%s, text=%d chars)",
+            synthesis_id, voice_name, len(narration_text),
+        )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Create batch synthesis
+                async with session.put(create_url, headers=headers, json=payload) as resp:
+                    if resp.status not in (200, 201, 202):
+                        body = await resp.text()
+                        logger.error(
+                            "Avatar synthesis creation failed: %d - %s",
+                            resp.status, body[:500],
+                        )
+                        return None
+                    result = await resp.json()
+                    logger.info(
+                        "Avatar synthesis created: %s", result.get("status", "unknown"),
+                    )
+
+                # Poll for completion
+                status_url = (
+                    f"{base_url}/avatar/batchsyntheses/{synthesis_id}"
+                    f"?api-version={api_version}"
+                )
+                for poll in range(90):  # 15 min max
+                    await asyncio.sleep(10)
+                    async with session.get(status_url, headers=headers) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.error(
+                                "Avatar poll failed: %d - %s", resp.status, body[:300],
+                            )
+                            return None
+                        st_data = await resp.json()
+
+                    status = st_data.get("status", "").lower()
+                    if status in ("succeeded", "completed"):
+                        logger.info("Avatar synthesis completed: %s", synthesis_id)
+                        break
+                    if status in ("failed", "cancelled"):
+                        logger.error(
+                            "Avatar synthesis %s: %s", status,
+                            st_data.get("properties", {}).get("error", "unknown"),
+                        )
+                        return None
+                else:
+                    logger.error("Avatar synthesis timed out: %s", synthesis_id)
+                    return None
+
+                # Download the result
+                outputs_url = st_data.get("outputs", {}).get("result", "")
+                if not outputs_url:
+                    outputs_url = st_data.get("outputs", {}).get("summary", "")
+
+                if not outputs_url:
+                    logger.error(
+                        "No output URL in avatar synthesis result: %s", st_data,
+                    )
+                    return None
+
+                async with session.get(outputs_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.error("Avatar download failed: %d", resp.status)
+                        return None
+                    video_bytes = await resp.read()
+                    logger.info(
+                        "Avatar video downloaded: %d bytes for %s",
+                        len(video_bytes), synthesis_id,
+                    )
+                    return video_bytes
+
+        except Exception as e:
+            logger.error("Avatar synthesis error: %s", e, exc_info=True)
+            return None
+
     async def _generate_script(self, title: str, spec_content: str, screenshots: list[tuple[str, bytes]], has_profile_photo: bool = False) -> str:
         """Generate a video script with per-segment Sora prompts using GPT-5.2."""
         client = self._get_openai()
@@ -586,6 +746,7 @@ class MarketingAgent:
 
         try:
             clip_paths: list[Path] = []
+            avatar_used = False
             async with aiohttp.ClientSession() as session:
                 for idx, seg in enumerate(segments):
                     seg_path = tmp_dir / f"seg_{idx:03d}.mp4"
@@ -606,14 +767,42 @@ class MarketingAgent:
                         "seconds": 12,
                     }
 
-                    # Attach reference image: profile photo for hook/cta, screenshot for features
-                    input_image = None
                     section = seg.get("section", "").lower()
+
+                    # For HOOK/CTA with profile photo: try animated avatar first
+                    if section in ("hook", "cta") and profile_photo:
+                        narration = seg.get("narration", "")
+                        if narration:
+                            logger.info(
+                                "Segment %d [%s]: trying avatar generation for narration (%d chars)",
+                                idx, section, len(narration),
+                            )
+                            await self._service.set_status(
+                                video_id, "generating",
+                                error=None,
+                                script_content=f"Generating avatar for segment {idx + 1}/{len(segments)}: {section}",
+                            )
+                            avatar_bytes = await self._generate_avatar_video(
+                                narration, profile_photo, f"{video_id[:8]}-{idx}",
+                            )
+                            if avatar_bytes:
+                                seg_path.write_bytes(avatar_bytes)
+                                clip_paths.append(seg_path)
+                                avatar_used = True
+                                logger.info(
+                                    "Segment %d [%s]: avatar video generated (%d bytes)",
+                                    idx, section, len(avatar_bytes),
+                                )
+                                continue  # Skip Sora-2 for this segment
+
+                        logger.info("Segment %d [%s]: avatar unavailable, falling back to Sora-2", idx, section)
+
+                    # Standard Sora-2 generation (for FEATURES, or HOOK/CTA fallback)
+                    input_image = None
                     if section in ("hook", "cta") and profile_photo:
                         input_image = profile_photo
                         logger.info("Segment %d: attaching profile photo as input image", idx)
                     elif screenshots:
-                        # Pick a screenshot (spread across available ones)
                         screenshot_idx = idx % len(screenshots)
                         input_image = screenshots[screenshot_idx][1]
                         logger.info("Segment %d: attaching screenshot '%s' as input image", idx, screenshots[screenshot_idx][0])
@@ -722,8 +911,8 @@ class MarketingAgent:
                 if proc.returncode != 0:
                     raise RuntimeError(f"ffmpeg failed: {proc.stderr[-500:]}")
 
-            # Narrator PIP overlay: professional webcam-style window in bottom-right corner
-            if profile_photo:
+            # Narrator PIP overlay: only if avatar was NOT used (avatar already shows the user)
+            if profile_photo and not avatar_used:
                 logger.info("Applying narrator PIP overlay to composed video...")
                 try:
                     pip_img = _create_narrator_pip(profile_photo, width=240, height=240)

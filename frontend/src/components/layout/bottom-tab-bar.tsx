@@ -17,6 +17,7 @@ import {
   IconVideo,
   IconBolt,
   IconMessageCircle,
+  IconPresentation,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -25,6 +26,7 @@ const menuNav = [
   { href: "/notes", labelKey: "nav.notes", icon: IconNote },
   { href: "/todos", labelKey: "nav.todos", icon: IconChecklist },
   { href: "/ideas", labelKey: "nav.ideas", icon: IconBulb },
+  { href: "/slides", labelKey: "nav.slides", icon: IconPresentation },
   { href: "/research", labelKey: "nav.research", icon: IconSearch },
   { href: "/specs", labelKey: "nav.specs", icon: IconFileCode },
   { href: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },

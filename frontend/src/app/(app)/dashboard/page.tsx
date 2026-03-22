@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconNote, IconMicrophone, IconBolt, IconBulb, IconSearch, IconFileCode, IconCode, IconVideo, IconChecklist } from "@tabler/icons-react";
+import { IconNote, IconMicrophone, IconBolt, IconBulb, IconSearch, IconFileCode, IconCode, IconVideo, IconChecklist, IconPresentation } from "@tabler/icons-react";
 import { useI18n } from "@/lib/i18n";
-import { notesApi, ideasApi, researchApi, specsApi, devApi, marketingApi, todosApi } from "@/lib/api";
+import { notesApi, ideasApi, researchApi, specsApi, devApi, marketingApi, todosApi, slidesApi } from "@/lib/api";
 
 export default function DashboardPage() {
   const { t } = useI18n();
@@ -11,7 +11,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const load = async () => {
-      const [notes, ideas, research, specs, dev, marketing, todos] = await Promise.all([
+      const [notes, ideas, research, specs, dev, marketing, todos, slides] = await Promise.all([
         notesApi.list().then((r) => r.length).catch(() => null),
         ideasApi.list().then((r) => r.length).catch(() => null),
         researchApi.list().then((r) => r.length).catch(() => null),
@@ -19,8 +19,9 @@ export default function DashboardPage() {
         devApi.list().then((r) => r.length).catch(() => null),
         marketingApi.list().then((r) => r.length).catch(() => null),
         todosApi.list().then((r) => r.length).catch(() => null),
+        slidesApi.list().then((r) => r.length).catch(() => null),
       ]);
-      setCounts({ "/notes": notes, "/ideas": ideas, "/research": research, "/specs": specs, "/development": dev, "/marketing": marketing, "/todos": todos });
+      setCounts({ "/notes": notes, "/ideas": ideas, "/research": research, "/specs": specs, "/development": dev, "/marketing": marketing, "/todos": todos, "/slides": slides });
     };
     load();
   }, []);
@@ -29,6 +30,7 @@ export default function DashboardPage() {
     { icon: IconNote, label: t("dashboard.notesLabel"), desc: t("dashboard.notesDesc"), href: "/notes", color: "var(--color-brand-cyan)" },
     { icon: IconChecklist, label: t("dashboard.todosLabel"), desc: t("dashboard.todosDesc"), href: "/todos", color: "var(--color-brand-cyan)" },
     { icon: IconBulb, label: t("dashboard.ideasLabel"), desc: t("dashboard.ideasDesc"), href: "/ideas", color: "var(--color-brand-purple)" },
+    { icon: IconPresentation, label: t("dashboard.slidesLabel"), desc: t("dashboard.slidesDesc"), href: "/slides", color: "var(--color-brand-purple)" },
     { icon: IconSearch, label: t("dashboard.researchLabel"), desc: t("dashboard.researchDesc"), href: "/research", color: "var(--color-brand-cyan)" },
     { icon: IconFileCode, label: t("dashboard.specsLabel"), desc: t("dashboard.specsDesc"), href: "/specs", color: "var(--color-brand-pink)" },
     { icon: IconCode, label: t("dashboard.devLabel"), desc: t("dashboard.devDesc"), href: "/development", color: "var(--color-brand-pink)" },

@@ -425,7 +425,7 @@ export default function AgentsPage() {
                     <button
                       onClick={() => setDeleteConfirm(skill.name)}
                       disabled={deleting === skill.name}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400 transition-all shrink-0"
+                      className="md:opacity-0 md:group-hover:opacity-100 p-1 rounded hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400 transition-all shrink-0"
                       title="Deactivate skill"
                     >
                       {deleting === skill.name ? <IconLoader2 size={13} className="animate-spin" /> : <IconTrash size={13} />}
