@@ -1179,9 +1179,14 @@ class DevAgent:
                                     rounded = int(parsed_premium) if parsed_premium == int(parsed_premium) else int(parsed_premium) + 1
                                     if rounded > 0:
                                         try:
-                                            svc = self._service
-                                            if hasattr(svc, "add_premium_requests"):
-                                                await svc.add_premium_requests(
+                                            pr_svc = (
+                                                self._service.with_user(self._current_user_id)
+                                                if hasattr(self, "_current_user_id")
+                                                and self._current_user_id
+                                                else self._service
+                                            )
+                                            if hasattr(pr_svc, "add_premium_requests"):
+                                                await pr_svc.add_premium_requests(
                                                     task_id, rounded,
                                                 )
                                         except Exception:
@@ -1498,6 +1503,7 @@ class DevAgent:
     ) -> int:
         """Fallback polling when SSE fails."""
         start = time.monotonic()
+        consecutive_404s = 0
         async with httpx.AsyncClient(timeout=15.0) as client:
             while time.monotonic() - start < remaining_timeout:
                 await asyncio.sleep(3)
@@ -1505,8 +1511,26 @@ class DevAgent:
                     resp = await client.get(
                         f"{SANDBOX_URL}/tasks/{sandbox_task_id}/status"
                     )
+                    if resp.status_code == 404:
+                        consecutive_404s += 1
+                        logger.warning(
+                            "Sandbox task %s not found (attempt %d) [%s]",
+                            sandbox_task_id, consecutive_404s, stage_label,
+                        )
+                        # Task gone — sandbox likely restarted, treat as failure
+                        if consecutive_404s >= 3:
+                            logger.error(
+                                "Sandbox task %s gone after %d 404s — "
+                                "sandbox likely restarted [%s]",
+                                sandbox_task_id, consecutive_404s, stage_label,
+                            )
+                            return 1  # Non-zero exit = failure
+                        continue
                     resp.raise_for_status()
                     status = resp.json()
+                    consecutive_404s = 0  # Reset on success
+                except httpx.HTTPStatusError:
+                    continue
                 except Exception:
                     continue
 

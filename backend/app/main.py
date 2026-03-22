@@ -227,6 +227,30 @@ async def lifespan(app: FastAPI):
             marketing_service=marketing_service,
         )
 
+    # Recovery: mark any "running" dev-tasks as failed (orphaned by container restart)
+    if dev_service and hasattr(dev_service, "_container"):
+        try:
+            from azure.cosmos import exceptions as cosmos_exc
+
+            query = "SELECT c.id, c.userId FROM c WHERE c.status = 'running'"
+            items = dev_service._container.query_items(query, enable_cross_partition_query=True)
+            recovered = 0
+            async for item in items:
+                uid = item.get("userId")
+                tid = item.get("id")
+                if uid and tid:
+                    try:
+                        svc = dev_service.with_user(uid)
+                        await svc.set_status(tid, "failed")
+                        recovered += 1
+                        logger.warning("Recovered orphaned running task %s → failed", tid)
+                    except Exception:
+                        logger.warning("Failed to recover task %s", tid)
+            if recovered:
+                logger.info("Recovered %d orphaned running dev-tasks on startup", recovered)
+        except Exception:
+            logger.debug("Dev-task recovery skipped (non-fatal)")
+
     yield
 
     # Shutdown
