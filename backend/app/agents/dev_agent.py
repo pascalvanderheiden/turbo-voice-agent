@@ -769,8 +769,8 @@ class DevAgent:
                 model=model,
                 stage_label="slides",
                 work_dir=work_dir,
-                timeout=600,
-                stall_timeout=300,
+                timeout=2400,
+                stall_timeout=600,
                 autopilot=True,
             )
 
@@ -817,8 +817,8 @@ class DevAgent:
                 model=model,
                 stage_label="export",
                 work_dir=work_dir,
-                timeout=300,
-                stall_timeout=180,
+                timeout=600,
+                stall_timeout=300,
                 continue_session=True,
                 autopilot=True,
             )
