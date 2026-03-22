@@ -760,7 +760,8 @@ export default function DevTaskDetailPage() {
         )}
       </div>
 
-      {/* Marketing Videos */}
+      {/* Marketing Videos (not shown for slides mode) */}
+      {task?.mode !== "slides" && (
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-medium text-[var(--color-text-muted)] flex items-center gap-2">
@@ -816,6 +817,7 @@ export default function DevTaskDetailPage() {
           </p>
         )}
       </div>
+      )}
 
       {/* Lightbox */}
       {lightboxSrc && (
