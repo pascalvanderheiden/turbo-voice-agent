@@ -581,7 +581,7 @@ export default function DevTaskDetailPage() {
               </button>
             </div>
           ) : (
-            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(res.url); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || task.status !== "completed"} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(res.url); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "init" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               <IconPlayerPlay size={16} /> {startingLive ? "Starting..." : "Run Live"}
             </button>
           )

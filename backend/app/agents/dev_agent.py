@@ -1159,19 +1159,22 @@ class DevAgent:
                             # Real-time premium request parsing from stream
                             if task_id and prompt and data.strip():
                                 premium_line = re.search(
-                                    r"Total usage est:\s+(\d+)\s+Premium request",
+                                    r"Total usage est:\s+([\d.]+)\s+Premium request",
                                     data.strip(),
                                 )
                                 if premium_line:
-                                    parsed_premium = int(premium_line.group(1))
-                                    try:
-                                        svc = self._service
-                                        if hasattr(svc, "add_premium_requests"):
-                                            await svc.add_premium_requests(
-                                                task_id, parsed_premium,
-                                            )
-                                    except Exception:
-                                        pass
+                                    parsed_premium = float(premium_line.group(1))
+                                    # Round up fractional requests to whole number
+                                    rounded = int(parsed_premium) if parsed_premium == int(parsed_premium) else int(parsed_premium) + 1
+                                    if rounded > 0:
+                                        try:
+                                            svc = self._service
+                                            if hasattr(svc, "add_premium_requests"):
+                                                await svc.add_premium_requests(
+                                                    task_id, rounded,
+                                                )
+                                        except Exception:
+                                            pass
 
                             # Parse squad agent activity from stream
                             if task_id and data.strip():
