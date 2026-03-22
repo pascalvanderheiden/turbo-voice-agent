@@ -35,6 +35,34 @@ const STAGE_META: Record<string, { icon: typeof IconSettingsAutomation; label: s
   export:      { icon: IconFileExport,         label: "Export",      color: "#22C55E" },
 };
 
+function getTaskElapsed(task: DevTask): string | null {
+  let earliest: number | null = null;
+  let latest: number | null = null;
+  for (const it of task.iterations) {
+    for (const s of it.stages) {
+      if (s.startedAt) {
+        const t = new Date(s.startedAt).getTime();
+        if (earliest === null || t < earliest) earliest = t;
+      }
+      if (s.completedAt) {
+        const t = new Date(s.completedAt).getTime();
+        if (latest === null || t > latest) latest = t;
+      }
+    }
+  }
+  if (earliest === null) return null;
+  const end = latest ?? Date.now();
+  const ms = end - earliest;
+  if (ms < 0 || isNaN(ms)) return null;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     pending: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
@@ -136,6 +164,7 @@ function StagePipeline({ task }: { task: DevTask }) {
                 <span key={m.name} className="inline-flex items-center gap-0.5 text-[9px] text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/5 px-1 py-0.5 rounded border border-[var(--color-brand-cyan)]/20">
                   <span>{ROLE_EMOJI[m.role] ?? "👤"}</span>
                   {m.name}
+                  {m.activity && <span className="text-[var(--color-text-muted)] ml-0.5 truncate max-w-[120px]">— {m.activity}</span>}
                 </span>
               ))}
             </div>
@@ -336,9 +365,17 @@ export default function DevelopmentPage() {
                 <StagePipeline task={task} />
 
                 <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--color-border-dark)]">
-                  <span className="text-xs text-[var(--color-text-muted)]">
-                    {new Date(task.createdAt).toLocaleDateString()}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      {new Date(task.createdAt).toLocaleDateString()}
+                    </span>
+                    {getTaskElapsed(task) && (
+                      <span className="text-xs text-[var(--color-text-muted)] flex items-center gap-1">
+                        <IconClock size={12} />
+                        {getTaskElapsed(task)}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     {(task.status === "pending" || task.status === "paused") && (
                       <button
@@ -459,8 +496,7 @@ function CreateDialog({ specs, onClose, onCreate }: { specs: Spec[]; onClose: ()
 
   // Estimate premium requests based on mode, model, and spec features
   // Each pipeline = 4 Copilot CLI calls (propose, apply, archive, screenshots)
-  // Multiplier: Claude Opus = 3 premium per call, others = 1
-  const premiumMultiplier = /opus/i.test(sandboxModel) ? 3 : 1;
+  const premiumMultiplier = 1;
   const modelLabel = sandboxModel.replace("claude-", "").replace("gpt-", "GPT ");
   const selectedSpec = specs.find((s) => s.id === specId);
   const featureCount = selectedSpec

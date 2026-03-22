@@ -428,16 +428,24 @@ function PremiumUsageChart({
   usage: Record<string, number>;
 }) {
   // Build last 6 months of data
-  const months: { key: string; label: string; count: number }[] = [];
+  const allMonths: { key: string; label: string; count: number }[] = [];
   const now = new Date();
-  for (let i = 5; i >= 0; i--) {
+  for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-    months.push({ key, label, count: usage[key] || 0 });
+    const count = usage[key] || 0;
+    if (count > 0) allMonths.push({ key, label, count });
   }
+  // Fallback: show current month if no data
+  if (allMonths.length === 0) {
+    const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const label = now.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    allMonths.push({ key, label, count: 0 });
+  }
+  const months = allMonths;
 
-  const maxCount = Math.max(...months.map((m) => m.count), 1);
+  const maxCount = Math.max(...months.map((m) => m.count), 2000);
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
@@ -490,7 +498,6 @@ function PremiumUsageChart({
 
       <p className="text-xs text-[var(--color-text-muted)] mt-4">
         Monthly premium request usage from sandbox Copilot CLI tasks.
-        Opus models count as 3× per request.
       </p>
     </div>
   );

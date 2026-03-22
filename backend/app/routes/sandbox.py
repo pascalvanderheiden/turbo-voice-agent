@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.agents.dev_agent import _active_sandbox_tasks
 from app.models.sandbox import SandboxConfig
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,12 @@ async def get_sandbox_status(request: Request):
 
     result = state if isinstance(state, dict) else state.model_dump()
     result["status"] = live_status
-    result["activeTasks"] = active_tasks
+
+    # Use backend pipeline count (not sandbox internal count)
+    from app.routes.dev import _running_pipelines
+
+    active_pipeline_count = len(_running_pipelines)
+    result["activeTasks"] = active_pipeline_count
     result["premiumRequests"] = premium_requests
     result["githubConnected"] = github_connected
     return result
@@ -192,6 +198,8 @@ async def stop_sandbox(request: Request):
                         pass
     except Exception as exc:
         logger.warning("Failed to stop sandbox tasks: %s", exc)
+
+    _active_sandbox_tasks.clear()
     return {"stopped": True, "killedTasks": killed, "cancelledPipelines": cancelled}
 
 

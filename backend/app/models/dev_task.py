@@ -71,6 +71,7 @@ class SquadMember(BaseModel):
     role: str
     expertise: str = ""
     status: str = "idle"  # idle | working | done
+    activity: str = ""  # current task description from squad stream
 
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 

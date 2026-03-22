@@ -57,24 +57,6 @@ _QUESTION_PATTERNS = [
 ]
 _QUESTION_RE = re.compile("|".join(_QUESTION_PATTERNS), re.IGNORECASE)
 
-# Premium request multipliers per model tier.
-# Claude Opus models cost 3 premium requests per invocation.
-# GPT-5-class models (except mini/codex) cost 1 premium request.
-# Everything else costs 1 premium request.
-_PREMIUM_MULTIPLIERS: dict[str, int] = {
-    "opus": 3,
-}
-
-
-def _get_premium_multiplier(model: str) -> int:
-    """Return the premium request multiplier for a given model name."""
-    model_lower = model.lower()
-    for pattern, mult in _PREMIUM_MULTIPLIERS.items():
-        if pattern in model_lower:
-            return mult
-    return 1
-
-
 def get_pipeline_output(task_id: str) -> list[dict]:
     """Get the pipeline output buffer for a task (for SSE streaming)."""
     return _pipeline_outputs.get(task_id, [])
@@ -332,6 +314,7 @@ class DevAgent:
         from app.routes.user import get_sandbox_user_token
 
         self._current_gh_token = await get_sandbox_user_token(user_id)
+        self._current_user_id = user_id
 
         if not USE_CLI_SANDBOX:
             logger.warning("CLI sandbox disabled — skipping pipeline for task %s", task_id)
@@ -1069,15 +1052,6 @@ class DevAgent:
                 payload["agent"] = agent
             if autopilot:
                 payload["autopilot"] = True
-            # Track premium request cost for this Copilot CLI invocation
-            premium_cost = _get_premium_multiplier(model)
-            if task_id:
-                try:
-                    svc = self._service
-                    if hasattr(svc, "add_premium_requests"):
-                        await svc.add_premium_requests(task_id, premium_cost)
-                except Exception:
-                    logger.debug("Failed to record premium for task %s", task_id)
         elif command:
             payload["command"] = command
             payload["args"] = args or []
@@ -1209,6 +1183,48 @@ class DevAgent:
                             if data.strip():
                                 last_output_time = now
 
+                            # Parse squad agent activity from stream
+                            if task_id and data.strip():
+                                squad_match = re.search(
+                                    r"(?:●\s+\S+\s+)?(?:\S+\s+)?([A-Z][a-z]+):\s+(.+)",
+                                    data.strip(),
+                                )
+                                if squad_match:
+                                    agent_name = squad_match.group(1)
+                                    agent_task = squad_match.group(2).strip()
+                                    # Known squad member names from _generate_squad_team
+                                    known_names = {
+                                        "Hicks", "Ripley", "Dallas", "Lambert", "Parker",
+                                        "Scribe", "Trinity", "Morpheus", "Neo", "Tank",
+                                        "Switch",
+                                    }
+                                    if agent_name in known_names:
+                                        try:
+                                            svc = (
+                                                self._service.with_user(self._current_user_id)
+                                                if hasattr(self, "_current_user_id")
+                                                and self._current_user_id
+                                                else self._service
+                                            )
+                                            t = await svc.get_by_id(task_id)
+                                            if t and t.squad:
+                                                for m in t.squad.team_members:
+                                                    if m.name == agent_name:
+                                                        m.status = "working"
+                                                        m.activity = agent_task
+                                                        break
+                                                await svc.set_squad(
+                                                    task_id,
+                                                    {
+                                                        "teamMembers": [
+                                                            m.model_dump(by_alias=True)
+                                                            for m in t.squad.team_members
+                                                        ]
+                                                    },
+                                                )
+                                        except Exception:
+                                            pass  # Non-fatal: squad update is best-effort
+
                             # Detect questions and auto-answer
                             if _QUESTION_RE.search(accumulated_text.strip()):
                                 await self._auto_answer(
@@ -1243,6 +1259,18 @@ class DevAgent:
             )
 
         combined = "".join(output_lines)
+
+        # Parse premium requests from CLI output (e.g. "Total usage est:    3 Premium requests")
+        if prompt and task_id:
+            premium_match = re.search(r"Total usage est:\s+(\d+)\s+Premium request", combined)
+            parsed_premium = int(premium_match.group(1)) if premium_match else 1
+            try:
+                svc = self._service
+                if hasattr(svc, "add_premium_requests"):
+                    await svc.add_premium_requests(task_id, parsed_premium)
+            except Exception:
+                logger.debug("Failed to record premium for task %s", task_id)
+
         # Clear active sandbox task tracking
         _active_sandbox_tasks.pop(task_id, None)
         logger.info(

@@ -428,6 +428,7 @@ export interface SquadMember {
   role: string;
   expertise: string;
   status: string; // idle | working | done
+  activity?: string;
 }
 
 export interface SquadInfo {

@@ -24,6 +24,7 @@ import {
   IconUsersGroup,
   IconCode,
   IconPresentation,
+  IconSparkles,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -466,6 +467,11 @@ function StatusPanel({ squad, taskStatus }: { squad?: SquadInfo; taskStatus?: st
                   <span className="text-[10px] text-[var(--color-text-muted)] leading-tight block truncate">
                     {m.role} · {m.expertise}
                   </span>
+                  {m.activity && m.status === "working" && (
+                    <span className="text-[10px] text-[var(--color-brand-cyan)] leading-tight block truncate mt-0.5">
+                      {m.activity}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
@@ -581,7 +587,15 @@ export default function DevTaskDetailPage() {
               {task.mode === "sequential" ? "Sequential" : task.mode === "slides" ? "Slidedeck" : "Mockup"}
             </span>
           </div>
-          <p className="text-sm text-[var(--color-text-muted)]">Created {new Date(task.createdAt).toLocaleString()}</p>
+          <div className="flex items-center gap-3 text-sm text-[var(--color-text-muted)]">
+            <span>Created {new Date(task.createdAt).toLocaleString()}</span>
+            {(task.premiumRequests ?? 0) > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-pink-500/10 text-[var(--color-brand-pink)] border-pink-500/20">
+                <IconSparkles size={10} stroke={1.5} />
+                {task.premiumRequests} premium
+              </span>
+            )}
+          </div>
           {task.skillIds && task.skillIds.length > 0 && (
             <div className="flex items-center gap-1.5 mt-1">
               <span className="text-[10px] text-[var(--color-text-muted)]">Skills:</span>
