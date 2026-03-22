@@ -35,6 +35,10 @@ class EntraAuthMiddleware(BaseHTTPMiddleware):
         if path in SKIP_PATHS or any(path.startswith(p) for p in SKIP_PREFIXES):
             return await call_next(request)
 
+        # Live preview proxy — opened in new tab without auth headers
+        if "/preview/" in path and path.startswith("/api/dev/"):
+            return await call_next(request)
+
         # Auth disabled for local dev
         if os.environ.get("AUTH_DISABLED", "").lower() == "true":
             request.state.user_id = MOCK_USER["oid"]

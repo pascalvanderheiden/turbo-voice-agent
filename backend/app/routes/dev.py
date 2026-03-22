@@ -6,7 +6,7 @@ import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.models.dev_task import DevTask, DevTaskCreate
@@ -523,7 +523,7 @@ async def stream_debug(task_id: str, request: Request):
 
 @router.post("/{task_id}/live")
 async def start_live_preview(task_id: str, request: Request):
-    """Start npm run dev in the sandbox and expose the URL."""
+    """Start npm run dev in the sandbox and return a proxy URL."""
     user_id = getattr(request.state, "user_id", "default-user")
     service = _get_service()
     task = await service.with_user(user_id).get_by_id(task_id)
@@ -541,21 +541,21 @@ async def start_live_preview(task_id: str, request: Request):
     try:
         async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=30) as client:
             resp = await client.post(
-                "/exec",
+                "/tasks",
                 json={
                     "command": f"cd {work_dir} && npm run dev -- --port 3333",
                     "args": [],
                     "workDir": work_dir,
-                    "background": True,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
-            sandbox_task_id = data.get("taskId", "")
+            sandbox_task_id = data.get("id", "")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 
-    live_url = f"{SANDBOX_URL.rstrip('/')}/proxy/3333"
+    # URL goes through our own backend proxy → sandbox proxy → localhost:3333
+    live_url = f"/api/dev/{task_id}/preview/"
     preview = {"url": live_url, "sandboxTaskId": sandbox_task_id, "taskId": task_id}
     _live_previews[task_id] = preview
     return preview
@@ -579,7 +579,49 @@ async def stop_live_preview(task_id: str):
     if sandbox_task_id:
         try:
             async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=10) as client:
-                await client.post(f"/kill/{sandbox_task_id}")
+                await client.delete(f"/tasks/{sandbox_task_id}")
         except Exception:
             pass
     return {"stopped": True}
+
+
+@router.get("/{task_id}/preview/{path:path}")
+async def proxy_live_preview(task_id: str, path: str, request: Request):
+    """Reverse proxy: voice.turboagent.nl → backend → sandbox → localhost:3333."""
+    if task_id not in _live_previews:
+        raise HTTPException(status_code=404, detail="No live preview running for this task")
+
+    target_url = f"{SANDBOX_URL.rstrip('/')}/proxy/3333/{path}"
+    query = str(request.url.query)
+    if query:
+        target_url += f"?{query}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers={
+                    k: v for k, v in request.headers.items()
+                    if k.lower() not in ("host", "authorization")
+                },
+                content=await request.body() if request.method in ("POST", "PUT", "PATCH") else None,
+            )
+            # Strip hop-by-hop headers
+            excluded = {"transfer-encoding", "connection", "keep-alive"}
+            headers = {
+                k: v for k, v in resp.headers.items()
+                if k.lower() not in excluded
+            }
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=headers,
+            )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=502,
+            detail="Dev server not reachable — it may still be starting up. Try again in a few seconds.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Proxy error: {e}")

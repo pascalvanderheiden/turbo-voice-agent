@@ -28,7 +28,7 @@ import {
   IconExternalLink,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
+import { devApi, marketingApi, API_BASE, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
@@ -573,7 +573,7 @@ export default function DevTaskDetailPage() {
         {task.mode === "slides" && (
           liveUrl ? (
             <div className="flex items-center gap-2">
-              <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
+              <a href={`${API_BASE}${liveUrl}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
                 <IconExternalLink size={16} /> Open Live
               </a>
               <button onClick={async () => { try { await devApi.stopLive(task.id); setLiveUrl(null); toast.success("Live preview stopped"); } catch { toast.error("Failed to stop"); } }} className="px-3 py-2 rounded-[var(--radius-md)] text-sm text-red-400 bg-red-500/10 hover:bg-red-500/20 transition-colors">

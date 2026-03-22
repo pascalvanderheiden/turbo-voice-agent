@@ -2,6 +2,8 @@ import { getMsalInstance, loginScopes } from "./msal-config";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export { API_BASE };
+
 export async function getAccessToken(): Promise<string | null> {
   const clientId = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID;
   if (!clientId) return null;

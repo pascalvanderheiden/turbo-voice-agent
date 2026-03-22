@@ -297,6 +297,45 @@ app.get("/workspace/archive", (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+
+// ── Reverse proxy for dev server preview ─────────────────────────────
+// Forwards /proxy/:port/* to http://localhost:{port}/* so the backend
+// can proxy slides preview traffic through the sandbox.
+const http = require("http");
+
+app.all("/proxy/:targetPort/*", (req, res) => {
+  const targetPort = parseInt(req.params.targetPort, 10);
+  if (isNaN(targetPort) || targetPort < 1024 || targetPort > 65535) {
+    return res.status(400).json({ error: "Invalid port" });
+  }
+  const targetPath = "/" + (req.params[0] || "");
+  const search = req._parsedUrl.search || "";
+
+  const options = {
+    hostname: "127.0.0.1",
+    port: targetPort,
+    path: targetPath + search,
+    method: req.method,
+    headers: { ...req.headers, host: `127.0.0.1:${targetPort}` },
+  };
+  // Remove express-specific headers that confuse upstream
+  delete options.headers["accept-encoding"];
+
+  const proxyReq = http.request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+
+  proxyReq.on("error", (err) => {
+    console.log(`[proxy] Error forwarding to port ${targetPort}: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(502).json({ error: `Dev server not reachable on port ${targetPort}` });
+    }
+  });
+
+  req.pipe(proxyReq, { end: true });
+});
+
 app.listen(port, () => {
   console.log(`Copilot CLI Sandbox listening on port ${port} (model: ${DEFAULT_MODEL})`);
 });
