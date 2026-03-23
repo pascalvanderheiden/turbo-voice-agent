@@ -367,8 +367,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 function StatusPanel({ squad, taskStatus }: { squad?: SquadInfo; taskStatus?: string; mode?: string }) {
   const hasSquad = squad?.teamMembers?.length;
-  const isRunning = taskStatus === "running";
-  if (!hasSquad && !isRunning) return null;
+  if (!hasSquad) return null;
 
   const workingMembers = squad?.teamMembers?.filter(m => m.status === "working") ?? [];
 
