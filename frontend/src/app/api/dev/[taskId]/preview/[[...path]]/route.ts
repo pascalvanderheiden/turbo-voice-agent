@@ -12,9 +12,13 @@ export async function GET(
   const target = `${API_URL}/api/dev/${taskId}/preview/${trailing}${search}`;
 
   try {
-    const resp = await fetch(target, {
-      headers: { "accept": request.headers.get("accept") || "*/*" },
-    });
+    const fwdHeaders: Record<string, string> = {
+      accept: request.headers.get("accept") || "*/*",
+    };
+    const auth = request.headers.get("authorization");
+    if (auth) fwdHeaders["authorization"] = auth;
+
+    const resp = await fetch(target, { headers: fwdHeaders });
     const body = await resp.arrayBuffer();
     const headers = new Headers();
     for (const key of ["content-type", "cache-control", "etag"]) {

@@ -584,10 +584,15 @@ async def start_live_preview(task_id: str, request: Request):
 
     try:
         async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=30) as client:
+            # Start dev server — try slidev directly since create-deckio may not
+            # configure npm scripts. Use port 3333 to avoid conflicts.
             resp = await client.post(
                 "/tasks",
                 json={
-                    "command": f"cd {work_dir} && npm run dev -- --port 3333",
+                    "command": (
+                        f"cd {work_dir}"
+                        " && (npx slidev --port 3333 --remote 2>&1 || npm run dev -- --port 3333 2>&1)"
+                    ),
                     "args": [],
                     "workDir": work_dir,
                 },
@@ -596,8 +601,20 @@ async def start_live_preview(task_id: str, request: Request):
             data = resp.json()
             sandbox_task_id = data.get("id", "")
 
-        # Give the dev server a few seconds to start up
-        await asyncio.sleep(4)
+        # Wait for dev server to become responsive
+        ready = False
+        for _ in range(6):
+            await asyncio.sleep(3)
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    probe = await client.get(f"{SANDBOX_URL}/proxy/3333/")
+                    if probe.status_code < 500:
+                        ready = True
+                        break
+            except Exception:
+                pass
+        if not ready:
+            logger.warning("Dev server not responsive after 18s for task %s", task_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 

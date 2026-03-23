@@ -441,6 +441,7 @@ export default function DevTaskDetailPage() {
   const [marketingVideos, setMarketingVideos] = useState<MarketingVideo[]>([]);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [startingLive, setStartingLive] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const { t } = useI18n();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -461,6 +462,26 @@ export default function DevTaskDetailPage() {
   }, [id]);
 
   useEffect(() => { loadTask(); }, [loadTask]);
+
+  // Fetch PDF with auth token and create blob URL for iframe
+  const hasPdf = task?.mode === "slides" && !!task?.exportArtifacts?.pdfUrl;
+  useEffect(() => {
+    if (!hasPdf) return;
+    let revoked = false;
+    (async () => {
+      try {
+        const token = await getAccessToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const resp = await fetch(`/api/dev/${id}/pdf`, { headers });
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        if (revoked) return;
+        setPdfBlobUrl(URL.createObjectURL(blob));
+      } catch { /* ignore */ }
+    })();
+    return () => { revoked = true; };
+  }, [hasPdf, id]);
 
   const isRunning = task?.status === "running";
   useEffect(() => {
@@ -571,7 +592,7 @@ export default function DevTaskDetailPage() {
           </a>
         )}
         {task.mode === "slides" && task.exportArtifacts?.pdfUrl && (
-          <a href={devApi.pdfUrl(task.id)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
+          <a href={`/api/dev/${task.id}/pdf`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
             <IconFileTypePdf size={16} /> Download PDF
           </a>
         )}
@@ -693,13 +714,18 @@ export default function DevTaskDetailPage() {
           <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
             <IconFileTypePdf size={14} /> Slide Deck Preview
           </h2>
-          {task.exportArtifacts?.pdfUrl ? (
+          {pdfBlobUrl ? (
             <div className="rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]" style={{ height: "70vh" }}>
               <iframe
-                src={`${devApi.pdfUrl(task.id)}#toolbar=1&navpanes=0`}
+                src={`${pdfBlobUrl}#toolbar=1&navpanes=0`}
                 className="w-full h-full"
                 title="Slides PDF Preview"
               />
+            </div>
+          ) : task.exportArtifacts?.pdfUrl ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <IconLoader2 size={24} className="animate-spin text-[var(--color-brand-pink)] mb-3" />
+              <p className="text-sm text-[var(--color-text-muted)]">Loading PDF...</p>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-10 text-center">

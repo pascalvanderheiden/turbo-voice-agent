@@ -718,15 +718,31 @@ class DevAgent:
 
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init — create-deckio scaffold ──
+        # ── Stage 1: Init — git init + create-deckio scaffold ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
+            # Git init first (required for Copilot CLI to detect .github skills)
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"rm -rf {work_dir} && mkdir -p {work_dir}"
+                    f" && cd {work_dir}"
+                    " && git init -q"
+                    " && git config user.email 'agent@sandbox'"
+                    " && git config user.name 'Sandbox Agent'"
+                    " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
+                ),
+                args=[],
+                stage_label="init-git",
+                work_dir=work_dir,
+                raise_on_error=False,
+            )
+
             # Scaffold the deck project with parsed config
             cfg_title = deck_config["title"].replace("'", "\\'")
             cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
             create_cmd = (
-                f"rm -rf {work_dir} && mkdir -p {work_dir}"
-                f" && cd {work_dir}"
+                f"cd {work_dir}"
                 f" && npx -y create-deckio@latest {deck_name}"
                 f" --title '{cfg_title}'"
                 f" --subtitle '{cfg_subtitle}'"
@@ -746,23 +762,26 @@ class DevAgent:
             # Move into the created deck directory
             work_dir = f"/workspace/{task_id}/{deck_name}"
 
-            # Git init (required for squad / Copilot CLI)
+            # Re-init git in the deck directory and commit scaffolded files
+            # so Copilot CLI picks up the .github/ skills and instructions
             await self._sandbox_exec(
                 task_id=task_id,
                 command=(
                     f"cd {work_dir} && git init -q"
                     " && git config user.email 'agent@sandbox'"
                     " && git config user.name 'Sandbox Agent'"
-                    " && git commit --allow-empty -m 'init' -q"
+                    " && git add -A"
+                    " && git commit -m 'init: scaffold deck project' -q"
                     " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
                 ),
                 args=[],
-                stage_label="init-git",
+                stage_label="init-git-commit",
                 work_dir=work_dir,
                 raise_on_error=False,
             )
 
-            # Slides don't need squad or skills — skip straight to content generation
+            # create-deckio provides .github/ with skills and instructions
+            # that Copilot CLI picks up automatically via git repo detection
 
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
