@@ -268,6 +268,13 @@ app.get("/files/*", (req, res) => {
     return res.status(404).json({ error: "File not found" });
   }
   const data = fs.readFileSync(resolved);
+  // Return raw binary when ?raw=true
+  if (req.query.raw === "true") {
+    const ext = path.extname(resolved).toLowerCase();
+    const mimeTypes = { ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".zip": "application/zip" };
+    res.setHeader("Content-Type", mimeTypes[ext] || "application/octet-stream");
+    return res.send(data);
+  }
   res.json({ name: path.basename(resolved), data: data.toString("base64") });
 });
 

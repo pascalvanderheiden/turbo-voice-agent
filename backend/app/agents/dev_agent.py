@@ -812,17 +812,16 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 3: Export — screenshots via dev server + playwright ──
+        # ── Stage 3: Export — PDF generation ──
         await svc.set_iteration_stage_status(task_id, 0, "export", "running")
         try:
             await self._sandbox_exec(
                 task_id=task_id,
                 prompt=(
-                    "Build the deck and take screenshots of every slide. "
-                    "Run `npm run build` first, then start the dev server with `npm run dev`. "
-                    "Use playwright to navigate each slide route and take a PNG screenshot of each. "
-                    "Save screenshots as slide-1.png, slide-2.png, etc. in the project root. "
-                    "Stop the server when done."
+                    "Export the slide deck to PDF. "
+                    "Run `npx slidev export --output slides.pdf` in the project directory. "
+                    "If slidev export is not available, try `npm run export` or `npm run build`. "
+                    "The output PDF should be saved as slides.pdf in the project root."
                 ),
                 model=model,
                 stage_label="export",
@@ -833,8 +832,11 @@ class DevAgent:
                 autopilot=True,
             )
 
-            # Collect screenshots via existing mechanism
-            await self._collect_screenshots(task_id, work_dir, user_id=user_id)
+            # Upload PDF to blob storage
+            pdf_url = await self._upload_slides_pdf(task_id, work_dir, user_id)
+            if pdf_url:
+                await svc.set_export_artifacts(task_id, {"pdfUrl": pdf_url})
+                logger.info("Slides PDF uploaded for task %s: %s", task_id, pdf_url)
 
             await svc.set_iteration_stage_status(task_id, 0, "export", "completed")
         except Exception as e:
@@ -1584,6 +1586,77 @@ class DevAgent:
                         logger.warning("Failed to fetch screenshot %s: %s", rel, e)
         except Exception as e:
             logger.warning("Failed to list screenshot files: %s", e)
+
+    async def _upload_slides_pdf(
+        self, task_id: str, work_dir: str, user_id: str | None = None
+    ) -> str | None:
+        """Fetch the exported PDF from sandbox and upload to Azure Blob Storage."""
+        storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+        if not storage_account:
+            logger.warning("No AZURE_STORAGE_ACCOUNT_NAME — skipping PDF upload")
+            return None
+
+        try:
+            # Find the PDF file in the sandbox workspace
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{SANDBOX_URL}/files",
+                    params={"glob": "*.pdf", "dir": work_dir},
+                )
+                resp.raise_for_status()
+                files = resp.json().get("files", [])
+
+            if not files:
+                logger.warning("No PDF file found in sandbox for task %s", task_id)
+                return None
+
+            pdf_path = files[0]
+            rel = pdf_path.replace("/workspace/", "", 1)
+
+            # Download PDF binary from sandbox
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                fresp = await client.get(
+                    f"{SANDBOX_URL}/files/{rel}",
+                    params={"raw": "true"},
+                )
+                fresp.raise_for_status()
+                pdf_bytes = fresp.content
+
+            if len(pdf_bytes) < 100:
+                logger.warning("PDF file too small (%d bytes), skipping upload", len(pdf_bytes))
+                return None
+
+            # Upload to blob storage
+            from azure.identity.aio import DefaultAzureCredential
+            from azure.storage.blob.aio import BlobServiceClient
+
+            credential = DefaultAzureCredential()
+            blob_service = BlobServiceClient(
+                account_url=f"https://{storage_account}.blob.core.windows.net",
+                credential=credential,
+            )
+            blob_name = f"exports/{task_id}/slides.pdf"
+            async with blob_service:
+                container = blob_service.get_container_client("exports")
+                try:
+                    await container.create_container()
+                except Exception:
+                    pass  # Already exists
+                blob_client = container.get_blob_client(blob_name)
+                from azure.storage.blob import ContentSettings
+                await blob_client.upload_blob(
+                    pdf_bytes,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type="application/pdf"),
+                )
+
+            pdf_url = f"https://{storage_account}.blob.core.windows.net/exports/{blob_name}"
+            logger.info("Uploaded slides PDF: %s (%d bytes)", pdf_url, len(pdf_bytes))
+            return pdf_url
+
+        except Exception as e:
+            logger.error("Failed to upload slides PDF for task %s: %s", task_id, e)
+            return None
 
     # ── Shared pipeline stages ──────────────────────────────────────
 

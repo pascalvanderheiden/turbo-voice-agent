@@ -502,6 +502,7 @@ export const devApi = {
   unarchive: (id: string): Promise<DevTask> =>
     fetchApi(`/api/dev/${id}/unarchive`, { method: "PATCH" }),
   downloadUrl: (id: string): string => `${API_BASE}/api/dev/${id}/download`,
+  pdfUrl: (id: string): string => `${API_BASE}/api/dev/${id}/pdf`,
   startLive: (id: string): Promise<{ url: string; sandboxTaskId: string; taskId: string }> =>
     fetchApi(`/api/dev/${id}/live`, { method: "POST" }),
   getLive: (id: string): Promise<{ running: boolean; url?: string }> =>

@@ -384,6 +384,50 @@ async def download_archive(task_id: str, request: Request):
         )
 
 
+@router.get("/{task_id}/pdf")
+async def download_pdf(task_id: str, request: Request):
+    """Download the exported PDF from blob storage."""
+    user_id = getattr(request.state, "user_id", "default-user")
+    svc = _get_service().with_user(user_id)
+    task = await svc.get_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    pdf_url = task.export_artifacts.pdf_url if task.export_artifacts else None
+    if not pdf_url:
+        raise HTTPException(status_code=404, detail="No PDF available for this task")
+
+    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+    if not storage_account:
+        raise HTTPException(status_code=500, detail="Storage not configured")
+
+    try:
+        from azure.identity.aio import DefaultAzureCredential
+        from azure.storage.blob.aio import BlobServiceClient
+
+        credential = DefaultAzureCredential()
+        blob_service = BlobServiceClient(
+            account_url=f"https://{storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+        blob_name = f"exports/{task_id}/slides.pdf"
+        async with blob_service:
+            container = blob_service.get_container_client("exports")
+            blob_client = container.get_blob_client(blob_name)
+            download = await blob_client.download_blob()
+            pdf_bytes = await download.readall()
+
+        filename = f"{task.title.replace(' ', '-').lower()[:40]}-slides.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+    except Exception as exc:
+        logger.error("Failed to download PDF: %s", exc)
+        raise HTTPException(status_code=503, detail="Failed to retrieve PDF")
+
+
 @router.get("/{task_id}/stream")
 async def stream_pipeline_output(task_id: str, request: Request):
     """Stream real-time pipeline output as Server-Sent Events.

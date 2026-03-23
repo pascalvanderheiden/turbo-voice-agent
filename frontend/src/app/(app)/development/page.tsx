@@ -354,7 +354,7 @@ export default function DevelopmentPage() {
                       {task.iterations.filter(it => it.stages.every(s => s.status === "completed")).length}/{task.iterations.length} iterations
                     </span>
                   )}
-                  {(premiumCount > 0 || task.status === "running") && (
+                  {(premiumCount > 0 || task.status === "running" || task.status === "completed") && (
                     <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-pink-500/10 text-[var(--color-brand-pink)] border-pink-500/20">
                       <IconSparkles size={10} stroke={1.5} />
                       {premiumCount} requests

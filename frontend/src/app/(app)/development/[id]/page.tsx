@@ -26,6 +26,7 @@ import {
   IconPresentation,
   IconSparkles,
   IconExternalLink,
+  IconFileTypePdf,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -569,6 +570,11 @@ export default function DevTaskDetailPage() {
             <IconDownload size={16} /> {t("dev.download")}
           </a>
         )}
+        {task.mode === "slides" && task.exportArtifacts?.pdfUrl && (
+          <a href={devApi.pdfUrl(task.id)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
+            <IconFileTypePdf size={16} /> Download PDF
+          </a>
+        )}
         {task.mode === "slides" && (
           liveUrl ? (
             <div className="flex items-center gap-2">
@@ -681,7 +687,37 @@ export default function DevTaskDetailPage() {
         </div>
       )}
 
-      {/* Screenshots / Preview */}
+      {/* Slides PDF Viewer / Screenshots */}
+      {task.mode === "slides" ? (
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
+          <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
+            <IconFileTypePdf size={14} /> Slide Deck Preview
+          </h2>
+          {task.exportArtifacts?.pdfUrl ? (
+            <div className="rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]" style={{ height: "70vh" }}>
+              <iframe
+                src={`${devApi.pdfUrl(task.id)}#toolbar=1&navpanes=0`}
+                className="w-full h-full"
+                title="Slides PDF Preview"
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="w-12 h-12 rounded-full bg-[var(--color-bg-tertiary)] flex items-center justify-center mb-3">
+                <IconFileTypePdf size={20} className="text-[var(--color-text-muted)]" />
+              </div>
+              <p className="text-sm text-[var(--color-text-muted)]">No PDF export yet</p>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                {task.status === "completed"
+                  ? "This task completed without generating a PDF. Re-run the pipeline to export."
+                  : task.status === "running"
+                  ? "PDF will appear here once the export stage completes."
+                  : "Run the pipeline to generate the slide deck PDF."}
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
           <IconPhoto size={14} /> {t("dev.screenshots")}
@@ -758,6 +794,7 @@ export default function DevTaskDetailPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* Marketing Videos (not shown for slides mode) */}
       {task?.mode !== "slides" && (
