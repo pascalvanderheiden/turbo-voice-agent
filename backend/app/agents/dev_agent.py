@@ -1207,9 +1207,17 @@ class DevAgent:
 
                             # Parse squad agent activity from stream
                             if task_id and data.strip():
+                                # Match squad names in various stream formats:
+                                #   "Obi-Wan: doing X"
+                                #   "**Obi-Wan** — doing X"
+                                #   "● status Obi-Wan: doing X"
+                                #   "🏗 **Obi-Wan** — doing X"
+                                clean = re.sub(r"\*\*", "", data.strip())
                                 squad_match = re.search(
-                                    r"(?:●\s+\S+\s+)?(?:\S+\s+)?([A-Z][a-z]+):\s+(.+)",
-                                    data.strip(),
+                                    r"(?:●\s+\S+\s+)?(?:\S+\s+)?"
+                                    r"([A-Z][A-Za-z0-9-]+)"
+                                    r"(?:\s*[:\u2014—-]+\s*|\s+)(.+)",
+                                    clean,
                                 )
                                 if squad_match:
                                     agent_name = squad_match.group(1)
