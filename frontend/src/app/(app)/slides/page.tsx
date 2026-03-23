@@ -297,12 +297,12 @@ export default function SlidesPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold">Presentations</h1>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1">Create and manage slide presentations</p>
+          <h1 className="text-2xl font-semibold gradient-brand-text">Presentations</h1>
+          <p className="text-[var(--color-text-secondary)] text-sm mt-1">Create and manage slide presentations</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
