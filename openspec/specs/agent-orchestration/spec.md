@@ -1,38 +1,15 @@
 ## MODIFIED Requirements
 
-### Requirement: Supervisor routes function calls to specialist agents
-The SupervisorAgent SHALL maintain a routing table that maps function names to specialist agents. The routing table SHALL include todo-related functions (`create_todo`, `get_todos`, `get_todo`, `update_todo`, `delete_todo`, `complete_todo`) mapped to the TodoAgent.
+### Requirement: Supervisor routes work agent function calls
+The supervisor SHALL route the `ask_work_question` function call to the Work Agent's `handle_function_call` method, making it accessible from both voice and chat gateways.
 
-#### Scenario: Supervisor routes create_todo to TodoAgent
-- **WHEN** `handle_function_call("create_todo", ...)` is called on the supervisor
-- **THEN** it SHALL route to the TodoAgent and return `(result, "Todo Agent")`
+#### Scenario: Voice user asks work question
+- **WHEN** a voice session triggers a function call with name `ask_work_question`
+- **THEN** the supervisor SHALL route it to `work_agent.handle_function_call()` with the user's context
 
-#### Scenario: Supervisor includes TodoAgent in constructor
-- **WHEN** the SupervisorAgent is initialized in `main.py` lifespan
-- **THEN** it SHALL accept an optional `todo_agent: TodoAgent | None` parameter
+#### Scenario: Chat user asks work question
+- **WHEN** a chat session triggers a function call with name `ask_work_question`
+- **THEN** the supervisor SHALL route it to `work_agent.handle_function_call()` with the user's context
 
-### Requirement: Agent status endpoint includes all agents
-The `/api/agents/status` endpoint SHALL include the TodoAgent in the agents list with its tool definitions and MCP server information.
-
-#### Scenario: Agent status includes todo agent
-- **WHEN** `GET /api/agents/status` is called
-- **THEN** the response SHALL include an agent entry with `{"id": "todo", "name": "Todo Agent", "type": "specialist", "model": "gpt-5.2", "status": "active", "tools": ["create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo"], "mcpServers": ["microsoft-todo"]}`
-
-#### Scenario: Agent graph includes edge from supervisor to todo
-- **WHEN** `GET /api/agents/status` is called
-- **THEN** the edges array SHALL include `{"from": "supervisor", "to": "todo"}`
-
-### Requirement: SupervisorAgent routes to SlidesAgent
-The SupervisorAgent SHALL include SlidesAgent in its agent registry and route function calls matching slides tool names to the SlidesAgent's handle_function_call method.
-
-#### Scenario: Route slides creation
-- **WHEN** a function call with name "create_slides" is received
-- **THEN** SupervisorAgent identifies SlidesAgent as the handler and delegates the call
-
-#### Scenario: Route slides refinement
-- **WHEN** a function call with name "refine_slides" is received
-- **THEN** SupervisorAgent delegates to SlidesAgent.handle_function_call()
-
-#### Scenario: Existing agent routing unchanged
-- **WHEN** a function call for notes, ideas, research, or other existing agents is received
-- **THEN** routing behavior is unchanged, existing agents handle their respective calls
+### Requirement: Supervisor constructor accepts work agent
+The supervisor constructor SHALL accept an optional `work_agent` parameter and include `ask_work_question` in its routing table when provided.
