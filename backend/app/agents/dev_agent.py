@@ -386,7 +386,8 @@ class DevAgent:
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         theme_directive = await self._get_squad_theme_directive(user_id)
-        mockup_desc = self._extract_mockup_description(spec_content) + theme_directive
+        raw_desc = self._extract_mockup_description(spec_content)
+        mockup_desc = f"{theme_directive}\nHere's what I'm building:\n{raw_desc}" if theme_directive else raw_desc
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -501,6 +502,7 @@ class DevAgent:
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
+        await self._deactivate_squad(task_id, user_id)
         await svc.set_status(task_id, "completed")
         logger.info("Mockup pipeline COMPLETED for task %s", task_id)
 
@@ -513,8 +515,9 @@ class DevAgent:
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
         theme_directive = await self._get_squad_theme_directive(user_id)
-        foundation_prompt += theme_directive
-        feature_prompts = [fp + theme_directive for fp in feature_prompts]
+        if theme_directive:
+            foundation_prompt = f"{theme_directive}\nHere's what I'm building:\n{foundation_prompt}"
+            feature_prompts = [f"{theme_directive}\nHere's the next feature:\n{fp}" for fp in feature_prompts]
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -644,6 +647,7 @@ class DevAgent:
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
+        await self._deactivate_squad(task_id, user_id)
         await svc.set_status(task_id, "completed")
         logger.info("Sequential pipeline COMPLETED for task %s", task_id)
 
@@ -937,9 +941,13 @@ class DevAgent:
             await svc.set_iteration_stage_status(task_id, iteration_index, stage_name, "running")
             logger.info("Incremental feature implement: task=%s, iter=%d", task_id, iteration_index)
             theme_directive = await self._get_squad_theme_directive(user_id)
+            feature_prompt = (
+                f"{theme_directive}\nHere's the next feature:\n{propose_instruction}"
+                if theme_directive else propose_instruction
+            )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=propose_instruction + theme_directive,
+                prompt=feature_prompt,
                 model=model,
                 stage_label=f"feature-{iteration_index}-implement",
                 work_dir=work_dir,
@@ -980,6 +988,7 @@ class DevAgent:
                     for it in task.iterations
                 )
                 if all_done:
+                    await self._deactivate_squad(task_id, user_id)
                     await svc.set_status(task_id, "completed")
 
             logger.info("Incremental feature pipeline COMPLETED: task=%s, iter=%d", task_id, iteration_index)
@@ -1345,6 +1354,23 @@ class DevAgent:
             await svc.set_squad(task_id, {"teamMembers": [m.model_dump(by_alias=True) for m in updated_members]})
         except Exception as exc:
             logger.debug("squad status poll failed (non-fatal): %s", exc)
+
+    async def _deactivate_squad(self, task_id: str, user_id: str) -> None:
+        """Mark all squad members as done when pipeline completes."""
+        try:
+            svc = self._service.with_user(user_id)
+            task = await svc.get_by_id(task_id)
+            if not task or not task.squad or not task.squad.team_members:
+                return
+            for m in task.squad.team_members:
+                m.status = "done"
+                m.activity = ""
+            await svc.set_squad(
+                task_id,
+                {"teamMembers": [m.model_dump(by_alias=True) for m in task.squad.team_members]},
+            )
+        except Exception as exc:
+            logger.debug("Failed to deactivate squad for task %s: %s", task_id, exc)
 
     async def _checkpoint(
         self,
@@ -2044,7 +2070,11 @@ class DevAgent:
         return "claude-opus-4.6"
 
     async def _get_squad_theme_directive(self, user_id: str) -> str:
-        """Build the theme directive string from the user's profile setting."""
+        """Build the theme directive string from the user's profile setting.
+
+        The theme is ONLY used for squad team member naming — it must NOT
+        influence the actual application being built.
+        """
         theme = _DEFAULT_SQUAD_THEME
         if self._profile_service:
             try:
@@ -2054,7 +2084,6 @@ class DevAgent:
         if not theme or not theme.strip():
             return ""
         return (
-            f"\n\nIMPORTANT — Use a {theme} theme for all visual design, naming, "
-            f"and branding throughout the project. Apply {theme}-inspired colors, "
-            "typography, imagery, and naming conventions where appropriate."
+            f"\n\nI'm starting a new project. "
+            f"Set up the team with this theme: {theme}"
         )
