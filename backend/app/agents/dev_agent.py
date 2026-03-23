@@ -385,9 +385,7 @@ class DevAgent:
         task = await svc.get_by_id(task_id)
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
-        theme_directive = await self._get_squad_theme_directive(user_id)
-        raw_desc = self._extract_mockup_description(spec_content)
-        mockup_desc = f"{theme_directive}\nHere's what I'm building:\n{raw_desc}" if theme_directive else raw_desc
+        mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -514,10 +512,6 @@ class DevAgent:
 
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
-        theme_directive = await self._get_squad_theme_directive(user_id)
-        if theme_directive:
-            foundation_prompt = f"{theme_directive}\nHere's what I'm building:\n{foundation_prompt}"
-            feature_prompts = [f"{theme_directive}\nHere's the next feature:\n{fp}" for fp in feature_prompts]
         model = await self._get_user_model(user_id)
 
         # Each dev task gets its own dedicated workspace directory
@@ -970,14 +964,9 @@ class DevAgent:
             stage_name = f"implement-feature-{iteration_index}"
             await svc.set_iteration_stage_status(task_id, iteration_index, stage_name, "running")
             logger.info("Incremental feature implement: task=%s, iter=%d", task_id, iteration_index)
-            theme_directive = await self._get_squad_theme_directive(user_id)
-            feature_prompt = (
-                f"{theme_directive}\nHere's the next feature:\n{propose_instruction}"
-                if theme_directive else propose_instruction
-            )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=feature_prompt,
+                prompt=propose_instruction,
                 model=model,
                 stage_label=f"feature-{iteration_index}-implement",
                 work_dir=work_dir,
@@ -1242,11 +1231,18 @@ class DevAgent:
                                 if squad_match:
                                     agent_name = squad_match.group(1)
                                     agent_task = squad_match.group(2).strip()
-                                    # Known squad member names from _generate_squad_team
+                                    # Known squad member names from all themes
                                     known_names = {
-                                        "Hicks", "Ripley", "Dallas", "Lambert", "Parker",
-                                        "Scribe", "Trinity", "Morpheus", "Neo", "Tank",
-                                        "Switch",
+                                        # Aliens (default)
+                                        "Hicks", "Ripley", "Dallas", "Lambert", "Parker", "Scribe",
+                                        # Star Wars
+                                        "Obi-Wan", "Leia", "Han", "Chewie", "R2-D2", "C-3PO",
+                                        # LOTR
+                                        "Aragorn", "Legolas", "Gimli", "Gandalf", "Samwise", "Frodo",
+                                        # Matrix
+                                        "Morpheus", "Trinity", "Neo", "Tank", "Switch", "Oracle",
+                                        # Marvel
+                                        "Fury", "Stark", "Banner", "Romanoff", "Thor", "Jarvis",
                                     }
                                     if agent_name in known_names:
                                         try:
@@ -1738,13 +1734,20 @@ class DevAgent:
 
     # ── Squad integration ─────────────────────────────────────────────
 
-    def _generate_squad_team(self, spec_content: str) -> list[dict]:
-        """Parse spec content for tech keywords and return squad team roster."""
+    def _generate_squad_team(self, spec_content: str, theme: str = "") -> list[dict]:
+        """Parse spec content for tech keywords and return squad team roster.
+
+        If a theme is provided (e.g. "Star Wars"), use themed character names.
+        """
         content_lower = spec_content.lower() if spec_content else ""
+
+        # Theme-based name sets
+        theme_names = self._get_themed_names(theme)
+
         team: list[dict] = []
 
         # Always-present roles
-        team.append({"name": "Hicks", "role": "Lead", "expertise": "Architecture, code review, scope", "status": "idle"})
+        team.append({"name": theme_names["lead"], "role": "Lead", "expertise": "Architecture, code review, scope", "status": "idle"})
 
         # Dynamic roles based on tech stack detection
         frontend_kw = ["react", "next.js", "nextjs", "vue", "angular", "svelte", "tailwind", "css", "html", "frontend", "ui component"]
@@ -1758,23 +1761,53 @@ class DevAgent:
         has_devops = any(kw in content_lower for kw in devops_kw)
 
         if has_frontend:
-            team.append({"name": "Ripley", "role": "Frontend Dev", "expertise": "React, TypeScript, UI", "status": "idle"})
+            team.append({"name": theme_names["frontend"], "role": "Frontend Dev", "expertise": "React, TypeScript, UI", "status": "idle"})
         if has_backend:
-            team.append({"name": "Dallas", "role": "Backend Dev", "expertise": "Python, FastAPI, APIs", "status": "idle"})
+            team.append({"name": theme_names["backend"], "role": "Backend Dev", "expertise": "Python, FastAPI, APIs", "status": "idle"})
         if has_testing or has_frontend or has_backend:
-            team.append({"name": "Lambert", "role": "Tester", "expertise": "Jest, Playwright, integration tests", "status": "idle"})
+            team.append({"name": theme_names["tester"], "role": "Tester", "expertise": "Jest, Playwright, integration tests", "status": "idle"})
         if has_devops:
-            team.append({"name": "Parker", "role": "DevOps", "expertise": "Docker, CI/CD, infrastructure", "status": "idle"})
+            team.append({"name": theme_names["devops"], "role": "DevOps", "expertise": "Docker, CI/CD, infrastructure", "status": "idle"})
 
         # If nothing detected, add a generic Developer
         if len(team) == 1:
-            team.append({"name": "Dallas", "role": "Developer", "expertise": "Full-stack development", "status": "idle"})
-            team.append({"name": "Lambert", "role": "Tester", "expertise": "Testing, quality assurance", "status": "idle"})
+            team.append({"name": theme_names["backend"], "role": "Developer", "expertise": "Full-stack development", "status": "idle"})
+            team.append({"name": theme_names["tester"], "role": "Tester", "expertise": "Testing, quality assurance", "status": "idle"})
 
         # Scribe is always last (silent role)
-        team.append({"name": "Scribe", "role": "Scribe", "expertise": "Memory, decisions, session logs", "status": "idle"})
+        team.append({"name": theme_names["scribe"], "role": "Scribe", "expertise": "Memory, decisions, session logs", "status": "idle"})
 
         return team
+
+    @staticmethod
+    def _get_themed_names(theme: str) -> dict[str, str]:
+        """Return role→name mapping based on the squad theme."""
+        t = theme.strip().lower() if theme else ""
+        if "star wars" in t:
+            return {
+                "lead": "Obi-Wan", "frontend": "Leia", "backend": "Han",
+                "tester": "Chewie", "devops": "R2-D2", "scribe": "C-3PO",
+            }
+        if "lord of the rings" in t or "lotr" in t:
+            return {
+                "lead": "Aragorn", "frontend": "Legolas", "backend": "Gimli",
+                "tester": "Gandalf", "devops": "Samwise", "scribe": "Frodo",
+            }
+        if "matrix" in t:
+            return {
+                "lead": "Morpheus", "frontend": "Trinity", "backend": "Neo",
+                "tester": "Tank", "devops": "Switch", "scribe": "Oracle",
+            }
+        if "marvel" in t:
+            return {
+                "lead": "Fury", "frontend": "Stark", "backend": "Banner",
+                "tester": "Romanoff", "devops": "Thor", "scribe": "Jarvis",
+            }
+        # Default: Aliens theme
+        return {
+            "lead": "Hicks", "frontend": "Ripley", "backend": "Dallas",
+            "tester": "Lambert", "devops": "Parker", "scribe": "Scribe",
+        }
 
     def _generate_squad_files(self, team: list[dict], spec_content: str) -> dict[str, str]:
         """Generate .squad/ config files from team and spec content."""
@@ -1872,8 +1905,14 @@ class DevAgent:
         except Exception as exc:
             logger.warning("squad registry init failed (non-fatal): %s", exc)
 
-        # Step 2: Generate team from spec (includes config.json with valid JSON)
-        team = self._generate_squad_team(spec_content)
+        # Step 2: Generate team from spec with user's theme preference
+        theme = _DEFAULT_SQUAD_THEME
+        if self._profile_service:
+            try:
+                theme = await self._profile_service.get_squad_theme(user_id)
+            except Exception:
+                pass
+        team = self._generate_squad_team(spec_content, theme=theme or "")
         squad_files = self._generate_squad_files(team, spec_content)
 
         # Step 3: Write .squad/ config files
@@ -2098,22 +2137,3 @@ class DevAgent:
             except Exception:
                 logger.debug("Failed to read sandbox config for user %s", user_id)
         return "claude-opus-4.6"
-
-    async def _get_squad_theme_directive(self, user_id: str) -> str:
-        """Build the theme directive string from the user's profile setting.
-
-        The theme is ONLY used for squad team member naming — it must NOT
-        influence the actual application being built.
-        """
-        theme = _DEFAULT_SQUAD_THEME
-        if self._profile_service:
-            try:
-                theme = await self._profile_service.get_squad_theme(user_id)
-            except Exception:
-                logger.debug("Failed to read squad theme for user %s", user_id)
-        if not theme or not theme.strip():
-            return ""
-        return (
-            f"\n\nI'm starting a new project. "
-            f"Set up the team with this theme: {theme}"
-        )
