@@ -44,6 +44,7 @@ app.post("/tasks", (req, res) => {
     ghToken: perTaskToken,
     continueSession = false,
     agent,
+    autopilot = false,
   } = req.body;
 
   // Two modes: a) raw command, b) Copilot CLI prompt
@@ -51,7 +52,7 @@ app.post("/tasks", (req, res) => {
   if (prompt) {
     // Run Copilot CLI in non-interactive mode with the given prompt
     spawnCmd = "copilot";
-    spawnArgs = ["-p", prompt, "--model", model, "--yolo"];
+    spawnArgs = ["-p", prompt, "--model", model, "--autopilot", "--yolo", "--experimental"];
     // Continue from previous session to maintain context across pipeline stages
     if (continueSession) {
       spawnArgs.push("--continue");

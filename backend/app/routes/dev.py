@@ -583,15 +583,36 @@ async def start_live_preview(task_id: str, request: Request):
     work_dir = f"/workspace/{task_id}/{deck_name}"
 
     try:
-        async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=30) as client:
-            # Start dev server — try slidev directly since create-deckio may not
-            # configure npm scripts. Use port 3333 to avoid conflicts.
+        async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=120) as client:
+            # Ensure dependencies are installed first
+            install_resp = await client.post(
+                "/tasks",
+                json={
+                    "command": f"cd {work_dir} && npm install --silent 2>&1",
+                    "args": [],
+                    "workDir": work_dir,
+                },
+            )
+            install_resp.raise_for_status()
+            install_id = install_resp.json().get("id", "")
+
+            # Wait for npm install to finish (poll status)
+            for _ in range(30):
+                await asyncio.sleep(2)
+                try:
+                    status_resp = await client.get(f"/tasks/{install_id}/status")
+                    if status_resp.json().get("status") in ("completed", "exited"):
+                        break
+                except Exception:
+                    pass
+
+            # Start dev server with slidev
             resp = await client.post(
                 "/tasks",
                 json={
                     "command": (
                         f"cd {work_dir}"
-                        " && (npx slidev --port 3333 --remote 2>&1 || npm run dev -- --port 3333 2>&1)"
+                        " && npx slidev --port 3333 --remote 2>&1"
                     ),
                     "args": [],
                     "workDir": work_dir,
@@ -603,7 +624,7 @@ async def start_live_preview(task_id: str, request: Request):
 
         # Wait for dev server to become responsive
         ready = False
-        for _ in range(6):
+        for _ in range(10):
             await asyncio.sleep(3)
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
@@ -614,7 +635,7 @@ async def start_live_preview(task_id: str, request: Request):
             except Exception:
                 pass
         if not ready:
-            logger.warning("Dev server not responsive after 18s for task %s", task_id)
+            logger.warning("Dev server not responsive after 30s for task %s", task_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 

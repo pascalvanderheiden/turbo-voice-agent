@@ -795,10 +795,22 @@ class DevAgent:
         # ── Stage 2: Slides — single autopilot invocation ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
-            # Single Copilot CLI invocation with full slide content
+            # Wrap the slide content prompt with project context so Copilot CLI
+            # uses the existing theme, palette, and .github skills from create-deckio
+            full_slides_prompt = (
+                "This is a Slidev slide deck project scaffolded with create-deckio. "
+                f"The project uses theme '{deck_config.get('theme', 'shadcn/ui')}', "
+                f"appearance '{deck_config.get('appearance', 'dark')}', "
+                f"and color palette '{deck_config.get('palette', 'arctic')}'. "
+                "Read the existing project files (especially slides.md, .github/ "
+                "instructions, and the theme config) before making changes. "
+                "Build on top of the existing scaffolded project — do NOT replace "
+                "the theme or configuration. Edit slides.md to create the slides.\n\n"
+                f"{slides_prompt}"
+            )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=slides_prompt,
+                prompt=full_slides_prompt,
                 model=model,
                 stage_label="slides",
                 work_dir=work_dir,
@@ -838,21 +850,20 @@ class DevAgent:
         # ── Stage 3: Export — PDF generation ──
         await svc.set_iteration_stage_status(task_id, 0, "export", "running")
         try:
+            # Run npm install + slidev export directly (no Copilot CLI needed)
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=(
-                    "Export the slide deck to PDF. "
-                    "Run `npx slidev export --output slides.pdf` in the project directory. "
-                    "If slidev export is not available, try `npm run export` or `npm run build`. "
-                    "The output PDF should be saved as slides.pdf in the project root."
+                command=(
+                    f"cd {work_dir}"
+                    " && npm install --silent 2>&1"
+                    " && npx slidev export --output slides.pdf --timeout 60000 2>&1"
+                    " || npx slidev export --output slides.pdf 2>&1"
                 ),
-                model=model,
+                args=[],
                 stage_label="export",
                 work_dir=work_dir,
-                timeout=600,
-                stall_timeout=300,
-                continue_session=True,
-                autopilot=True,
+                timeout=300,
+                raise_on_error=False,
             )
 
             # Upload PDF to blob storage
