@@ -25,6 +25,7 @@ import {
   IconSparkles,
   IconExternalLink,
   IconFileTypePdf,
+  IconPackage,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -73,6 +74,7 @@ function calcTotalDuration(iterations: DevIteration[]): string | null {
 
 const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: string; color: string }> = {
   init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
+  skills:      { Icon: IconPackage,            label: "Skills",      color: "var(--color-brand-pink)" },
   implement:   { Icon: IconCode,               label: "Implement",   color: "var(--color-brand-cyan)" },
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
   // Slides-specific stages
@@ -93,11 +95,11 @@ function StageStatusIcon({ status }: { status: string }) {
 
 /* ── Phase-based pipeline visualization ── */
 
-const FOUNDATION_STAGES = ["init", "implement-foundation"];
+const FOUNDATION_STAGES = ["init", "skills", "implement-foundation"];
 const FEATURE_STAGES = ["implement"];
 
 const SHORT_LABELS: Record<string, string> = {
-  init: "Init", implement: "Impl",
+  init: "Init", skills: "Skills", implement: "Impl",
   screenshots: "Screenshots", slides: "Slides",
 };
 

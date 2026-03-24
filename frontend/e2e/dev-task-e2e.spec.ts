@@ -80,8 +80,8 @@ async function countVisibleStages(
 
 // ── 1. Mockup Dev-Task Detail ──────────────────────────────────────────────
 
-// Current mockup pipeline: init → implement → screenshots
-const MOCKUP_LABELS = ["Init", "Impl", "Screenshots"];
+// Current mockup pipeline: init → skills → implement → screenshots
+const MOCKUP_LABELS = ["Init", "Skills", "Impl", "Screenshots"];
 
 test.describe("Mockup Dev-Task Pipeline", () => {
   let token: string;
@@ -109,7 +109,7 @@ test.describe("Mockup Dev-Task Pipeline", () => {
     await ctx.close();
   });
 
-  test("detail page shows 3 mockup pipeline stages", async ({ page }) => {
+  test("detail page shows 4 mockup pipeline stages", async ({ page }) => {
     await page.goto(`/development/${taskId}`);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(2_000);
@@ -146,8 +146,8 @@ test.describe("Mockup Dev-Task Pipeline", () => {
 
 // ── 2. Slides Dev-Task Stages ──────────────────────────────────────────────
 
-// Current slides pipeline: init → slides (no export)
-const SLIDES_LABELS = ["Init", "Slides"];
+// Current slides pipeline: init → skills → slides
+const SLIDES_LABELS = ["Init", "Skills", "Slides"];
 
 test.describe("Slides Dev-Task Pipeline", () => {
   let token: string;
@@ -175,7 +175,7 @@ test.describe("Slides Dev-Task Pipeline", () => {
     await ctx.close();
   });
 
-  test("detail page shows 2 slides pipeline stages", async ({ page }) => {
+  test("detail page shows 3 slides pipeline stages", async ({ page }) => {
     await page.goto(`/development/${taskId}`);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(2_000);

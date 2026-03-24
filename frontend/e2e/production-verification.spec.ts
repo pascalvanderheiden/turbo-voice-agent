@@ -45,11 +45,11 @@ test.describe("OpenSpec Import", () => {
 
 // ── 2. Dev Task Stages ──────────────────────────────────────────────────────
 
-// Current mockup pipeline: init → implement → screenshots
-const EXPECTED_LABELS = ["Init", "Impl", "Screenshots"];
+// Current mockup pipeline: init → skills → implement → screenshots
+const EXPECTED_LABELS = ["Init", "Skills", "Impl", "Screenshots"];
 
 test.describe("Dev Task Stages", () => {
-  test("dev task detail page shows all 3 pipeline stages", async ({
+  test("dev task detail page shows all 4 pipeline stages", async ({
     page,
   }) => {
     // Navigate to /development to load the app and get MSAL auth in sessionStorage

@@ -419,6 +419,11 @@ class DevAgent:
         self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
+        # Stage: skills — sync skills from blob storage
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
+        await self._sync_skills_stage(task_id)
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
+
         # Stage: implement — single Copilot CLI invocation with autopilot
         await svc.set_iteration_stage_status(task_id, 0, "implement", "running")
         logger.info("Mockup implement: task=%s, desc_len=%d", task_id, len(mockup_desc))
@@ -530,6 +535,11 @@ class DevAgent:
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
+
+        # ── Skills: sync from blob storage ──
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
+        await self._sync_skills_stage(task_id)
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
 
         # ── Implement foundation ──
         await svc.set_iteration_stage_status(task_id, 0, "implement-foundation", "running")
@@ -687,33 +697,46 @@ class DevAgent:
 
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init — create-deckio scaffold ──
+        # ── Stage 1: Init — create-deckio scaffold via Copilot CLI ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
-            # Clean workspace and scaffold deck via create-deckio (direct shell)
-            cfg_title = deck_config["title"].replace("'", "\\'")
-            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
-            cfg_theme = deck_config["theme"].replace("'", "\\'")
-            cfg_appearance = deck_config["appearance"].replace("'", "\\'")
-            cfg_palette = deck_config["palette"].replace("'", "\\'")
-            create_cmd = (
-                f"rm -rf {work_dir} && mkdir -p {work_dir}"
-                f" && cd {work_dir}"
-                f" && npx -y create-deckio@latest {deck_name}"
-                f" --title '{cfg_title}'"
-                f" --subtitle '{cfg_subtitle}'"
-                f" --theme '{cfg_theme}'"
-                f" --appearance '{cfg_appearance}'"
-                f" --palette '{cfg_palette}'"
-                " --yes"
+            # Clean workspace
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=f"rm -rf {work_dir} && mkdir -p {work_dir}",
+                args=[],
+                stage_label="init-cleanup",
+                work_dir="/workspace",
+                timeout=30,
+                raise_on_error=False,
+            )
+
+            # Scaffold deck via Copilot CLI — create-deckio is an interactive CLI
+            # that needs terminal interaction. Copilot CLI handles this natively.
+            cfg_title = deck_config["title"].replace('"', '\\"')
+            cfg_subtitle = (deck_config.get("subtitle") or "").replace('"', '\\"')
+            cfg_theme = deck_config["theme"].replace('"', '\\"')
+            cfg_appearance = deck_config["appearance"].replace('"', '\\"')
+            cfg_palette = deck_config["palette"].replace('"', '\\"')
+            scaffold_prompt = (
+                f"Run `npx -y create-deckio@latest {deck_name}` in the current directory "
+                f"and answer its prompts with these values:\n"
+                f"- Title: {cfg_title}\n"
+                f"- Subtitle: {cfg_subtitle}\n"
+                f"- Theme: {cfg_theme}\n"
+                f"- Appearance: {cfg_appearance}\n"
+                f"- Palette: {cfg_palette}\n"
+                f"Wait for it to complete and verify the directory was created."
             )
             await self._sandbox_exec(
                 task_id=task_id,
-                command=create_cmd,
-                args=[],
+                prompt=scaffold_prompt,
+                model=model,
                 stage_label="init-scaffold",
                 work_dir=work_dir,
-                timeout=180,
+                timeout=300,
+                stall_timeout=120,
+                autopilot=True,
             )
 
             # Move into the created deck directory
@@ -774,7 +797,12 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Slides — add slides using deck-add-slide skill ──
+        # ── Stage 2: Skills — sync skills from blob storage ──
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
+        await self._sync_skills_stage(task_id)
+        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
+
+        # ── Stage 3: Slides — add slides using deck-add-slide skill ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
             # The Copilot CLI starts a new session in the deck directory where
@@ -1822,6 +1850,66 @@ class DevAgent:
             ".squad/routing.md": routing_md,
             ".squad/directives.md": directives_md,
         }
+
+    async def _sync_skills_stage(self, task_id: str) -> None:
+        """Sync skills from blob storage to the sandbox and report what's available."""
+        logger.info("Skills sync: task=%s", task_id)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(f"{SANDBOX_URL}/skills/sync")
+                resp.raise_for_status()
+                result = resp.json()
+                synced = result.get("synced", 0)
+                output = result.get("output", "")
+                if task_id in _pipeline_outputs:
+                    _buf_append(task_id, {
+                        "type": "stdout",
+                        "data": f"Skills synced from blob storage: {synced} skill(s)\n",
+                        "stage": "skills",
+                    })
+                    if output:
+                        _buf_append(task_id, {
+                            "type": "stdout",
+                            "data": f"{output}\n",
+                            "stage": "skills",
+                        })
+
+                # List available skills for visibility
+                ls_resp = await client.post(
+                    f"{SANDBOX_URL}/tasks",
+                    json={
+                        "command": "ls -1 /home/agent/.copilot/skills/ 2>/dev/null || echo '(none)'",
+                        "args": [],
+                        "workDir": "/home/agent",
+                    },
+                )
+                if ls_resp.status_code == 200:
+                    ls_task = ls_resp.json()
+                    ls_id = ls_task.get("id", "")
+                    if ls_id:
+                        await asyncio.sleep(2)
+                        status_resp = await client.get(
+                            f"{SANDBOX_URL}/tasks/{ls_id}/status"
+                        )
+                        if status_resp.status_code == 200:
+                            status_data = status_resp.json()
+                            skill_list = status_data.get("output", "").strip()
+                            if skill_list and task_id in _pipeline_outputs:
+                                _buf_append(task_id, {
+                                    "type": "stdout",
+                                    "data": f"Available skills:\n{skill_list}\n",
+                                    "stage": "skills",
+                                })
+
+                logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
+        except Exception as exc:
+            logger.warning("Skills sync failed for task %s: %s", task_id, exc)
+            if task_id in _pipeline_outputs:
+                _buf_append(task_id, {
+                    "type": "stderr",
+                    "data": f"Skills sync warning: {exc}\n",
+                    "stage": "skills",
+                })
 
     async def _run_squad_stage(
         self, task_id: str, work_dir: str, spec_content: str, user_id: str,
