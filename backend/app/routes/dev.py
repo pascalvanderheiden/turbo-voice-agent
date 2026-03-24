@@ -588,14 +588,34 @@ async def start_live_preview(task_id: str, request: Request):
 
     try:
         async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=120) as client:
-            # Single command: install deps + start dev server on port 3333
+            # Step 1: npm install (wait for completion)
+            install_resp = await client.post(
+                "/tasks",
+                json={
+                    "command": f"cd {work_dir} && npm install 2>&1",
+                    "args": [],
+                    "workDir": work_dir,
+                },
+            )
+            install_resp.raise_for_status()
+            install_id = install_resp.json().get("id", "")
+
+            for _ in range(60):
+                await asyncio.sleep(1)
+                try:
+                    status_resp = await client.get(f"/tasks/{install_id}/status")
+                    if status_resp.json().get("status") in ("completed", "exited"):
+                        break
+                except Exception:
+                    pass
+
+            # Step 2: npm run dev (long-running dev server)
             resp = await client.post(
                 "/tasks",
                 json={
                     "command": (
                         f"cd {work_dir}"
-                        " && npm install --silent 2>&1"
-                        " && npx slidev --port 3333 --remote 2>&1"
+                        " && npx slidev --port 3333 --remote"
                     ),
                     "args": [],
                     "workDir": work_dir,
@@ -605,9 +625,9 @@ async def start_live_preview(task_id: str, request: Request):
             data = resp.json()
             sandbox_task_id = data.get("id", "")
 
-        # Wait for dev server to become responsive (poll every 2s, max ~20s)
+        # Wait for dev server to become responsive
         ready = False
-        for _ in range(10):
+        for _ in range(15):
             await asyncio.sleep(2)
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
@@ -618,7 +638,7 @@ async def start_live_preview(task_id: str, request: Request):
             except Exception:
                 pass
         if not ready:
-            logger.warning("Dev server not responsive after 20s for task %s", task_id)
+            logger.warning("Dev server not responsive after 30s for task %s", task_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 

@@ -747,12 +747,11 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
             # The Copilot CLI starts a new session in the deck directory where
-            # .github/ skills (including deck-add-slide) are auto-detected.
-            # Use deck-add-slide skill to add each slide from the slides prompt.
+            # .github/ skills and instructions from create-deckio are auto-detected.
+            # Don't reference skill names — let the CLI discover them from .github/.
             full_slides_prompt = (
-                "Use the deck-add-slide skill to add slides to this deck. "
-                "Add each slide one at a time using the skill. "
-                "Here are the slides to create:\n\n"
+                "Add the following slides to this deck project. "
+                "Use the skills and instructions provided in the .github folder.\n\n"
                 f"{slides_prompt}"
             )
             await self._sandbox_exec(

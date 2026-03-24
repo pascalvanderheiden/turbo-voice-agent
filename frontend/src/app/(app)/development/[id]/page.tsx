@@ -24,6 +24,7 @@ import {
   IconPresentation,
   IconSparkles,
   IconExternalLink,
+  IconFileTypePdf,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -563,6 +564,11 @@ export default function DevTaskDetailPage() {
         {(task.status === "completed" || task.status === "running") && (
           <a href={devApi.downloadUrl(task.id)} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors">
             <IconDownload size={16} /> {t("dev.download")}
+          </a>
+        )}
+        {task.mode === "slides" && task.exportArtifacts?.pdfUrl && (
+          <a href={`/api/dev/${task.id}/pdf`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
+            <IconFileTypePdf size={16} /> Download PDF
           </a>
         )}
         {task.mode === "slides" && (
