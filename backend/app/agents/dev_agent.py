@@ -693,15 +693,18 @@ class DevAgent:
             # Clean workspace and scaffold deck via create-deckio (direct shell)
             cfg_title = deck_config["title"].replace("'", "\\'")
             cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
+            cfg_theme = deck_config["theme"].replace("'", "\\'")
+            cfg_appearance = deck_config["appearance"].replace("'", "\\'")
+            cfg_palette = deck_config["palette"].replace("'", "\\'")
             create_cmd = (
                 f"rm -rf {work_dir} && mkdir -p {work_dir}"
                 f" && cd {work_dir}"
                 f" && npx -y create-deckio@latest {deck_name}"
                 f" --title '{cfg_title}'"
                 f" --subtitle '{cfg_subtitle}'"
-                f" --theme {deck_config['theme']}"
-                f" --appearance {deck_config['appearance']}"
-                f" --palette {deck_config['palette']}"
+                f" --theme '{cfg_theme}'"
+                f" --appearance '{cfg_appearance}'"
+                f" --palette '{cfg_palette}'"
                 " --yes"
             )
             await self._sandbox_exec(
@@ -714,25 +717,53 @@ class DevAgent:
             )
 
             # Move into the created deck directory
-            work_dir = f"/workspace/{task_id}/{deck_name}"
+            deck_dir = f"/workspace/{task_id}/{deck_name}"
 
-            # Init git in the deck directory so Copilot CLI detects .github/ skills
-            await self._sandbox_exec(
+            # Verify create-deckio produced the expected directory with .github/
+            verify_output = await self._sandbox_exec(
                 task_id=task_id,
                 command=(
-                    f"cd {work_dir} && git init -q"
+                    f"test -d '{deck_dir}'"
+                    f" && echo 'DECK_DIR_OK'"
+                    f" && (test -d '{deck_dir}/.github' && echo 'GITHUB_DIR_OK'"
+                    f" || echo 'GITHUB_DIR_MISSING')"
+                    f" && ls -la '{deck_dir}/'"
+                ),
+                args=[],
+                stage_label="init-verify",
+                work_dir=deck_dir,
+                timeout=15,
+                raise_on_error=False,
+            )
+            if "DECK_DIR_OK" not in verify_output:
+                raise RuntimeError(
+                    f"create-deckio did not produce deck directory: {deck_dir}"
+                )
+            if "GITHUB_DIR_MISSING" in verify_output:
+                logger.warning(
+                    "create-deckio did not create .github/ in %s — "
+                    "Copilot CLI skill discovery will not work. "
+                    "Output: %s", deck_dir, verify_output[:500],
+                )
+
+            work_dir = deck_dir
+
+            # Init git in the deck directory so Copilot CLI detects .github/ skills
+            git_output = await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"cd '{work_dir}' && git init -q"
                     " && git config user.email 'agent@sandbox'"
                     " && git config user.name 'Sandbox Agent'"
                     " && git add -A"
                     " && git commit -m 'init: scaffold deck project' -q"
-                    " && git remote add origin https://github.com/placeholder/repo.git"
-                    " 2>/dev/null || true"
                 ),
                 args=[],
                 stage_label="init-git",
                 work_dir=work_dir,
-                raise_on_error=False,
+                timeout=30,
             )
+            logger.info("Git init output for %s: %s", task_id, git_output[:300])
 
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
