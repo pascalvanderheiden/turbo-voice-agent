@@ -1367,15 +1367,37 @@ class DevAgent:
             logger.debug("squad status poll failed (non-fatal): %s", exc)
 
     async def _deactivate_squad(self, task_id: str, user_id: str) -> None:
-        """Mark all squad members as done when pipeline completes."""
+        """Mark all squad members as done and set final summary from stream output."""
         try:
             svc = self._service.with_user(user_id)
             task = await svc.get_by_id(task_id)
             if not task or not task.squad or not task.squad.team_members:
                 return
+
+            # Extract final summary from pipeline output buffer
+            member_names = {m.name for m in task.squad.team_members}
+            summaries: dict[str, str] = {}
+            buf = _pipeline_outputs.get(task_id, [])
+            # Scan buffer in reverse to find the most recent summary per member
+            for entry in reversed(buf):
+                if len(summaries) == len(member_names):
+                    break
+                data = entry.get("data", "")
+                if not data:
+                    continue
+                clean = re.sub(r"\*\*", "", data.strip())
+                # Match: "emoji Name — summary" or "Name — summary"
+                for name in member_names:
+                    if name in summaries:
+                        continue
+                    pattern = re.escape(name) + r"\s*[\u2014—-]+\s*(.+)"
+                    m = re.search(pattern, clean)
+                    if m:
+                        summaries[name] = m.group(1).strip()
+
             for m in task.squad.team_members:
                 m.status = "done"
-                m.activity = ""
+                m.activity = summaries.get(m.name, "")
             await svc.set_squad(
                 task_id,
                 {"teamMembers": [m.model_dump(by_alias=True) for m in task.squad.team_members]},
