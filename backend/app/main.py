@@ -487,6 +487,38 @@ _skills_service: SkillsService | None = None
 _cosmos_skills: CosmosSkillsService | None = None
 
 
+async def _sync_sandbox_skills() -> dict | None:
+    """Push skill sync to sandbox (best-effort). Returns response or None."""
+    sandbox_url = os.getenv("SANDBOX_URL", "http://localhost:4000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(f"{sandbox_url}/skills/sync")
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info("Sandbox skill sync: %s", result)
+            return result
+    except Exception as exc:
+        logger.warning("Sandbox skill sync failed (non-fatal): %s", exc)
+        return None
+
+
+async def _delete_sandbox_skill(name: str) -> dict | None:
+    """Remove a skill from sandbox (best-effort). Returns response or None."""
+    sandbox_url = os.getenv("SANDBOX_URL", "http://localhost:4000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.delete(f"{sandbox_url}/skills/{name}")
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info("Sandbox skill delete '%s': %s", name, result)
+            return result
+    except Exception as exc:
+        logger.warning("Sandbox skill delete '%s' failed (non-fatal): %s", name, exc)
+        return None
+
+
 @app.get("/api/agents/skills")
 async def list_installed_skills(request: Request):
     """List activated skills for the current user."""
@@ -544,6 +576,10 @@ async def activate_skill(body: SkillInstallRequest, request: Request):
             )
 
     logger.info("Activated skill '%s' for user=%s", body.skillName, user_id)
+
+    # Hot-reload: push to running sandbox immediately
+    await _sync_sandbox_skills()
+
     return {"name": result["name"], "success": True, "blobFiles": blob_uploaded}
 
 
@@ -557,6 +593,10 @@ async def deactivate_skill(name: str, request: Request):
     svc = _cosmos_skills.with_user(user_id)
     await svc.deactivate_skill(name)
     logger.info("Deactivated skill '%s' for user=%s", name, user_id)
+
+    # Hot-reload: remove from running sandbox immediately
+    await _delete_sandbox_skill(name)
+
     return {"name": name, "success": True}
 
 

@@ -130,6 +130,10 @@ async def upload_local_skills(
                 logger.info("Uploaded skill file: %s", blob_path)
         await credential.close()
 
+        # Hot-reload: push to running sandbox immediately
+        from app.main import _sync_sandbox_skills
+        await _sync_sandbox_skills()
+
         return {
             "success": True,
             "skillName": skill_name,

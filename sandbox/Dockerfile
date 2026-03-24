@@ -59,8 +59,8 @@ RUN mkdir -p /home/agent/.copilot/skills \
 WORKDIR /app
 COPY package.json ./
 RUN npm install --production
-COPY server.js entrypoint.sh ./
-RUN chmod +x entrypoint.sh && chown -R agent:agent /app
+COPY server.js entrypoint.sh sync-skills.sh ./
+RUN chmod +x entrypoint.sh sync-skills.sh && chown -R agent:agent /app
 
 USER agent
 

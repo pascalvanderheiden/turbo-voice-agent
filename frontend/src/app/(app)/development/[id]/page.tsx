@@ -20,7 +20,6 @@ import {
   IconVideo,
   IconX,
   IconTerminal2,
-  IconPuzzle,
   IconUsersGroup,
   IconCode,
   IconPresentation,
@@ -75,7 +74,6 @@ function calcTotalDuration(iterations: DevIteration[]): string | null {
 
 const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: string; color: string }> = {
   init:        { Icon: IconSettingsAutomation, label: "Init",        color: "var(--color-brand-purple)" },
-  skills:      { Icon: IconPuzzle,             label: "Skills",      color: "var(--color-brand-cyan)" },
   implement:   { Icon: IconCode,               label: "Implement",   color: "var(--color-brand-cyan)" },
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
   // Slides-specific stages
@@ -97,11 +95,11 @@ function StageStatusIcon({ status }: { status: string }) {
 
 /* ── Phase-based pipeline visualization ── */
 
-const FOUNDATION_STAGES = ["init", "skills", "implement-foundation"];
+const FOUNDATION_STAGES = ["init", "implement-foundation"];
 const FEATURE_STAGES = ["implement"];
 
 const SHORT_LABELS: Record<string, string> = {
-  init: "Init", skills: "Skills", implement: "Impl",
+  init: "Init", implement: "Impl",
   screenshots: "Screenshots", slides: "Slides", export: "Export",
 };
 

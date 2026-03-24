@@ -306,6 +306,49 @@ app.get("/workspace/archive", (req, res) => {
 
 const port = process.env.PORT || 3000;
 
+// ── Skills hot-reload endpoints ──────────────────────────────────────
+// Called by the backend when skills are activated/deactivated so the
+// sandbox picks them up without a container restart.
+
+app.post("/skills/sync", (_req, res) => {
+  const { execSync: execSyncSkills } = require("child_process");
+  try {
+    const output = execSyncSkills("/app/sync-skills.sh", {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: process.env,
+    });
+    // Last line of sync-skills.sh is the count
+    const lines = output.trim().split("\n");
+    const synced = parseInt(lines[lines.length - 1], 10) || 0;
+    console.log(`[skills] Synced ${synced} skill(s) from blob storage`);
+    res.json({ synced, output: lines.slice(0, -1).join("\n") });
+  } catch (err) {
+    console.error(`[skills] Sync failed: ${err.message}`);
+    res.status(500).json({ error: "Skill sync failed", details: err.message });
+  }
+});
+
+app.delete("/skills/:name", (req, res) => {
+  const skillName = req.params.name;
+  const skillDir = path.join("/home/agent/.copilot/skills", skillName);
+  const resolved = path.resolve(skillDir);
+  // Safety: must be inside skills directory
+  if (!resolved.startsWith("/home/agent/.copilot/skills/")) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  try {
+    if (fs.existsSync(resolved)) {
+      fs.rmSync(resolved, { recursive: true, force: true });
+      console.log(`[skills] Deleted skill '${skillName}'`);
+    }
+    res.json({ deleted: skillName });
+  } catch (err) {
+    console.error(`[skills] Delete failed for '${skillName}': ${err.message}`);
+    res.status(500).json({ error: "Delete failed", details: err.message });
+  }
+});
+
 // ── Reverse proxy for dev server preview ─────────────────────────────
 // Forwards /proxy/:port/* to http://localhost:{port}/* so the backend
 // can proxy slides preview traffic through the sandbox.

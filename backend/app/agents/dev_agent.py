@@ -419,20 +419,6 @@ class DevAgent:
         self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
-        # Stage: skills — install marketplace + local skills
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
-        n_skills = await self._install_skills_in_sandbox(
-            task_id, task, work_dir, user_id=user_id,
-        )
-        if n_skills:
-            logger.info("Installed %d user skills for task %s", n_skills, task_id)
-        else:
-            if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stdout", "data": "No skills to install\n", "stage": "skills",
-                })
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
-
         # Stage: implement — single Copilot CLI invocation with autopilot
         await svc.set_iteration_stage_status(task_id, 0, "implement", "running")
         logger.info("Mockup implement: task=%s, desc_len=%d", task_id, len(mockup_desc))
@@ -544,15 +530,6 @@ class DevAgent:
         await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
         self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
-
-        # ── Skills ──
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
-        n_skills = await self._install_skills_in_sandbox(
-            task_id, task, work_dir, user_id=user_id,
-        )
-        if n_skills:
-            logger.info("Installed %d user skills for task %s", n_skills, task_id)
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
 
         # ── Implement foundation ──
         await svc.set_iteration_stage_status(task_id, 0, "implement-foundation", "running")
@@ -1970,117 +1947,6 @@ class DevAgent:
                 "stage": "squad",
             })
         logger.info("Squad stage complete: %d members for task %s", len(team), task_id)
-
-    async def _install_skills_in_sandbox(
-        self, task_id: str, task, work_dir: str, user_id: str | None = None,
-    ) -> int:
-        """Sync activated skills from blob storage into the sandbox.
-
-        All skills (local and marketplace) are pre-uploaded to blob storage.
-        This method runs a quick blob sync to ensure the sandbox has the latest
-        files, handling the case where skills were activated after container start.
-        Returns the number of skills synced.
-        """
-        if not self._cosmos_skills or not task.skill_ids:
-            return 0
-
-        svc = self._cosmos_skills.with_user(user_id) if user_id else self._cosmos_skills
-        npx_map = await svc.get_npx_commands(task.skill_ids)
-        if not npx_map:
-            return 0
-
-        skill_names = list(npx_map.keys())
-        if task_id in _pipeline_outputs:
-            _buf_append(task_id, {
-                "type": "stdout",
-                "data": f"── Syncing {len(skill_names)} skill(s) from blob storage ──\n",
-                "stage": "install-skills",
-            })
-
-        # Single blob sync command for all skills — fast compared to npx installs
-        skills_list = " ".join(skill_names)
-        sync_cmd = (
-            'SKILLS_DIR="/home/agent/.copilot/skills" && '
-            f'for SKILL in {skills_list}; do '
-            'if [ ! -f "$SKILLS_DIR/$SKILL/SKILL.md" ]; then '
-            'BLOBS=$(az storage blob list --account-name "$AZURE_STORAGE_ACCOUNT_NAME" '
-            '--container-name skills --prefix "$SKILL/" --auth-mode login '
-            '--query "[].name" -o tsv 2>/dev/null); '
-            'if [ -n "$BLOBS" ]; then '
-            'while IFS= read -r blob; do '
-            '[ -z "$blob" ] && continue; '
-            'dest="$SKILLS_DIR/$blob"; '
-            'mkdir -p "$(dirname "$dest")"; '
-            'az storage blob download --account-name "$AZURE_STORAGE_ACCOUNT_NAME" '
-            '--container-name skills --name "$blob" --file "$dest" '
-            '--auth-mode login --no-progress 2>/dev/null; '
-            'done <<< "$BLOBS"; '
-            'echo "  ✓ $SKILL synced from blob"; '
-            'else echo "  ⚠ $SKILL not found in blob storage"; fi; '
-            'else echo "  ✓ $SKILL already present"; fi; '
-            'done'
-        )
-        try:
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=sync_cmd,
-                args=[],
-                stage_label="sync-skills",
-                work_dir=work_dir,
-                timeout=60,
-                raise_on_error=False,
-            )
-        except Exception as exc:
-            logger.warning("Blob skill sync failed: %s", exc)
-
-        installed = len(skill_names)
-        if installed and task_id in _pipeline_outputs:
-            _buf_append(task_id, {
-                "type": "stdout",
-                "data": f"Activated {installed} skills in workspace\n",
-                "stage": "install-skills",
-            })
-
-        # ── Verify all skills with a single CLI prompt ───────────────
-        await self._verify_skills_in_sandbox(task_id, work_dir)
-
-        return installed
-
-    async def _verify_skills_in_sandbox(
-        self, task_id: str, work_dir: str,
-    ) -> None:
-        """Reload skills from disk, then verify via 'What skills do you have?'
-
-        Two-step: first triggers a reload so the CLI picks up any newly
-        installed or blob-synced skills, then asks what it sees.
-        Uses claude-haiku-4.5 (cheap) to minimize premium request cost.
-        """
-        if task_id in _pipeline_outputs:
-            _buf_append(task_id, {
-                "type": "stdout",
-                "data": "── verify-skills ──\n",
-                "stage": "verify-skills",
-            })
-
-        try:
-            await self._sandbox_exec(
-                task_id=task_id,
-                prompt="Reload your skills from disk, then tell me: What skills do you have?",
-                model="claude-haiku-4.5",
-                stage_label="verify-skills",
-                work_dir=work_dir,
-                timeout=60,
-                stall_timeout=30,
-                raise_on_error=False,
-            )
-        except Exception as exc:
-            logger.warning("CLI skill verification failed: %s", exc)
-            if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stderr",
-                    "data": f"Skill verification error: {exc}\n",
-                    "stage": "verify-skills",
-                })
 
     # ── Spec content helpers ────────────────────────────────────────
 
