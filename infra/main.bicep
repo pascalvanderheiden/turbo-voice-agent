@@ -35,7 +35,7 @@ param deployerPrincipalId string = ''
 param deployRbac bool = true
 
 @description('Enable per-task ACI sandbox isolation (creates VNet, subnet, managed identity)')
-param enableAciSandbox bool = false
+param enableAciSandbox bool = true
 
 // ──────────────────────────────────────────────
 // Resource Group
