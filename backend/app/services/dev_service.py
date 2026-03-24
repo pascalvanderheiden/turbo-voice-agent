@@ -20,13 +20,13 @@ from app.services.json_persistence import JsonPersistenceMixin
 
 logger = logging.getLogger(__name__)
 
-MOCKUP_STAGE_NAMES = ["init", "skills", "implement", "screenshots"]
+MOCKUP_STAGE_NAMES = ["init", "implement", "screenshots"]
 SLIDES_STAGE_NAMES = ["init", "slides", "export"]
 
 
 def build_sequential_stages(features: list[str] | None = None) -> list[str]:
     """Build dynamic stage names for sequential mode."""
-    stages = ["init", "skills", "implement-foundation"]
+    stages = ["init", "implement-foundation"]
     for i, _feat in enumerate(features or [], start=1):
         stages.append(f"implement-feature-{i}")
     stages.append("screenshots")

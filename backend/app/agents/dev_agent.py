@@ -689,7 +689,7 @@ class DevAgent:
 
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init — git init + create-deckio via Copilot CLI ──
+        # ── Stage 1: Init — git init + create-deckio scaffold ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
             # Git init first
@@ -709,15 +709,14 @@ class DevAgent:
                 raise_on_error=False,
             )
 
-            # Run create-deckio via Copilot CLI so it starts a session that
-            # reads the .github/ skills. The slides stage continues this session.
-            cfg_title = deck_config["title"].replace("'", "\\'").replace('"', '\\"')
-            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'").replace('"', '\\"')
-            create_prompt = (
-                f"Run this exact command to scaffold the slide deck project:\n"
-                f"npx -y create-deckio@latest {deck_name}"
-                f" --title \"{cfg_title}\""
-                f" --subtitle \"{cfg_subtitle}\""
+            # Scaffold the deck project as a direct shell command (reliable)
+            cfg_title = deck_config["title"].replace("'", "\\'")
+            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
+            create_cmd = (
+                f"cd {work_dir}"
+                f" && npx -y create-deckio@latest {deck_name}"
+                f" --title '{cfg_title}'"
+                f" --subtitle '{cfg_subtitle}'"
                 f" --theme {deck_config['theme']}"
                 f" --appearance {deck_config['appearance']}"
                 f" --palette {deck_config['palette']}"
@@ -725,23 +724,28 @@ class DevAgent:
             )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=create_prompt,
-                model=model,
+                command=create_cmd,
+                args=[],
                 stage_label="init-scaffold",
                 work_dir=work_dir,
                 timeout=180,
-                autopilot=True,
             )
 
             # Move into the created deck directory
             work_dir = f"/workspace/{task_id}/{deck_name}"
 
-            # Commit scaffolded files so Copilot CLI sees them on --continue
+            # Re-init git inside the deck directory so Copilot CLI detects
+            # .github/ skills and instructions when starting a new session
             await self._sandbox_exec(
                 task_id=task_id,
                 command=(
-                    f"cd {work_dir} && git add -A"
+                    f"cd {work_dir} && git init -q"
+                    " && git config user.email 'agent@sandbox'"
+                    " && git config user.name 'Sandbox Agent'"
+                    " && git add -A"
                     " && git commit -m 'init: scaffold deck project' -q"
+                    " && git remote add origin https://github.com/placeholder/repo.git"
+                    " 2>/dev/null || true"
                 ),
                 args=[],
                 stage_label="init-git-commit",
@@ -758,18 +762,25 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Slides — continue session to pick up .github skills ──
+        # ── Stage 2: Slides — new session from deck dir (loads .github/ skills) ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
+            # Wrap the slide content prompt with project context so Copilot CLI
+            # uses the existing theme, palette, and .github skills from create-deckio
+            full_slides_prompt = (
+                "This is a Slidev slide deck project scaffolded with create-deckio. "
+                "Use the existing theme, palette, appearance and component library. "
+                "Create the slides as instructed below.\n\n"
+                f"{slides_prompt}"
+            )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=slides_prompt,
+                prompt=full_slides_prompt,
                 model=model,
                 stage_label="slides",
                 work_dir=work_dir,
                 timeout=2400,
                 stall_timeout=600,
-                continue_session=True,
                 autopilot=True,
             )
 
