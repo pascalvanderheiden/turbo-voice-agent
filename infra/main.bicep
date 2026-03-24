@@ -170,7 +170,7 @@ module backend 'modules/container-app-backend.bicep' = {
     sandboxFqdn: 'ca-sandbox-${resourceToken}.internal.${cae.outputs.defaultDomain}'
     enableAciSandbox: enableAciSandbox
     aciResourceGroup: rg.name
-    aciSubnetId: enableAciSandbox ? cae.outputs.aciSubnetId : ''
+    aciSubnetId: '' // Public IPs for now; add VNet peering later for private networking
     aciIdentityId: enableAciSandbox ? aciIdentity.outputs.id : ''
     aciIdentityClientId: enableAciSandbox ? aciIdentity.outputs.clientId : ''
     aciAcrLoginServer: acr.outputs.loginServer
