@@ -12,7 +12,6 @@ import {
   IconCircleX,
   IconClock,
   IconSettingsAutomation,
-  IconPackage,
   IconPhoto,
   IconChevronDown,
   IconChevronRight,
@@ -25,7 +24,6 @@ import {
   IconPresentation,
   IconSparkles,
   IconExternalLink,
-  IconFileTypePdf,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -78,7 +76,6 @@ const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: s
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
   // Slides-specific stages
   slides:      { Icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
-  export:      { Icon: IconPackage,            label: "Export",       color: "#22C55E" },
 };
 
 function getStageMeta(stageName: string) {
@@ -100,7 +97,7 @@ const FEATURE_STAGES = ["implement"];
 
 const SHORT_LABELS: Record<string, string> = {
   init: "Init", implement: "Impl",
-  screenshots: "Screenshots", slides: "Slides", export: "Export",
+  screenshots: "Screenshots", slides: "Slides",
 };
 
 function StageNode({ stage, meta, taskFailed }: { stage: { name: string; status: string; startedAt?: string | null; completedAt?: string | null }; meta: (typeof STAGE_META)[string]; taskFailed?: boolean }) {
@@ -439,7 +436,6 @@ export default function DevTaskDetailPage() {
   const [marketingVideos, setMarketingVideos] = useState<MarketingVideo[]>([]);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [startingLive, setStartingLive] = useState(false);
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const { t } = useI18n();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -460,26 +456,6 @@ export default function DevTaskDetailPage() {
   }, [id]);
 
   useEffect(() => { loadTask(); }, [loadTask]);
-
-  // Fetch PDF with auth token and create blob URL for iframe
-  const hasPdf = task?.mode === "slides" && !!task?.exportArtifacts?.pdfUrl;
-  useEffect(() => {
-    if (!hasPdf) return;
-    let revoked = false;
-    (async () => {
-      try {
-        const token = await getAccessToken();
-        const headers: Record<string, string> = {};
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-        const resp = await fetch(`/api/dev/${id}/pdf`, { headers });
-        if (!resp.ok) return;
-        const blob = await resp.blob();
-        if (revoked) return;
-        setPdfBlobUrl(URL.createObjectURL(blob));
-      } catch { /* ignore */ }
-    })();
-    return () => { revoked = true; };
-  }, [hasPdf, id]);
 
   const isRunning = task?.status === "running";
   useEffect(() => {
@@ -587,11 +563,6 @@ export default function DevTaskDetailPage() {
         {(task.status === "completed" || task.status === "running") && (
           <a href={devApi.downloadUrl(task.id)} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] transition-colors">
             <IconDownload size={16} /> {t("dev.download")}
-          </a>
-        )}
-        {task.mode === "slides" && task.exportArtifacts?.pdfUrl && (
-          <a href={`/api/dev/${task.id}/pdf`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
-            <IconFileTypePdf size={16} /> Download PDF
           </a>
         )}
         {task.mode === "slides" && (
@@ -706,37 +677,32 @@ export default function DevTaskDetailPage() {
         </div>
       )}
 
-      {/* Slides PDF Viewer / Screenshots */}
+      {/* Slides Live Preview / Screenshots */}
       {task.mode === "slides" ? (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
           <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
-            <IconFileTypePdf size={14} /> Slide Deck Preview
+            <IconPresentation size={14} /> Slide Deck Preview
           </h2>
-          {pdfBlobUrl ? (
+          {liveUrl ? (
             <div className="rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]" style={{ height: "70vh" }}>
               <iframe
-                src={`${pdfBlobUrl}#toolbar=1&navpanes=0`}
+                src={liveUrl}
                 className="w-full h-full"
-                title="Slides PDF Preview"
+                title="Slides Live Preview"
               />
-            </div>
-          ) : task.exportArtifacts?.pdfUrl ? (
-            <div className="flex flex-col items-center justify-center py-10 text-center">
-              <IconLoader2 size={24} className="animate-spin text-[var(--color-brand-pink)] mb-3" />
-              <p className="text-sm text-[var(--color-text-muted)]">Loading PDF...</p>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <div className="w-12 h-12 rounded-full bg-[var(--color-bg-tertiary)] flex items-center justify-center mb-3">
-                <IconFileTypePdf size={20} className="text-[var(--color-text-muted)]" />
+                <IconPresentation size={20} className="text-[var(--color-text-muted)]" />
               </div>
-              <p className="text-sm text-[var(--color-text-muted)]">No PDF export yet</p>
+              <p className="text-sm text-[var(--color-text-muted)]">No live preview yet</p>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
                 {task.status === "completed"
-                  ? "This task completed without generating a PDF. Re-run the pipeline to export."
+                  ? "Click \"Run Live\" above to start the slide deck preview."
                   : task.status === "running"
-                  ? "PDF will appear here once the export stage completes."
-                  : "Run the pipeline to generate the slide deck PDF."}
+                  ? "Preview will be available after the init stage completes."
+                  : "Run the pipeline first, then start the live preview."}
               </p>
             </div>
           )}

@@ -623,7 +623,7 @@ class DevAgent:
         logger.info("Sequential pipeline COMPLETED for task %s", task_id)
 
     async def _run_slides_pipeline(self, task_id: str, user_id: str) -> None:
-        """Slides pipeline: init (create-deckio) → slides (Copilot CLI + deck skills) → export (PDF)."""
+        """Slides pipeline: init (create-deckio) → slides (Copilot CLI + deck-add-slide skill)."""
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
         if not task:
@@ -685,35 +685,17 @@ class DevAgent:
         deck_config.setdefault("appearance", "dark")
         deck_config.setdefault("palette", "arctic")
 
-        # No squad theme for slides — slides use deck config (theme/palette/appearance)
-
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init — git init + create-deckio scaffold ──
+        # ── Stage 1: Init — create-deckio scaffold ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
-            # Git init first
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=(
-                    f"rm -rf {work_dir} && mkdir -p {work_dir}"
-                    f" && cd {work_dir}"
-                    " && git init -q"
-                    " && git config user.email 'agent@sandbox'"
-                    " && git config user.name 'Sandbox Agent'"
-                    " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
-                ),
-                args=[],
-                stage_label="init-git",
-                work_dir=work_dir,
-                raise_on_error=False,
-            )
-
-            # Scaffold the deck project as a direct shell command (reliable)
+            # Clean workspace and scaffold deck via create-deckio (direct shell)
             cfg_title = deck_config["title"].replace("'", "\\'")
             cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
             create_cmd = (
-                f"cd {work_dir}"
+                f"rm -rf {work_dir} && mkdir -p {work_dir}"
+                f" && cd {work_dir}"
                 f" && npx -y create-deckio@latest {deck_name}"
                 f" --title '{cfg_title}'"
                 f" --subtitle '{cfg_subtitle}'"
@@ -734,8 +716,7 @@ class DevAgent:
             # Move into the created deck directory
             work_dir = f"/workspace/{task_id}/{deck_name}"
 
-            # Re-init git inside the deck directory so Copilot CLI detects
-            # .github/ skills and instructions when starting a new session
+            # Init git in the deck directory so Copilot CLI detects .github/ skills
             await self._sandbox_exec(
                 task_id=task_id,
                 command=(
@@ -748,7 +729,7 @@ class DevAgent:
                     " 2>/dev/null || true"
                 ),
                 args=[],
-                stage_label="init-git-commit",
+                stage_label="init-git",
                 work_dir=work_dir,
                 raise_on_error=False,
             )
@@ -762,15 +743,16 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Slides — new session from deck dir (loads .github/ skills) ──
+        # ── Stage 2: Slides — add slides using deck-add-slide skill ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
-            # Wrap the slide content prompt with project context so Copilot CLI
-            # uses the existing theme, palette, and .github skills from create-deckio
+            # The Copilot CLI starts a new session in the deck directory where
+            # .github/ skills (including deck-add-slide) are auto-detected.
+            # Use deck-add-slide skill to add each slide from the slides prompt.
             full_slides_prompt = (
-                "This is a Slidev slide deck project scaffolded with create-deckio. "
-                "Use the existing theme, palette, appearance and component library. "
-                "Create the slides as instructed below.\n\n"
+                "Use the deck-add-slide skill to add slides to this deck. "
+                "Add each slide one at a time using the skill. "
+                "Here are the slides to create:\n\n"
                 f"{slides_prompt}"
             )
             await self._sandbox_exec(
@@ -808,40 +790,6 @@ class DevAgent:
             logger.error("Slides generation failed for %s: %s", task_id, e)
             await svc.set_iteration_stage_status(
                 task_id, 0, "slides", "failed", error=str(e)
-            )
-            await svc.set_status(task_id, "failed")
-            return
-
-        # ── Stage 3: Export — PDF generation ──
-        await svc.set_iteration_stage_status(task_id, 0, "export", "running")
-        try:
-            # Run npm install + slidev export directly (no Copilot CLI needed)
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=(
-                    f"cd {work_dir}"
-                    " && npm install --silent 2>&1"
-                    " && npx slidev export --output slides.pdf --timeout 60000 2>&1"
-                    " || npx slidev export --output slides.pdf 2>&1"
-                ),
-                args=[],
-                stage_label="export",
-                work_dir=work_dir,
-                timeout=300,
-                raise_on_error=False,
-            )
-
-            # Upload PDF to blob storage
-            pdf_url = await self._upload_slides_pdf(task_id, work_dir, user_id)
-            if pdf_url:
-                await svc.set_export_artifacts(task_id, {"pdfUrl": pdf_url})
-                logger.info("Slides PDF uploaded for task %s: %s", task_id, pdf_url)
-
-            await svc.set_iteration_stage_status(task_id, 0, "export", "completed")
-        except Exception as e:
-            logger.error("Slides export failed for %s: %s", task_id, e)
-            await svc.set_iteration_stage_status(
-                task_id, 0, "export", "failed", error=str(e)
             )
             await svc.set_status(task_id, "failed")
             return

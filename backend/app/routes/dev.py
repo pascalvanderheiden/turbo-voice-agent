@@ -588,34 +588,13 @@ async def start_live_preview(task_id: str, request: Request):
 
     try:
         async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=120) as client:
-            # Ensure dependencies are installed first
-            install_resp = await client.post(
-                "/tasks",
-                json={
-                    "command": f"cd {work_dir} && npm install --silent 2>&1",
-                    "args": [],
-                    "workDir": work_dir,
-                },
-            )
-            install_resp.raise_for_status()
-            install_id = install_resp.json().get("id", "")
-
-            # Wait for npm install to finish (poll status)
-            for _ in range(30):
-                await asyncio.sleep(2)
-                try:
-                    status_resp = await client.get(f"/tasks/{install_id}/status")
-                    if status_resp.json().get("status") in ("completed", "exited"):
-                        break
-                except Exception:
-                    pass
-
-            # Start dev server with slidev
+            # Single command: install deps + start dev server on port 3333
             resp = await client.post(
                 "/tasks",
                 json={
                     "command": (
                         f"cd {work_dir}"
+                        " && npm install --silent 2>&1"
                         " && npx slidev --port 3333 --remote 2>&1"
                     ),
                     "args": [],
@@ -626,10 +605,10 @@ async def start_live_preview(task_id: str, request: Request):
             data = resp.json()
             sandbox_task_id = data.get("id", "")
 
-        # Wait for dev server to become responsive
+        # Wait for dev server to become responsive (poll every 2s, max ~20s)
         ready = False
         for _ in range(10):
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
                     probe = await client.get(f"{SANDBOX_URL}/proxy/3333/")
@@ -639,7 +618,7 @@ async def start_live_preview(task_id: str, request: Request):
             except Exception:
                 pass
         if not ready:
-            logger.warning("Dev server not responsive after 30s for task %s", task_id)
+            logger.warning("Dev server not responsive after 20s for task %s", task_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
 

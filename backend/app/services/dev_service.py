@@ -21,7 +21,7 @@ from app.services.json_persistence import JsonPersistenceMixin
 logger = logging.getLogger(__name__)
 
 MOCKUP_STAGE_NAMES = ["init", "implement", "screenshots"]
-SLIDES_STAGE_NAMES = ["init", "slides", "export"]
+SLIDES_STAGE_NAMES = ["init", "slides"]
 
 
 def build_sequential_stages(features: list[str] | None = None) -> list[str]:
