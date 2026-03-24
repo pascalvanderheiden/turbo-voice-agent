@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 
 from app.services.cosmos_skills_service import CosmosSkillsService
 from app.services.skills_service import SkillsService
@@ -12,9 +13,17 @@ logger = logging.getLogger(__name__)
 class SkillsAgent:
     """Agent that handles skill activation, deactivation, search, and listing."""
 
-    def __init__(self, skills_service: SkillsService, cosmos_skills: CosmosSkillsService | None = None):
+    def __init__(
+        self,
+        skills_service: SkillsService,
+        cosmos_skills: CosmosSkillsService | None = None,
+        sync_sandbox: Callable[[], Awaitable[dict | None]] | None = None,
+        delete_sandbox_skill: Callable[[str], Awaitable[dict | None]] | None = None,
+    ):
         self._service = skills_service
         self._cosmos_skills = cosmos_skills
+        self._sync_sandbox = sync_sandbox
+        self._delete_sandbox_skill = delete_sandbox_skill
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -99,18 +108,44 @@ class SkillsAgent:
             repo = args["repo"]
             skill_name = args["skill_name"]
             desc = args.get("description", "")
+            is_local = repo == "local"
             npx_cmd = (
-                "__local__" if repo == "local"
+                "__local__" if is_local
                 else f"npx -y degit {repo}/{skill_name} .github/skills/{skill_name}"
             )
             result = await svc.activate_skill(skill_name, desc, repo, npx_cmd)
-            return json.dumps({"name": result["name"], "success": True})
+
+            # For marketplace skills, download from GitHub → blob storage
+            blob_uploaded = 0
+            if not is_local and repo:
+                uploaded = await svc.upload_skill_from_github_to_blob(skill_name, repo)
+                if uploaded:
+                    blob_uploaded = len(uploaded)
+                    # Mark as blob-stored so runtime treats it like a local skill
+                    await svc.activate_skill(skill_name, desc, repo, "__local__")
+                    logger.info(
+                        "Marketplace skill '%s' uploaded to blob (%d files)",
+                        skill_name, blob_uploaded,
+                    )
+
+            # Hot-reload: push to running sandbox
+            if self._sync_sandbox:
+                await self._sync_sandbox()
+
+            return json.dumps({
+                "name": result["name"], "success": True, "blobFiles": blob_uploaded,
+            })
 
         elif function_name == "deactivate_skill":
             if not self._cosmos_skills:
                 return json.dumps({"error": "Skills service not available"})
             svc = self._cosmos_skills.with_user(user_id)
             await svc.deactivate_skill(args["name"])
+
+            # Hot-reload: remove from running sandbox
+            if self._delete_sandbox_skill:
+                await self._delete_sandbox_skill(args["name"])
+
             return json.dumps({"name": args["name"], "success": True})
 
         return json.dumps({"error": f"Unknown function: {function_name}"})

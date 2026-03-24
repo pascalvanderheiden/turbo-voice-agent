@@ -34,6 +34,9 @@ param deployerPrincipalId string = ''
 @description('Deploy RBAC role assignments (requires User Access Administrator or Owner role)')
 param deployRbac bool = true
 
+@description('Enable per-task ACI sandbox isolation (creates VNet, subnet, managed identity)')
+param enableAciSandbox bool = false
+
 // ──────────────────────────────────────────────
 // Resource Group
 // ──────────────────────────────────────────────
@@ -124,6 +127,21 @@ module cae 'modules/container-apps-env.bicep' = {
   params: {
     name: 'cae-${resourceToken}'
     location: location
+    enableAciSubnet: enableAciSandbox
+  }
+}
+
+// ──────────────────────────────────────────────
+// ACI Sandbox Identity (user-assigned, shared by all ACI instances)
+// ──────────────────────────────────────────────
+module aciIdentity 'modules/aci-identity.bicep' = if (enableAciSandbox) {
+  name: 'aci-identity'
+  scope: rg
+  params: {
+    name: 'id-aci-sandbox-${resourceToken}'
+    location: location
+    acrId: acr.outputs.id
+    storageAccountId: storage.outputs.id
   }
 }
 
@@ -150,6 +168,12 @@ module backend 'modules/container-app-backend.bicep' = {
     frontendUrl: customDomainName != '' ? 'https://${customDomainName}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
     allowedOrigins: customDomainName != '' ? 'https://${customDomainName},https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
     sandboxFqdn: 'ca-sandbox-${resourceToken}.internal.${cae.outputs.defaultDomain}'
+    enableAciSandbox: enableAciSandbox
+    aciResourceGroup: rg.name
+    aciSubnetId: enableAciSandbox ? cae.outputs.aciSubnetId : ''
+    aciIdentityId: enableAciSandbox ? aciIdentity.outputs.id : ''
+    aciIdentityClientId: enableAciSandbox ? aciIdentity.outputs.clientId : ''
+    aciAcrLoginServer: acr.outputs.loginServer
   }
 }
 

@@ -47,6 +47,24 @@ param allowedOrigins string = ''
 @description('Sandbox Container App FQDN')
 param sandboxFqdn string = ''
 
+@description('Enable per-task ACI sandbox isolation')
+param enableAciSandbox bool = false
+
+@description('ACI sandbox resource group name')
+param aciResourceGroup string = ''
+
+@description('ACI sandbox subnet ID')
+param aciSubnetId string = ''
+
+@description('ACI user-assigned identity resource ID')
+param aciIdentityId string = ''
+
+@description('ACI user-assigned identity client ID')
+param aciIdentityClientId string = ''
+
+@description('ACR login server for ACI image pull')
+param aciAcrLoginServer string = ''
+
 resource backend 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
@@ -116,6 +134,15 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'FRONTEND_URL', value: frontendUrl }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
+            { name: 'USE_ACI_SANDBOX', value: enableAciSandbox ? 'true' : 'false' }
+            { name: 'ACI_RESOURCE_GROUP', value: aciResourceGroup }
+            { name: 'ACI_SUBNET_ID', value: aciSubnetId }
+            { name: 'ACI_IDENTITY_ID', value: aciIdentityId }
+            { name: 'ACI_IDENTITY_CLIENT_ID', value: aciIdentityClientId }
+            { name: 'ACI_ACR_LOGIN_SERVER', value: aciAcrLoginServer }
+            { name: 'ACI_SANDBOX_IMAGE', value: aciAcrLoginServer != '' ? '${aciAcrLoginServer}/turbo-voice-agent/sandbox:latest' : '' }
+            { name: 'ACI_SANDBOX_CPU', value: '2.0' }
+            { name: 'ACI_SANDBOX_MEMORY', value: '4' }
           ], !empty(entraClientSecret) ? [
             { name: 'ENTRA_CLIENT_SECRET', secretRef: 'entra-client-secret' }
           ] : [])

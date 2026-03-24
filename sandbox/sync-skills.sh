@@ -20,7 +20,12 @@ if ! command -v az &>/dev/null; then
 fi
 
 # Ensure az is logged in with managed identity (idempotent)
-az login --identity --allow-no-subscriptions 2>/dev/null || true
+# Use user-assigned identity client ID if provided (ACI mode), else system-assigned
+if [ -n "$ACI_IDENTITY_CLIENT_ID" ]; then
+  az login --identity --username "$ACI_IDENTITY_CLIENT_ID" --allow-no-subscriptions 2>/dev/null || true
+else
+  az login --identity --allow-no-subscriptions 2>/dev/null || true
+fi
 
 BLOBS=$(az storage blob list \
   --account-name "$AZURE_STORAGE_ACCOUNT_NAME" \

@@ -16,6 +16,18 @@ from app.services.dev_service import InMemoryDevService
 logger = logging.getLogger(__name__)
 
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
+USE_ACI_SANDBOX = os.getenv("USE_ACI_SANDBOX", "").lower() == "true"
+
+
+def _resolve_sandbox_url(task_id: str = "") -> str:
+    """Resolve sandbox URL — per-task ACI or static Container App."""
+    if USE_ACI_SANDBOX and _dev_agent and hasattr(_dev_agent, "_aci_sandbox_service"):
+        svc = _dev_agent._aci_sandbox_service
+        if svc:
+            url = svc.get_sandbox_url(task_id)
+            if url:
+                return url
+    return SANDBOX_URL
 
 router = APIRouter(prefix="/api/dev", tags=["development"])
 
@@ -211,7 +223,7 @@ async def delete_dev_task(task_id: str, request: Request):
         pipeline_task.cancel()
         logger.info("Cancelled pipeline asyncio task for %s", task_id)
     # Kill any active sandbox task
-    killed = await cancel_sandbox_task_for(task_id)
+    killed = await cancel_sandbox_task_for(task_id, dev_agent=_dev_agent)
     if killed:
         logger.info("Killed sandbox task for dev-task %s", task_id)
     # Clear bidirectional link on the spec (and any child feature specs)
@@ -367,7 +379,7 @@ async def download_archive(task_id: str, request: Request):
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(
-                f"{SANDBOX_URL}/workspace/archive",
+                f"{_resolve_sandbox_url(task_id)}/workspace/archive",
                 params={"dir": work_dir},
             )
             resp.raise_for_status()
@@ -587,7 +599,8 @@ async def start_live_preview(task_id: str, request: Request):
     work_dir = f"/workspace/{task_id}/{deck_name}"
 
     try:
-        async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=120) as client:
+        sandbox_url = _resolve_sandbox_url(task_id)
+        async with httpx.AsyncClient(base_url=sandbox_url, timeout=120) as client:
             # Step 1: npm install (wait for completion)
             install_resp = await client.post(
                 "/tasks",
@@ -631,7 +644,7 @@ async def start_live_preview(task_id: str, request: Request):
             await asyncio.sleep(2)
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
-                    probe = await client.get(f"{SANDBOX_URL}/proxy/3333/")
+                    probe = await client.get(f"{sandbox_url}/proxy/3333/")
                     if probe.status_code < 500:
                         ready = True
                         break
@@ -666,7 +679,7 @@ async def stop_live_preview(task_id: str):
     sandbox_task_id = preview.get("sandboxTaskId")
     if sandbox_task_id:
         try:
-            async with httpx.AsyncClient(base_url=SANDBOX_URL, timeout=10) as client:
+            async with httpx.AsyncClient(base_url=_resolve_sandbox_url(task_id), timeout=10) as client:
                 await client.delete(f"/tasks/{sandbox_task_id}")
         except Exception:
             pass
@@ -679,7 +692,7 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
     if task_id not in _live_previews:
         raise HTTPException(status_code=404, detail="No live preview running for this task")
 
-    target_url = f"{SANDBOX_URL.rstrip('/')}/proxy/3333/{path}"
+    target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/3333/{path}"
     query = str(request.url.query)
     if query:
         target_url += f"?{query}"

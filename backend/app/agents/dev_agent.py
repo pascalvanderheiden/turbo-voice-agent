@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
+USE_ACI_SANDBOX = os.getenv("USE_ACI_SANDBOX", "").lower() == "true"
 
 _DEFAULT_SQUAD_THEME = "Star Wars"
 
@@ -74,19 +75,36 @@ def _buf_append(task_id: str, entry: dict) -> None:
         del buf[: len(buf) - _PIPELINE_BUFFER_CAP]
 
 
-async def cancel_sandbox_task_for(task_id: str) -> bool:
+async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = None) -> bool:
     """Kill any active sandbox task associated with a dev task. Returns True if killed."""
     sandbox_task_id = _active_sandbox_tasks.pop(task_id, None)
     if not sandbox_task_id:
+        # If ACI mode, still try to delete the container group
+        if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
+            try:
+                await dev_agent._aci_sandbox_service.delete_container_group(task_id)
+            except Exception:
+                pass
         return False
+    # Resolve sandbox URL (ACI or static)
+    sandbox_url = SANDBOX_URL
+    if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
+        url = dev_agent._aci_sandbox_service.get_sandbox_url(task_id)
+        if url:
+            sandbox_url = url
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(f"{SANDBOX_URL}/tasks/{sandbox_task_id}")
+            resp = await client.delete(f"{sandbox_url}/tasks/{sandbox_task_id}")
             logger.info("Killed sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, resp.json())
-            return True
     except Exception as exc:
         logger.warning("Failed to kill sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, exc)
-        return False
+    # Also clean up ACI container group if in ACI mode
+    if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
+        try:
+            await dev_agent._aci_sandbox_service.delete_container_group(task_id)
+        except Exception:
+            pass
+    return True
 
 
 class DevAgent:
@@ -110,6 +128,40 @@ class DevAgent:
         self._slides_service = slides_service
         self._profile_service = profile_service
         self._squad_enabled_tasks: dict[str, bool] = {}  # Task-scoped squad flag
+        self._aci_sandbox_service = None  # Set by main.py when USE_ACI_SANDBOX=true
+
+    def _resolve_sandbox_url(self, task_id: str = "") -> str:
+        """Resolve the sandbox URL — per-task ACI IP or static Container App FQDN."""
+        if USE_ACI_SANDBOX and self._aci_sandbox_service and task_id:
+            url = self._aci_sandbox_service.get_sandbox_url(task_id)
+            if url:
+                return url
+        return SANDBOX_URL
+
+    async def _provision_aci_sandbox(self, task_id: str, gh_token: str = "") -> None:
+        """Provision an ACI container group for a dev-task (if ACI mode is enabled)."""
+        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
+            return
+        logger.info("Provisioning ACI sandbox for task %s", task_id)
+        try:
+            extra_env = {"GH_TOKEN": gh_token} if gh_token else None
+            ip = await self._aci_sandbox_service.create_container_group(
+                task_id, extra_env=extra_env
+            )
+            logger.info("ACI sandbox ready for task %s at %s", task_id, ip)
+        except Exception as exc:
+            logger.error("ACI sandbox provisioning failed for %s: %s", task_id, exc)
+            raise
+
+    async def _teardown_aci_sandbox(self, task_id: str) -> None:
+        """Delete the ACI container group for a dev-task (if ACI mode is enabled)."""
+        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
+            return
+        try:
+            await self._aci_sandbox_service.delete_container_group(task_id)
+            logger.info("ACI sandbox deleted for task %s", task_id)
+        except Exception as exc:
+            logger.warning("ACI sandbox teardown failed for %s: %s", task_id, exc)
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -366,6 +418,8 @@ class DevAgent:
         finally:
             # Clean up task-scoped squad flag
             self._squad_enabled_tasks.pop(task_id, None)
+            # Teardown ACI sandbox if in ACI mode
+            await self._teardown_aci_sandbox(task_id)
             # Always emit exit marker — this is the ONLY way SSE consumers know
             # the pipeline is done. Without this, the frontend stream hangs forever.
             if task_id in _pipeline_outputs:
@@ -387,6 +441,9 @@ class DevAgent:
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
+
+        # Provision ACI sandbox if in ACI mode
+        await self._provision_aci_sandbox(task_id)
 
         # Each dev task gets its own dedicated workspace directory
         work_dir = f"/workspace/{task_id}"
@@ -504,6 +561,9 @@ class DevAgent:
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
         model = await self._get_user_model(user_id)
+
+        # Provision ACI sandbox if in ACI mode
+        await self._provision_aci_sandbox(task_id)
 
         # Each dev task gets its own dedicated workspace directory
         work_dir = f"/workspace/{task_id}"
@@ -643,6 +703,9 @@ class DevAgent:
         deck_name = task.title.lower().replace(" ", "-")[:30]
         model = await self._get_user_model(user_id)
 
+        # Provision ACI sandbox if in ACI mode
+        await self._provision_aci_sandbox(task_id)
+
         # Gather slides content and deck config from refined draft
         slides_prompt = f"Create a slide deck for: {task.title}"
         deck_config: dict = {}
@@ -711,46 +774,48 @@ class DevAgent:
                 raise_on_error=False,
             )
 
-            # Scaffold deck via Copilot CLI — create-deckio is an interactive CLI
-            # that needs terminal interaction. Copilot CLI handles this natively.
-            cfg_title = deck_config["title"].replace('"', '\\"')
-            cfg_subtitle = (deck_config.get("subtitle") or "").replace('"', '\\"')
-            cfg_theme = deck_config["theme"].replace('"', '\\"')
-            cfg_appearance = deck_config["appearance"].replace('"', '\\"')
-            cfg_palette = deck_config["palette"].replace('"', '\\"')
-            scaffold_prompt = (
-                f"Run `npx -y create-deckio@latest {deck_name}` in the current directory "
-                f"and answer its prompts with these values:\n"
-                f"- Title: {cfg_title}\n"
-                f"- Subtitle: {cfg_subtitle}\n"
-                f"- Theme: {cfg_theme}\n"
-                f"- Appearance: {cfg_appearance}\n"
-                f"- Palette: {cfg_palette}\n"
-                f"Wait for it to complete and verify the directory was created."
+            # Scaffold deck via create-deckio CLI flags (non-interactive with --yes)
+            cfg_title = deck_config["title"].replace("'", "'\\''")
+            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "'\\''")
+            cfg_icon = (deck_config.get("icon") or "").replace("'", "'\\''")
+            cfg_theme = deck_config["theme"].replace("'", "'\\''")
+            cfg_appearance = deck_config["appearance"].replace("'", "'\\''")
+            cfg_palette = deck_config["palette"].replace("'", "'\\''")
+            scaffold_cmd = (
+                f"npx -y create-deckio@latest {deck_name}"
+                f" --title '{cfg_title}'"
+                f" --subtitle '{cfg_subtitle}'"
+            )
+            if cfg_icon:
+                scaffold_cmd += f" --icon '{cfg_icon}'"
+            scaffold_cmd += (
+                f" --theme '{cfg_theme}'"
+                f" --appearance '{cfg_appearance}'"
+                f" --palette '{cfg_palette}'"
+                f" --yes"
             )
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=scaffold_prompt,
-                model=model,
+                command=scaffold_cmd,
+                args=[],
                 stage_label="init-scaffold",
                 work_dir=work_dir,
                 timeout=300,
-                stall_timeout=120,
-                autopilot=True,
+                raise_on_error=True,
             )
 
-            # Move into the created deck directory
+            # cd into the created deck directory for all subsequent steps
             deck_dir = f"/workspace/{task_id}/{deck_name}"
 
-            # Verify create-deckio produced the expected directory with .github/
+            # Verify create-deckio produced the expected structure
             verify_output = await self._sandbox_exec(
                 task_id=task_id,
                 command=(
-                    f"test -d '{deck_dir}'"
+                    f"cd '{deck_dir}'"
                     f" && echo 'DECK_DIR_OK'"
-                    f" && (test -d '{deck_dir}/.github' && echo 'GITHUB_DIR_OK'"
-                    f" || echo 'GITHUB_DIR_MISSING')"
-                    f" && ls -la '{deck_dir}/'"
+                    " && (test -d '.github' && echo 'GITHUB_DIR_OK'"
+                    " || echo 'GITHUB_DIR_MISSING')"
+                    " && ls -la"
                 ),
                 args=[],
                 stage_label="init-verify",
@@ -771,11 +836,11 @@ class DevAgent:
 
             work_dir = deck_dir
 
-            # Init git in the deck directory so Copilot CLI detects .github/ skills
+            # Init git inside the deck directory so Copilot CLI detects .github/ skills
             git_output = await self._sandbox_exec(
                 task_id=task_id,
                 command=(
-                    f"cd '{work_dir}' && git init -q"
+                    "git init -q"
                     " && git config user.email 'agent@sandbox'"
                     " && git config user.name 'Sandbox Agent'"
                     " && git add -A"
@@ -1063,7 +1128,7 @@ class DevAgent:
         logger.info(
             "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s "
             "sandbox_url=%s buf_id=%s",
-            stage_label, task_id, SANDBOX_URL, id(output_buf),
+            stage_label, task_id, self._resolve_sandbox_url(task_id), id(output_buf),
         )
 
         # Emit stage marker
@@ -1072,8 +1137,9 @@ class DevAgent:
                 "type": "stage", "data": f"── {stage_label} ──", "ts": time.time()
             })
 
+        sandbox_url = self._resolve_sandbox_url(task_id)
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{SANDBOX_URL}/tasks", json=payload)
+            resp = await client.post(f"{sandbox_url}/tasks", json=payload)
             resp.raise_for_status()
             task_data = resp.json()
             sandbox_task_id = task_data["id"]
@@ -1085,7 +1151,7 @@ class DevAgent:
         logger.info(
             "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, "
             "connecting SSE to %s/tasks/%s/stream",
-            sandbox_task_id, stage_label, SANDBOX_URL, sandbox_task_id,
+            sandbox_task_id, stage_label, sandbox_url, sandbox_task_id,
         )
 
         # Stream output via SSE
@@ -1105,7 +1171,7 @@ class DevAgent:
                 timeout=httpx.Timeout(10.0, read=None),
             ) as client:
                 async with client.stream(
-                    "GET", f"{SANDBOX_URL}/tasks/{sandbox_task_id}/stream"
+                    "GET", f"{sandbox_url}/tasks/{sandbox_task_id}/stream"
                 ) as sse_resp:
                     logger.info(
                         "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
@@ -1319,11 +1385,14 @@ class DevAgent:
 
         return combined
 
-    async def _kill_sandbox_task(self, sandbox_task_id: str, stage_label: str) -> None:
+    async def _kill_sandbox_task(
+        self, sandbox_task_id: str, stage_label: str, dev_task_id: str = ""
+    ) -> None:
         """Kill a running sandbox task process to free resources on timeout/stall."""
         try:
+            sandbox_url = self._resolve_sandbox_url(dev_task_id)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.delete(f"{SANDBOX_URL}/tasks/{sandbox_task_id}")
+                resp = await client.delete(f"{sandbox_url}/tasks/{sandbox_task_id}")
                 logger.info(
                     "[SANDBOX-DIAG] Kill task %s [%s]: %s",
                     sandbox_task_id, stage_label, resp.json(),
@@ -1428,15 +1497,16 @@ class DevAgent:
         except Exception as e:
             logger.debug("Checkpoint failed (non-critical): %s", e)
 
-    async def _read_sandbox_file(self, path: str) -> str | None:
+    async def _read_sandbox_file(self, path: str, dev_task_id: str = "") -> str | None:
         """Read a text file from the sandbox container via HTTP."""
         # The /files/* endpoint serves from /workspace, so strip the prefix
         rel_path = path
         if rel_path.startswith("/workspace/"):
             rel_path = rel_path[len("/workspace/"):]
         try:
+            sandbox_url = self._resolve_sandbox_url(dev_task_id)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{SANDBOX_URL}/files/{rel_path}")
+                resp = await client.get(f"{sandbox_url}/files/{rel_path}")
                 if resp.status_code == 200:
                     data = resp.json()
                     return base64.b64decode(data["data"]).decode("utf-8", errors="replace")
@@ -1496,9 +1566,10 @@ class DevAgent:
 
         # Send answer to sandbox stdin
         try:
+            sandbox_url = self._resolve_sandbox_url(task_id)
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
-                    f"{SANDBOX_URL}/tasks/{sandbox_task_id}/input",
+                    f"{sandbox_url}/tasks/{sandbox_task_id}/input",
                     json={"input": answer},
                 )
                 resp.raise_for_status()
@@ -1565,12 +1636,13 @@ class DevAgent:
         """Fallback polling when SSE fails."""
         start = time.monotonic()
         consecutive_404s = 0
+        sandbox_url = self._resolve_sandbox_url(task_id)
         async with httpx.AsyncClient(timeout=15.0) as client:
             while time.monotonic() - start < remaining_timeout:
                 await asyncio.sleep(3)
                 try:
                     resp = await client.get(
-                        f"{SANDBOX_URL}/tasks/{sandbox_task_id}/status"
+                        f"{sandbox_url}/tasks/{sandbox_task_id}/status"
                     )
                     if resp.status_code == 404:
                         consecutive_404s += 1
@@ -1611,13 +1683,14 @@ class DevAgent:
     ) -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
         svc = self._service.with_user(user_id) if user_id else self._service
+        sandbox_url = self._resolve_sandbox_url(task_id)
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 files: list[str] = []
                 # Search with multiple glob patterns (screenshots, slides, any png)
                 for pattern in ("screenshot*.png", "slide-*.png", "slide_*.png", "*.png"):
                     resp = await client.get(
-                        f"{SANDBOX_URL}/files",
+                        f"{sandbox_url}/files",
                         params={"glob": pattern, "dir": work_dir},
                     )
                     resp.raise_for_status()
@@ -1631,7 +1704,7 @@ class DevAgent:
                     # sandbox /files/* joins with /workspace, so strip that prefix
                     rel = file_path.replace("/workspace/", "", 1)
                     try:
-                        fresp = await client.get(f"{SANDBOX_URL}/files/{rel}")
+                        fresp = await client.get(f"{sandbox_url}/files/{rel}")
                         fresp.raise_for_status()
                         fdata = fresp.json()
                         artifact = DevArtifact(
@@ -1657,9 +1730,10 @@ class DevAgent:
 
         try:
             # Find the PDF file in the sandbox workspace
+            sandbox_url = self._resolve_sandbox_url(task_id)
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
-                    f"{SANDBOX_URL}/files",
+                    f"{sandbox_url}/files",
                     params={"glob": "*.pdf", "dir": work_dir},
                 )
                 resp.raise_for_status()
@@ -1675,7 +1749,7 @@ class DevAgent:
             # Download PDF binary from sandbox
             async with httpx.AsyncClient(timeout=60.0) as client:
                 fresp = await client.get(
-                    f"{SANDBOX_URL}/files/{rel}",
+                    f"{sandbox_url}/files/{rel}",
                     params={"raw": "true"},
                 )
                 fresp.raise_for_status()
@@ -1876,9 +1950,10 @@ class DevAgent:
     async def _sync_skills_stage(self, task_id: str) -> None:
         """Sync skills from blob storage to the sandbox and report what's available."""
         logger.info("Skills sync: task=%s", task_id)
+        sandbox_url = self._resolve_sandbox_url(task_id)
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(f"{SANDBOX_URL}/skills/sync")
+                resp = await client.post(f"{sandbox_url}/skills/sync")
                 resp.raise_for_status()
                 result = resp.json()
                 synced = result.get("synced", 0)
@@ -1898,7 +1973,7 @@ class DevAgent:
 
                 # List available skills for visibility
                 ls_resp = await client.post(
-                    f"{SANDBOX_URL}/tasks",
+                    f"{sandbox_url}/tasks",
                     json={
                         "command": "ls -1 /home/agent/.copilot/skills/ 2>/dev/null || echo '(none)'",
                         "args": [],
@@ -1911,7 +1986,7 @@ class DevAgent:
                     if ls_id:
                         await asyncio.sleep(2)
                         status_resp = await client.get(
-                            f"{SANDBOX_URL}/tasks/{ls_id}/status"
+                            f"{sandbox_url}/tasks/{ls_id}/status"
                         )
                         if status_resp.status_code == 200:
                             status_data = status_resp.json()

@@ -1,4 +1,9 @@
 #!/bin/bash
+# Authenticate GitHub CLI if GH_TOKEN is provided
+if [ -n "$GH_TOKEN" ]; then
+  echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null && echo "GitHub CLI authenticated." || echo "GitHub CLI auth failed (non-fatal)."
+fi
+
 # Initialize git repo in workspace if needed (Copilot CLI requires it)
 if [ ! -d /workspace/.git ]; then
   cd /workspace && git init -q && git config user.email "agent@sandbox" && git config user.name "Sandbox Agent"

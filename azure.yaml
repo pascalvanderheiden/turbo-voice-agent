@@ -27,6 +27,9 @@ services:
       remoteBuild: true
 
   sandbox:
+    # Kept for Container App fallback (USE_ACI_SANDBOX=false).
+    # When ACI mode is enabled, this image is still built and pushed to ACR
+    # for use by dynamically provisioned ACI container groups.
     host: containerapp
     project: ./sandbox
     language: js

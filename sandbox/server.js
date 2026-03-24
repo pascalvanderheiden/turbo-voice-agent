@@ -10,6 +10,10 @@ app.use(express.json({ limit: '1mb' }));
 
 const tasks = new Map();
 
+// SINGLE_TASK_MODE: When set, server exits after the last task completes
+const SINGLE_TASK_MODE = process.env.SINGLE_TASK_MODE === "true";
+let activeTasks = 0;
+
 // Track premium request consumption (each Copilot CLI invocation = 1 premium request)
 let premiumRequests = 0;
 
@@ -122,8 +126,14 @@ app.post("/tasks", (req, res) => {
   proc.on("close", (code) => {
     exitCode = code;
     output.push({ type: "exit", code, ts: Date.now() });
+    activeTasks--;
+    if (SINGLE_TASK_MODE && activeTasks <= 0) {
+      console.log("SINGLE_TASK_MODE: last task completed, shutting down in 30s...");
+      setTimeout(() => process.exit(0), 30000);
+    }
   });
 
+  activeTasks++;
   tasks.set(id, { proc, output, exitCode: () => exitCode, model, workDir });
 
   res.status(201).json({ id, model, workDir });

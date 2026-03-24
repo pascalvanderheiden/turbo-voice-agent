@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -158,7 +159,12 @@ async def lifespan(app: FastAPI):
     dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills, slides_service=slides_service, profile_service=app.state.user_profile_service)
     # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
     spec_agent._dev_agent = dev_agent
-    skills_agent = SkillsAgent(skills_service, cosmos_skills=cosmos_skills)
+    skills_agent = SkillsAgent(
+        skills_service,
+        cosmos_skills=cosmos_skills,
+        sync_sandbox=_sync_sandbox_skills,
+        delete_sandbox_skill=_delete_sandbox_skill,
+    )
     marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
 
     # Initialize MCP client and Todo Agent
@@ -251,9 +257,35 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.debug("Dev-task recovery skipped (non-fatal)")
 
+    # Start ACI orphan cleanup background task if ACI sandbox mode is enabled
+    aci_cleanup_task = None
+    if os.getenv("USE_ACI_SANDBOX", "").lower() == "true":
+        from app.services.aci_sandbox_service import AciSandboxService, ORPHAN_CLEANUP_INTERVAL
+        from app.agents.dev_agent import _active_sandbox_tasks
+
+        aci_svc = AciSandboxService()
+        # Store on dev_agent for pipeline use
+        dev_agent._aci_sandbox_service = aci_svc
+
+        async def _aci_cleanup_loop():
+            while True:
+                await asyncio.sleep(ORPHAN_CLEANUP_INTERVAL)
+                try:
+                    active = set(_active_sandbox_tasks.keys())
+                    deleted = await aci_svc.cleanup_orphans(active)
+                    if deleted:
+                        logger.info("ACI orphan cleanup: deleted %d container group(s)", deleted)
+                except Exception as exc:
+                    logger.warning("ACI orphan cleanup error: %s", exc)
+
+        aci_cleanup_task = asyncio.create_task(_aci_cleanup_loop())
+        logger.info("ACI sandbox mode enabled — orphan cleanup started")
+
     yield
 
     # Shutdown
+    if aci_cleanup_task:
+        aci_cleanup_task.cancel()
     await todo_mcp_client.stop()
     await work_mcp_client.stop()
     await close_cosmos_client()
