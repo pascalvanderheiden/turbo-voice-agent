@@ -1,15 +1,14 @@
 /**
- * End-to-end test for Mockup Dev-Task pipeline.
+ * End-to-end test for Dev-Task pipelines.
  *
  * Verifies:
  * 1. Create a mockup dev-task via API
- * 2. Detail page shows correct 8 pipeline stages
- * 3. StatusPanel renders (squad + openspec sections present)
- * 4. Terminal/sandbox stream section renders
- * 5. Archive filter tabs work on development list page
- * 6. Mode badge shows "Mockup" for mockup tasks
- * 7. Slides mode task shows 3 stages (init/slides/export)
- * 8. Archive/unarchive round-trip works
+ * 2. Detail page shows correct 3 pipeline stages (Init, Implement, Screenshots)
+ * 3. StatusPanel renders (terminal/sandbox section present)
+ * 4. Mode badge shows "Mockup" for mockup tasks
+ * 5. Slides mode task shows 2 stages (Init, Slides)
+ * 6. Archive filter tabs work on development list page
+ * 7. Archive/unarchive round-trip works
  *
  * Run:  npx playwright test e2e/dev-task-e2e.spec.ts --project="Desktop Chrome"
  */
@@ -63,9 +62,26 @@ async function deleteTask(
   });
 }
 
+/** Count visible stage nodes on the detail page by checking the SHORT_LABELS text. */
+async function countVisibleStages(
+  page: import("@playwright/test").Page,
+  stageLabels: string[],
+): Promise<string[]> {
+  const found: string[] = [];
+  for (const label of stageLabels) {
+    // StageNode renders labels in a small text span under the icon
+    const loc = page.locator(`text="${label}"`).first();
+    if (await loc.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      found.push(label);
+    }
+  }
+  return found;
+}
+
 // ── 1. Mockup Dev-Task Detail ──────────────────────────────────────────────
 
-const MOCKUP_STAGES = ["Init", "OpenSpec", "Skills", "Squad", "Propose", "Apply", "Archive", "Screenshots"];
+// Current mockup pipeline: init → implement → screenshots
+const MOCKUP_LABELS = ["Init", "Impl", "Screenshots"];
 
 test.describe("Mockup Dev-Task Pipeline", () => {
   let token: string;
@@ -93,19 +109,16 @@ test.describe("Mockup Dev-Task Pipeline", () => {
     await ctx.close();
   });
 
-  test("detail page shows all 8 pipeline stages", async ({ page }) => {
+  test("detail page shows 3 mockup pipeline stages", async ({ page }) => {
     await page.goto(`/development/${taskId}`);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(2_000);
 
-    const found: string[] = [];
-    for (const stage of MOCKUP_STAGES) {
-      const loc = page.locator(`span.font-medium:text-is("${stage}")`);
-      if (await loc.first().isVisible().catch(() => false)) {
-        found.push(stage);
-      }
-    }
-    expect(found.length, `Found ${found.join(",")} — expected all 8`).toBe(8);
+    const found = await countVisibleStages(page, MOCKUP_LABELS);
+    expect(
+      found.length,
+      `Found ${found.join(",")} — expected all ${MOCKUP_LABELS.length}`,
+    ).toBe(MOCKUP_LABELS.length);
   });
 
   test("mode badge shows Mockup", async ({ page }) => {
@@ -117,10 +130,8 @@ test.describe("Mockup Dev-Task Pipeline", () => {
   test("sandbox terminal section is present", async ({ page }) => {
     await page.goto(`/development/${taskId}`);
     await page.waitForLoadState("networkidle");
-    // Terminal component appears for non-pending tasks OR the sandbox label is visible
     const terminal = page.getByText("Copilot CLI Sandbox");
     const screenshots = page.getByText("No preview screenshots yet");
-    // At least one of these sections should render on the detail page
     const hasTerminal = await terminal.isVisible({ timeout: 5_000 }).catch(() => false);
     const hasScreenshots = await screenshots.isVisible({ timeout: 3_000 }).catch(() => false);
     expect(hasTerminal || hasScreenshots).toBe(true);
@@ -135,7 +146,8 @@ test.describe("Mockup Dev-Task Pipeline", () => {
 
 // ── 2. Slides Dev-Task Stages ──────────────────────────────────────────────
 
-const SLIDES_STAGES = ["Init", "Slides", "Export"];
+// Current slides pipeline: init → slides (no export)
+const SLIDES_LABELS = ["Init", "Slides"];
 
 test.describe("Slides Dev-Task Pipeline", () => {
   let token: string;
@@ -163,19 +175,16 @@ test.describe("Slides Dev-Task Pipeline", () => {
     await ctx.close();
   });
 
-  test("detail page shows 3 slides pipeline stages", async ({ page }) => {
+  test("detail page shows 2 slides pipeline stages", async ({ page }) => {
     await page.goto(`/development/${taskId}`);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(2_000);
 
-    const found: string[] = [];
-    for (const stage of SLIDES_STAGES) {
-      const loc = page.locator(`span.font-medium:text-is("${stage}")`);
-      if (await loc.first().isVisible().catch(() => false)) {
-        found.push(stage);
-      }
-    }
-    expect(found.length, `Found ${found.join(",")} — expected 3 slides stages`).toBe(3);
+    const found = await countVisibleStages(page, SLIDES_LABELS);
+    expect(
+      found.length,
+      `Found ${found.join(",")} — expected ${SLIDES_LABELS.length} slides stages`,
+    ).toBe(SLIDES_LABELS.length);
   });
 
   test("mode badge shows Slidedeck", async ({ page }) => {
@@ -261,7 +270,7 @@ test.describe("Dev-Task Archive Flow", () => {
   });
 });
 
-// ── 4. OpenSpec & Squad Status Panel ───────────────────────────────────────
+// ── 4. StatusPanel Rendering ───────────────────────────────────────────────
 
 test.describe("StatusPanel Rendering", () => {
   test("development detail page renders without errors", async ({ page }) => {

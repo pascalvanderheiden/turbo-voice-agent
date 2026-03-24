@@ -33,7 +33,7 @@ async def _create_openspec_task(service, with_foundation_complete=False):
     await service.set_iterations(task.id, iterations)
 
     if with_foundation_complete:
-        for stage_name in ["init", "skills", "implement-foundation"]:
+        for stage_name in ["init", "implement-foundation"]:
             await service.set_iteration_stage_status(task.id, 0, stage_name, "completed")
         await service.set_status(task.id, "completed")
 

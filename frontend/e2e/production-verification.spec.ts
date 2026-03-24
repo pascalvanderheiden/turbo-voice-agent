@@ -3,7 +3,7 @@
  *
  * Verifies three features:
  * 1. OpenSpec Import — "Import OpenSpec" button on /specs
- * 2. Dev Task Stages — 8 pipeline stages on a dev task detail page
+ * 2. Dev Task Stages — 3 pipeline stages on a dev task detail page
  * 3. Sandbox Stop — Stop/Start buttons on /agents
  *
  * Run:  npx playwright test --config playwright.prod.config.ts --project=production
@@ -45,19 +45,11 @@ test.describe("OpenSpec Import", () => {
 
 // ── 2. Dev Task Stages ──────────────────────────────────────────────────────
 
-const EXPECTED_STAGES = [
-  "Init",
-  "OpenSpec",
-  "Skills",
-  "Squad",
-  "Propose",
-  "Apply",
-  "Archive",
-  "Screenshots",
-];
+// Current mockup pipeline: init → implement → screenshots
+const EXPECTED_LABELS = ["Init", "Impl", "Screenshots"];
 
 test.describe("Dev Task Stages", () => {
-  test("dev task detail page shows all 8 pipeline stages", async ({
+  test("dev task detail page shows all 3 pipeline stages", async ({
     page,
   }) => {
     // Navigate to /development to load the app and get MSAL auth in sessionStorage
@@ -82,7 +74,7 @@ test.describe("Dev Task Stages", () => {
 
     expect(token, "Could not extract MSAL access token from sessionStorage").toBeTruthy();
 
-    // Create a new dev task via the backend API — new tasks always get 8 stages
+    // Create a new dev task via the backend API
     const createResp = await page.request.post(`${BACKEND_URL}/api/dev`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -102,17 +94,17 @@ test.describe("Dev Task Stages", () => {
       await page.waitForLoadState("networkidle");
       await page.waitForTimeout(2_000);
 
-      // Verify all 8 pipeline stages are visible
+      // Verify pipeline stages are visible
       const foundStages: string[] = [];
       const missingStages: string[] = [];
 
-      for (const stage of EXPECTED_STAGES) {
-        const stageLocator = page.locator(`span.font-medium:text-is("${stage}")`);
-        const visible = await stageLocator.first().isVisible().catch(() => false);
+      for (const label of EXPECTED_LABELS) {
+        const loc = page.locator(`text="${label}"`).first();
+        const visible = await loc.isVisible({ timeout: 3_000 }).catch(() => false);
         if (visible) {
-          foundStages.push(stage);
+          foundStages.push(label);
         } else {
-          missingStages.push(stage);
+          missingStages.push(label);
         }
       }
 
@@ -123,8 +115,8 @@ test.describe("Dev Task Stages", () => {
 
       expect(
         foundStages.length,
-        `Expected 8 stages but found ${foundStages.length}. Missing: ${missingStages.join(", ")}`,
-      ).toBe(8);
+        `Expected ${EXPECTED_LABELS.length} stages but found ${foundStages.length}. Missing: ${missingStages.join(", ")}`,
+      ).toBe(EXPECTED_LABELS.length);
     } finally {
       // Clean up — delete the test task
       const delResp = await page.request.delete(`${BACKEND_URL}/api/dev/${taskId}`, {

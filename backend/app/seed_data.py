@@ -297,7 +297,7 @@ async def seed_demo_data(
         )
     )
     if completed_task:
-        for stage_name in ("init", "skills", "implement", "screenshots"):
+        for stage_name in ("init", "implement", "screenshots"):
             await dev_svc.set_stage_status(
                 completed_task.id,
                 stage_name,

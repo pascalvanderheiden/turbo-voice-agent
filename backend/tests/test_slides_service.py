@@ -70,10 +70,10 @@ async def test_slides_dev_task_has_correct_stages(dev_service):
     )
     assert task.mode == "slides"
     assert task.slides_id == "s1"
-    # Slides mode should have 3 stages: init, slides, export
+    # Slides mode should have 2 stages: init, slides
     assert len(task.iterations) == 1
     stage_names = [s.name for s in task.iterations[0].stages]
-    assert stage_names == ["init", "slides", "export"]
+    assert stage_names == ["init", "slides"]
 
 
 @pytest.mark.asyncio
@@ -95,6 +95,5 @@ async def test_default_dev_task_has_mockup_stages(dev_service):
     task = await dev_service.create(DevTaskCreate(title="Regular"))
     stage_names = [s.name for s in task.iterations[0].stages]
     assert "init" in stage_names
-    assert "skills" in stage_names
     assert "implement" in stage_names
     assert "screenshots" in stage_names
