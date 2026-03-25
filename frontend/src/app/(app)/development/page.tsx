@@ -17,6 +17,7 @@ import {
   IconPresentation,
   IconFileExport,
   IconArchive,
+  IconRocket,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -32,6 +33,7 @@ const STAGE_META: Record<string, { icon: typeof IconSettingsAutomation; label: s
   screenshots: { icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
   // Slides-specific stages
   slides:      { icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
+  run:         { icon: IconRocket,             label: "Run",         color: "#22C55E" },
   export:      { icon: IconFileExport,         label: "Export",      color: "#22C55E" },
 };
 

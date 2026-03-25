@@ -26,6 +26,8 @@ import {
   IconExternalLink,
   IconFileTypePdf,
   IconPackage,
+  IconRefresh,
+  IconRocket,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
@@ -79,6 +81,7 @@ const STAGE_META: Record<string, { Icon: typeof IconSettingsAutomation; label: s
   screenshots: { Icon: IconPhoto,              label: "Screenshots", color: "#22C55E" },
   // Slides-specific stages
   slides:      { Icon: IconPresentation,       label: "Slides",      color: "var(--color-brand-cyan)" },
+  run:         { Icon: IconRocket,             label: "Run",         color: "#22C55E" },
 };
 
 function getStageMeta(stageName: string) {
@@ -100,7 +103,7 @@ const FEATURE_STAGES = ["implement"];
 
 const SHORT_LABELS: Record<string, string> = {
   init: "Init", skills: "Skills", implement: "Impl",
-  screenshots: "Screenshots", slides: "Slides",
+  screenshots: "Screenshots", slides: "Slides", run: "Run",
 };
 
 function StageNode({ stage, meta, taskFailed }: { stage: { name: string; status: string; startedAt?: string | null; completedAt?: string | null }; meta: (typeof STAGE_META)[string]; taskFailed?: boolean }) {
@@ -461,6 +464,17 @@ export default function DevTaskDetailPage() {
   useEffect(() => { loadTask(); }, [loadTask]);
 
   const isRunning = task?.status === "running";
+  // Auto-show preview when slides "run" stage completes
+  useEffect(() => {
+    if (!task || task.mode !== "slides") return;
+    const allStages = task.iterations.length > 0
+      ? task.iterations.flatMap((it) => it.stages)
+      : task.stages;
+    const runStage = allStages.find((s) => s.name === "run");
+    if (runStage?.status === "completed" && !liveUrl) {
+      setLiveUrl(`/api/dev/${task.id}/preview/`);
+    }
+  }, [task, liveUrl]);
   useEffect(() => {
     if (!isRunning) {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -579,13 +593,16 @@ export default function DevTaskDetailPage() {
               <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
                 <IconExternalLink size={16} /> Open Live
               </a>
+              <button onClick={() => { setLiveUrl(null); setTimeout(() => setLiveUrl(`/api/dev/${task.id}/preview/`), 100); }} className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10 hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
+                <IconRefresh size={16} /> Refresh
+              </button>
               <button onClick={async () => { try { await devApi.stopLive(task.id); setLiveUrl(null); toast.success("Live preview stopped"); } catch { toast.error("Failed to stop"); } }} className="px-3 py-2 rounded-[var(--radius-md)] text-sm text-red-400 bg-red-500/10 hover:bg-red-500/20 transition-colors">
                 Stop
               </button>
             </div>
           ) : (
-            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(res.url); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "init" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              <IconPlayerPlay size={16} /> {startingLive ? "Starting..." : "Run Live"}
+            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(res.url); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "run" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              <IconPlayerPlay size={16} /> {startingLive ? "Starting..." : "Start Preview"}
             </button>
           )
         )}
@@ -707,10 +724,10 @@ export default function DevTaskDetailPage() {
               <p className="text-sm text-[var(--color-text-muted)]">No live preview yet</p>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
                 {task.status === "completed"
-                  ? "Click \"Run Live\" above to start the slide deck preview."
+                  ? "Click \"Start Preview\" above to launch the slide deck preview."
                   : task.status === "running"
-                  ? "Preview will be available after the init stage completes."
-                  : "Run the pipeline first, then start the live preview."}
+                  ? "Preview will auto-appear when the run stage completes."
+                  : "Run the pipeline first — the preview will appear automatically."}
               </p>
             </div>
           )}

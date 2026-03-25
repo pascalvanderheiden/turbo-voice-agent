@@ -5,7 +5,7 @@ Each sandbox runs Copilot CLI with simplified sequential pipelines.
 
 Supports two pipeline modes:
 - Mockup: single iteration — init → skills → implement → screenshots
-- Sequential: multi-iteration — init → skills → implement-foundation → implement-feature-N → screenshots
+- Sequential: multi-iteration — init → skills → implement → screenshots
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 import httpx
 
 from app.models.dev_task import DevArtifact, DevDecision
-from app.services.dev_service import InMemoryDevService, _default_iteration, build_sequential_stages
+from app.services.dev_service import InMemoryDevService, _default_iteration
 
 logger = logging.getLogger(__name__)
 
@@ -693,15 +693,21 @@ class DevAgent:
         logger.info("Sequential pipeline COMPLETED for task %s", task_id)
 
     async def _run_slides_pipeline(self, task_id: str, user_id: str) -> None:
-        """Slides pipeline: init (create-deckio) → slides (Copilot CLI + deck-add-slide skill)."""
+        """Slides pipeline: init → slides → run.
+
+        Init: clean workspace, create-deckio scaffold, verify .github/, git init, sync skills.
+        Slides: copilot --autopilot --yolo in the deck directory.
+        Run: npm install, npm run dev, poll /proxy/3333/ until healthy.
+        """
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
         if not task:
             return
 
         work_dir = f"/workspace/{task_id}"
-        deck_name = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))).strip("-")[:30]
-        model = await self._get_user_model(user_id)
+        deck_name = re.sub(
+            r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))
+        ).strip("-")[:30]
 
         # Provision ACI sandbox if in ACI mode
         await self._provision_aci_sandbox(task_id)
@@ -734,15 +740,26 @@ class DevAgent:
                             slides_prompt = slides_data.refined_draft
                     # Use model-level deck config as fallback
                     deck_config.setdefault("title", slides_data.title)
-                    deck_config.setdefault("subtitle", getattr(slides_data, "subtitle", "") or "")
-                    deck_config.setdefault("icon", getattr(slides_data, "icon", "") or "")
-                    deck_config.setdefault("theme", getattr(slides_data, "theme", "shadcn/ui"))
-                    deck_config.setdefault("appearance", getattr(slides_data, "appearance", "dark"))
-                    deck_config.setdefault("palette", getattr(slides_data, "palette", "arctic"))
+                    deck_config.setdefault(
+                        "subtitle", getattr(slides_data, "subtitle", "") or ""
+                    )
+                    deck_config.setdefault(
+                        "icon", getattr(slides_data, "icon", "") or ""
+                    )
+                    deck_config.setdefault(
+                        "theme", getattr(slides_data, "theme", "default")
+                    )
+                    deck_config.setdefault(
+                        "appearance", getattr(slides_data, "appearance", "dark")
+                    )
+                    deck_config.setdefault(
+                        "palette", getattr(slides_data, "palette", "blue")
+                    )
                     # Check for PowerPoint template
                     if slides_data.attachments:
                         pptx_files = [
-                            a for a in slides_data.attachments if a.lower().endswith(".pptx")
+                            a for a in slides_data.attachments
+                            if a.lower().endswith(".pptx")
                         ]
                         if pptx_files:
                             pptx_url = pptx_files[0]
@@ -752,13 +769,13 @@ class DevAgent:
         # Defaults if no config parsed
         deck_config.setdefault("title", task.title)
         deck_config.setdefault("subtitle", "")
-        deck_config.setdefault("theme", "shadcn/ui")
+        deck_config.setdefault("theme", "default")
         deck_config.setdefault("appearance", "dark")
-        deck_config.setdefault("palette", "arctic")
+        deck_config.setdefault("palette", "blue")
 
         await svc.set_status(task_id, "running")
 
-        # ── Stage 1: Init — create-deckio scaffold via Copilot CLI ──
+        # ── Stage 1: Init — scaffold + skills sync ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
             # Clean workspace
@@ -772,7 +789,7 @@ class DevAgent:
                 raise_on_error=False,
             )
 
-            # Scaffold the deck project as a direct shell command (reliable)
+            # Scaffold the deck project
             cfg_title = deck_config["title"].replace("'", "\\'")
             cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
             create_cmd = (
@@ -795,7 +812,6 @@ class DevAgent:
                 raise_on_error=True,
             )
 
-            # cd into the created deck directory for all subsequent steps
             deck_dir = f"/workspace/{task_id}/{deck_name}"
 
             # Verify create-deckio produced the expected structure
@@ -803,7 +819,7 @@ class DevAgent:
                 task_id=task_id,
                 command=(
                     f"cd '{deck_dir}'"
-                    f" && echo 'DECK_DIR_OK'"
+                    " && echo 'DECK_DIR_OK'"
                     " && (test -d '.github' && echo 'GITHUB_DIR_OK'"
                     " || echo 'GITHUB_DIR_MISSING')"
                     " && ls -la"
@@ -827,7 +843,7 @@ class DevAgent:
 
             work_dir = deck_dir
 
-            # Init git inside the deck directory so Copilot CLI detects .github/ skills
+            # Init git so Copilot CLI detects .github/ skills
             git_output = await self._sandbox_exec(
                 task_id=task_id,
                 command=(
@@ -844,6 +860,9 @@ class DevAgent:
             )
             logger.info("Git init output for %s: %s", task_id, git_output[:300])
 
+            # Sync skills from blob storage (previously a separate stage)
+            await self._sync_skills_stage(task_id)
+
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
             logger.error("Slides init failed for %s: %s", task_id, e)
@@ -853,57 +872,118 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Skills — sync skills from blob storage ──
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
-        await self._sync_skills_stage(task_id)
-        await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
-
-        # ── Stage 3: Slides — add slides using deck-add-slide skill ──
+        # ── Stage 2: Slides — copilot --autopilot --yolo in deck dir ──
         await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
         try:
-            # The Copilot CLI starts a new session in the deck directory where
-            # .github/ skills and instructions from create-deckio are auto-detected.
-            # Don't reference skill names — let the CLI discover them from .github/.
+            # Build the prompt for slides generation
+            pptx_instruction = ""
+            if pptx_url:
+                pptx_instruction = (
+                    "\n\nA PowerPoint file is attached. Use the "
+                    "`deck-port-powerpoint` skill to import content from: "
+                    f"{pptx_url}\n"
+                )
+
             full_slides_prompt = (
                 "Add the following slides to this deck project. "
-                "Use the skills and instructions provided in the .github folder.\n\n"
+                "Use the skills and instructions provided in the .github folder."
+                f"{pptx_instruction}\n\n"
                 f"{slides_prompt}"
             )
+
+            # Write prompt to a temp file and run copilot --autopilot --yolo
+            escaped_prompt = full_slides_prompt.replace("'", "'\\''")
             await self._sandbox_exec(
                 task_id=task_id,
-                prompt=full_slides_prompt,
-                model=model,
+                command=(
+                    f"echo '{escaped_prompt}' | "
+                    "copilot --autopilot --yolo"
+                ),
+                args=[],
                 stage_label="slides",
                 work_dir=work_dir,
                 timeout=2400,
                 stall_timeout=600,
-                autopilot=True,
             )
-
-            # PowerPoint template porting (if .pptx attached)
-            if pptx_url:
-                _buf_append(task_id, {
-                    "type": "stage",
-                    "data": f"Porting PowerPoint template: {pptx_url.split('/')[-1]}",
-                    "ts": __import__("time").time(),
-                })
-                await self._sandbox_exec(
-                    task_id=task_id,
-                    prompt=f"/deck-port-powerpoint {pptx_url}",
-                    model=model,
-                    stage_label="pptx-port",
-                    work_dir=work_dir,
-                    timeout=180,
-                    stall_timeout=120,
-                    continue_session=True,
-                    autopilot=True,
-                )
 
             await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
         except Exception as e:
             logger.error("Slides generation failed for %s: %s", task_id, e)
             await svc.set_iteration_stage_status(
                 task_id, 0, "slides", "failed", error=str(e)
+            )
+            await svc.set_status(task_id, "failed")
+            return
+
+        # ── Stage 3: Run — npm install + npm run dev + health check ──
+        await svc.set_iteration_stage_status(task_id, 0, "run", "running")
+        try:
+            # npm install
+            await self._sandbox_exec(
+                task_id=task_id,
+                command="npm install",
+                args=[],
+                stage_label="run-install",
+                work_dir=work_dir,
+                timeout=120,
+                raise_on_error=True,
+            )
+
+            # Start npm run dev as a long-running task (don't wait for exit)
+            sandbox_url = self._resolve_sandbox_url(task_id)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={
+                        "command": "npm run dev",
+                        "args": [],
+                        "workDir": work_dir,
+                    },
+                )
+                resp.raise_for_status()
+
+            # Poll /proxy/3333/ until the dev server is healthy (60s timeout)
+            ready = False
+            for _ in range(30):
+                await asyncio.sleep(2)
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        probe = await client.get(f"{sandbox_url}/proxy/3333/")
+                        if probe.status_code < 500:
+                            ready = True
+                            break
+                except Exception:
+                    pass
+
+            if not ready:
+                raise RuntimeError(
+                    "Dev server did not become healthy within 60s"
+                )
+
+            # Report the preview URL
+            preview_url = f"/api/dev/{task_id}/preview/"
+            _buf_append(task_id, {
+                "type": "preview",
+                "data": preview_url,
+                "ts": time.time(),
+            })
+            logger.info(
+                "Slides dev server running for task %s — preview at %s",
+                task_id, preview_url,
+            )
+
+            # Store preview info so routes can look it up
+            from app.routes.dev import _live_previews
+            _live_previews[task_id] = {
+                "url": preview_url,
+                "taskId": task_id,
+            }
+
+            await svc.set_iteration_stage_status(task_id, 0, "run", "completed")
+        except Exception as e:
+            logger.error("Slides run stage failed for %s: %s", task_id, e)
+            await svc.set_iteration_stage_status(
+                task_id, 0, "run", "failed", error=str(e)
             )
             await svc.set_status(task_id, "failed")
             return

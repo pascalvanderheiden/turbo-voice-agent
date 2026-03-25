@@ -1,39 +1,40 @@
 ## MODIFIED Requirements
 
-### Requirement: Init stage uses deck config from slides spec
-The init stage SHALL execute `npx create-deckio <deck-name>` with the title, subtitle, icon, theme, appearance, and palette values parsed from the refined draft's Deck Config section instead of hardcoded values.
+### Requirement: Slides pipeline stages
+The slides pipeline SHALL use three stages in order: `init`, `slides`, `run`.
 
-#### Scenario: Init with custom deck config
-- **WHEN** the refined draft contains Deck Config with title "GitHub Copilot", subtitle "The Basics", theme "shadcn/ui", appearance "dark", palette "forest"
-- **THEN** the init stage SHALL run `npx -y create-deckio@latest <deck-name> --title 'GitHub Copilot' --subtitle 'The Basics' --theme shadcn/ui --appearance dark --palette forest --yes`
+#### Scenario: Stage order
+- **WHEN** a slides dev-task is created
+- **THEN** the task has exactly three stages: `init`, `slides`, `run`
 
-### Requirement: Single autopilot invocation for slides stage
-The slides stage SHALL execute a single Copilot CLI invocation with autopilot mode, passing the entire refined slide content as the prompt, instead of iterating slide-by-slide.
+### Requirement: Init stage scaffolds deck and syncs skills
+The init stage SHALL run `npx create-deckio@latest <deck_name>` with parameters from the Slides entity (title, subtitle, theme, appearance, palette), verify the deck directory, initialize git, and sync skills from blob storage.
 
-#### Scenario: Slides generated in one pass
-- **WHEN** the slides stage runs with refined content containing 10 slides
-- **THEN** the system SHALL execute one `copilot --experimental --yolo --autopilot --model <model> --agent squad -p "<full refined slides content>"` command
+#### Scenario: Successful init with Slides entity config
+- **WHEN** the init stage runs with a linked Slides entity that has theme, appearance, and palette fields
+- **THEN** the system runs `npx create-deckio@latest <deck_name> --title '<title>' --subtitle '<subtitle>' --theme <theme> --appearance <appearance> --palette <palette> --yes`
+- **AND** verifies the deck directory contains a `.github/` folder
+- **AND** initializes a git repository in the deck directory
+- **AND** syncs skills from blob storage into the sandbox
 
-### Requirement: PowerPoint template porting
-When a `.pptx` attachment exists on the slides spec, the slides stage SHALL run a follow-up `copilot --continue -p "/deck-port-powerpoint <blob-url>"` command after the main slides invocation.
+#### Scenario: Init with default config
+- **WHEN** the Slides entity does not have theme/appearance/palette fields
+- **THEN** the system uses defaults: theme=default, appearance=dark, palette=blue
 
-#### Scenario: PowerPoint template applied
-- **WHEN** the slides spec has a `.pptx` attachment at URL `https://storage.blob.core.windows.net/slides/template.pptx`
-- **THEN** the system SHALL run `copilot --continue -p "/deck-port-powerpoint https://storage.blob.core.windows.net/slides/template.pptx"` after the main slides generation
+### Requirement: Slides stage uses Copilot autopilot session
+The slides stage SHALL `cd` into the deck directory and run `copilot --autopilot --yolo` with a prompt to create slides from the Slides entity content.
 
-#### Scenario: No PowerPoint attached
-- **WHEN** the slides spec has no `.pptx` attachments
-- **THEN** the system SHALL skip the PowerPoint porting step
+#### Scenario: Slide generation from content
+- **WHEN** the slides stage runs with a Slides entity that has a refined draft with a `## Slides` section
+- **THEN** the system runs `copilot --autopilot --yolo` in the deck directory with a prompt containing the slides content
 
-### Requirement: Screenshot-based export
-The export stage SHALL run `npm run dev`, navigate each slide route with Playwright, and take PNG screenshots of every slide. Screenshots SHALL be stored on the dev-task via the existing screenshot mechanism.
+#### Scenario: PowerPoint attachment import
+- **WHEN** the Slides entity has a `.pptx` attachment
+- **THEN** the slides prompt includes instructions to use the `deck-port-powerpoint` skill to import the PowerPoint content as input for slide generation
 
-#### Scenario: Export captures all slides
-- **WHEN** the export stage runs on a deck with 8 slides
-- **THEN** the system SHALL start the dev server, take a screenshot of each slide route, and store all screenshots on the dev-task
+### Requirement: Deck name sanitization
+The deck directory name SHALL be derived from the task title by lowercasing, replacing spaces with hyphens, stripping non-alphanumeric characters (except hyphens), collapsing consecutive hyphens, trimming leading/trailing hyphens, and truncating to 30 characters.
 
-## REMOVED Requirements
-
-### Requirement: PDF export to blob storage
-**Reason**: Replaced by screenshot-based export. Screenshots are more useful for preview and the existing dev-task screenshot mechanism already handles storage.
-**Migration**: Export artifacts no longer contain pdfUrl. Screenshots are stored via `_collect_screenshots()`.
+#### Scenario: Title with special characters
+- **WHEN** the task title is "SlideDeck: GitHub Copilot — The Basics"
+- **THEN** the deck name is `slidedeck-github-copilot-the-b`

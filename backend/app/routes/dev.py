@@ -583,81 +583,42 @@ async def stream_debug(task_id: str, request: Request):
 
 @router.post("/{task_id}/live")
 async def start_live_preview(task_id: str, request: Request):
-    """Start npm run dev in the sandbox and return a proxy URL."""
+    """Return the proxy URL for a slides task.
+
+    The dev server is already running from the pipeline run stage — this endpoint
+    just looks up the preview URL instead of starting a new server.
+    """
     user_id = getattr(request.state, "user_id", "default-user")
     service = _get_service()
     task = await service.with_user(user_id).get_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.mode != "slides":
-        raise HTTPException(status_code=400, detail="Live preview only available for slides tasks")
+        raise HTTPException(
+            status_code=400, detail="Live preview only available for slides tasks"
+        )
+
+    # Already registered by the run stage
     if task_id in _live_previews:
         return _live_previews[task_id]
 
-    # Determine workspace path
-    deck_name = task.title.lower().replace(" ", "-")[:30]
-    work_dir = f"/workspace/{task_id}/{deck_name}"
+    # Check if the run stage completed — if so, the server should be running
+    run_completed = False
+    if task.iterations:
+        for stage in task.iterations[0].stages:
+            if stage.name == "run" and stage.status == "completed":
+                run_completed = True
+                break
 
-    try:
-        sandbox_url = _resolve_sandbox_url(task_id)
-        async with httpx.AsyncClient(base_url=sandbox_url, timeout=120) as client:
-            # Step 1: npm install (wait for completion)
-            install_resp = await client.post(
-                "/tasks",
-                json={
-                    "command": f"cd {work_dir} && npm install 2>&1",
-                    "args": [],
-                    "workDir": work_dir,
-                },
-            )
-            install_resp.raise_for_status()
-            install_id = install_resp.json().get("id", "")
+    if not run_completed:
+        raise HTTPException(
+            status_code=409,
+            detail="Run stage has not completed yet — dev server not started",
+        )
 
-            for _ in range(60):
-                await asyncio.sleep(1)
-                try:
-                    status_resp = await client.get(f"/tasks/{install_id}/status")
-                    if status_resp.json().get("status") in ("completed", "exited"):
-                        break
-                except Exception:
-                    pass
-
-            # Step 2: npm run dev (long-running dev server)
-            resp = await client.post(
-                "/tasks",
-                json={
-                    "command": (
-                        f"cd {work_dir}"
-                        " && npx slidev --port 3333 --remote"
-                    ),
-                    "args": [],
-                    "workDir": work_dir,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            sandbox_task_id = data.get("id", "")
-
-        # Wait for dev server to become responsive
-        ready = False
-        for _ in range(15):
-            await asyncio.sleep(2)
-            try:
-                async with httpx.AsyncClient(timeout=5) as client:
-                    probe = await client.get(f"{sandbox_url}/proxy/3333/")
-                    if probe.status_code < 500:
-                        ready = True
-                        break
-            except Exception:
-                pass
-        if not ready:
-            logger.warning("Dev server not responsive after 30s for task %s", task_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to start dev server: {e}")
-
-    # URL goes through our own backend proxy → sandbox proxy → localhost:3333
-    live_url = f"/api/dev/{task_id}/preview/"
-    preview = {"url": live_url, "sandboxTaskId": sandbox_task_id, "taskId": task_id}
+    # Run stage completed but preview not in memory (e.g. after restart) — register it
+    preview_url = f"/api/dev/{task_id}/preview/"
+    preview = {"url": preview_url, "taskId": task_id}
     _live_previews[task_id] = preview
     return preview
 
@@ -690,7 +651,13 @@ async def stop_live_preview(task_id: str):
 async def proxy_live_preview(task_id: str, path: str, request: Request):
     """Reverse proxy: voice.turboagent.nl → backend → sandbox → localhost:3333."""
     if task_id not in _live_previews:
-        raise HTTPException(status_code=404, detail="No live preview running for this task")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No live preview available for this task. "
+                "The pipeline run stage must complete before the preview is accessible."
+            ),
+        )
 
     target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/3333/{path}"
     query = str(request.url.query)
