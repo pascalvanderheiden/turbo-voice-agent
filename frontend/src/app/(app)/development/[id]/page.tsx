@@ -30,7 +30,7 @@ import {
   IconRocket,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
-import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken } from "@/lib/api";
+import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken, API_BASE } from "@/lib/api";
 import { sandboxApi } from "@/lib/sandbox-api";
 import { useI18n } from "@/lib/i18n";
 
@@ -472,7 +472,7 @@ export default function DevTaskDetailPage() {
       : task.stages;
     const runStage = allStages.find((s) => s.name === "run");
     if (runStage?.status === "completed" && !liveUrl) {
-      setLiveUrl(`/api/dev/${task.id}/preview/`);
+      setLiveUrl(`${API_BASE}/api/dev/${task.id}/preview/`);
     }
   }, [task, liveUrl]);
   useEffect(() => {
@@ -593,7 +593,7 @@ export default function DevTaskDetailPage() {
               <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
                 <IconExternalLink size={16} /> Open Live
               </a>
-              <button onClick={() => { setLiveUrl(null); setTimeout(() => setLiveUrl(`/api/dev/${task.id}/preview/`), 100); }} className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10 hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
+              <button onClick={() => { setLiveUrl(null); setTimeout(() => setLiveUrl(`${API_BASE}/api/dev/${task.id}/preview/`), 100); }} className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm text-[var(--color-brand-cyan)] bg-[var(--color-brand-cyan)]/10 hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
                 <IconRefresh size={16} /> Refresh
               </button>
               <button onClick={async () => { try { await devApi.stopLive(task.id); setLiveUrl(null); toast.success("Live preview stopped"); } catch { toast.error("Failed to stop"); } }} className="px-3 py-2 rounded-[var(--radius-md)] text-sm text-red-400 bg-red-500/10 hover:bg-red-500/20 transition-colors">
@@ -601,7 +601,7 @@ export default function DevTaskDetailPage() {
               </button>
             </div>
           ) : (
-            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(res.url); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "run" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(`${API_BASE}${res.url}`); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "run" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               <IconPlayerPlay size={16} /> {startingLive ? "Starting..." : "Start Preview"}
             </button>
           )

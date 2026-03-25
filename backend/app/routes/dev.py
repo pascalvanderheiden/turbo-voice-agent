@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile
@@ -668,8 +669,44 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
                     k: v for k, v in resp.headers.items()
                     if k.lower() not in excluded
                 }
+
+                content = resp.content
+                ct = resp.headers.get("content-type", "")
+
+                # Rewrite absolute paths in HTML/JS so they route through
+                # the proxy instead of hitting the backend root directly.
+                # Vite emits src="/@vite/client", from "/@react-refresh", etc.
+                if "text/html" in ct or "javascript" in ct:
+                    proxy_base = f"/api/dev/{task_id}/preview"
+                    text = content.decode("utf-8", errors="replace")
+                    # src="/..." and href="/..."
+                    text = re.sub(
+                        r'((?:src|href)\s*=\s*")/',
+                        rf"\1{proxy_base}/",
+                        text,
+                    )
+                    # ES module imports: from "/...", import("/..."),
+                    # and side-effect imports: import "/..."
+                    text = re.sub(
+                        r'''(from\s+['"])\/''',
+                        rf"\1{proxy_base}/",
+                        text,
+                    )
+                    text = re.sub(
+                        r'''(import\(\s*['"])\/''',
+                        rf"\1{proxy_base}/",
+                        text,
+                    )
+                    text = re.sub(
+                        r'''(import\s+['"])\/''',
+                        rf"\1{proxy_base}/",
+                        text,
+                    )
+                    content = text.encode("utf-8")
+                    headers.pop("content-length", None)
+
                 return Response(
-                    content=resp.content,
+                    content=content,
                     status_code=resp.status_code,
                     headers=headers,
                 )
