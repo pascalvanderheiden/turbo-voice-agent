@@ -33,20 +33,11 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 }
 
 // ──────────────────────────────────────────────
-// Default Project
+// Default Project (already exists — reference only, don't re-create)
 // ──────────────────────────────────────────────
-resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
+resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' existing = {
   parent: account
   name: 'default-eastus2'
-  location: location
-  kind: 'AIServices'
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    description: 'Default project created with the resource'
-    displayName: 'default-eastus2'
-  }
 }
 
 // ──────────────────────────────────────────────
