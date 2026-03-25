@@ -189,6 +189,17 @@ module backend 'modules/container-app-backend.bicep' = {
 }
 
 // ──────────────────────────────────────────────
+// RBAC — Backend identity needs ACI write access to create/delete sandbox containers
+// ──────────────────────────────────────────────
+module backendAciRole 'modules/aci-backend-role.bicep' = if (enableAciSandbox) {
+  name: 'backend-aci-role'
+  scope: rg
+  params: {
+    principalId: backend.outputs.principalId
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container App — Sandbox (GitHub Copilot CLI)
 // ──────────────────────────────────────────────
 module sandbox 'modules/container-app-sandbox.bicep' = {
