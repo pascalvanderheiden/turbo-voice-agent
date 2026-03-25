@@ -20,9 +20,8 @@ services:
       start_period: 120s
 
   sandbox:
-    build:
-      context: ./sandbox
-      dockerfile: Dockerfile
+    image: ${SANDBOX_IMAGE:-acr2mta7feoalzyq.azurecr.io/turbo-voice-agent/sandbox:latest}
+    platform: linux/amd64
     container_name: copilot-sandbox
     ports:
       - "4000:3000"

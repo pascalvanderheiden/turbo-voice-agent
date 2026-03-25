@@ -26,8 +26,11 @@ COMPOSE_PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".
 
 def _docker_compose_cmd() -> list[str] | None:
     """Return the docker compose base command, or None if unavailable."""
+    # Standalone docker-compose (Colima, older Docker Desktop)
+    if shutil.which("docker-compose"):
+        return ["docker-compose"]
+    # Modern docker compose plugin
     if shutil.which("docker"):
-        # Modern docker compose (plugin)
         return ["docker", "compose"]
     return None
 
@@ -94,10 +97,10 @@ class DockerSandboxService:
 
         logger.info("Starting local Docker sandbox via docker compose…")
 
-        # Start the sandbox service (builds if needed)
+        # Start the sandbox service (uses pre-built image from ACR)
         rc, stdout, stderr = await self._run_compose(
-            "up", "-d", "--build", "sandbox",
-            timeout=300,  # Image build can take a while first time
+            "up", "-d", "sandbox",
+            timeout=120,
         )
         if rc != 0:
             logger.error(
