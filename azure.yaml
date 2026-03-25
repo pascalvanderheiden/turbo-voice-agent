@@ -51,3 +51,7 @@ hooks:
       echo "Frontend URL: ${FRONTEND_URL}"
       # Re-run Entra setup to add the Frontend URL as a redirect URI
       FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh
+
+  postdeploy:
+    shell: sh
+    run: bash infra/scripts/tag-sandbox-latest.sh
