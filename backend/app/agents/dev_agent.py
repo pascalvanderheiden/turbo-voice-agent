@@ -849,13 +849,6 @@ class DevAgent:
         # Wait for ACI sandbox to be healthy before executing commands
         await self._finish_aci_provisioning(task_id)
 
-        # Defaults if no config parsed
-        deck_config.setdefault("title", task.title)
-        deck_config.setdefault("subtitle", "")
-        deck_config.setdefault("theme", "default")
-        deck_config.setdefault("appearance", "dark")
-        deck_config.setdefault("palette", "blue")
-
         await svc.set_status(task_id, "running")
 
         # ── Stage 1: Init — scaffold + skills sync ──
@@ -1279,7 +1272,7 @@ class DevAgent:
             _pipeline_outputs[task_id] = []
         output_buf = _pipeline_outputs.get(task_id, [])
 
-        logger.info(
+        logger.debug(
             "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s "
             "sandbox_url=%s buf_id=%s",
             stage_label, task_id, self._resolve_sandbox_url(task_id), id(output_buf),
@@ -1288,7 +1281,7 @@ class DevAgent:
         # Emit stage marker
         if task_id:
             _buf_append(task_id, {
-                "type": "stage", "data": f"── {stage_label} ──", "ts": time.time()
+                "type": "stage", "data": f"── {stage_label} ──\n", "ts": time.time()
             })
 
         sandbox_url = self._resolve_sandbox_url(task_id)
@@ -1302,7 +1295,7 @@ class DevAgent:
         if task_id:
             _active_sandbox_tasks[task_id] = sandbox_task_id
 
-        logger.info(
+        logger.debug(
             "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, "
             "connecting SSE to %s/tasks/%s/stream",
             sandbox_task_id, stage_label, sandbox_url, sandbox_task_id,
@@ -1327,7 +1320,7 @@ class DevAgent:
                 async with client.stream(
                     "GET", f"{sandbox_url}/tasks/{sandbox_task_id}/stream"
                 ) as sse_resp:
-                    logger.info(
+                    logger.debug(
                         "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
                         sse_resp.status_code, stage_label,
                     )
@@ -1370,7 +1363,7 @@ class DevAgent:
 
                         line_count += 1
                         if line_count <= 3 or line_count % 50 == 0:
-                            logger.info(
+                            logger.debug(
                                 "[SANDBOX-DIAG] SSE line #%d stage=%s buf=%d",
                                 line_count, stage_label, len(output_buf),
                             )
@@ -1513,7 +1506,7 @@ class DevAgent:
 
         # Clear active sandbox task tracking
         _active_sandbox_tasks.pop(task_id, None)
-        logger.info(
+        logger.debug(
             "[SANDBOX-DIAG] Sandbox exec [%s] exit=%d chars=%d "
             "lines=%d buf_size=%d elapsed=%.0fs",
             stage_label, exit_code, len(combined),
@@ -1547,7 +1540,7 @@ class DevAgent:
             sandbox_url = self._resolve_sandbox_url(dev_task_id)
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.delete(f"{sandbox_url}/tasks/{sandbox_task_id}")
-                logger.info(
+                logger.debug(
                     "[SANDBOX-DIAG] Kill task %s [%s]: %s",
                     sandbox_task_id, stage_label, resp.json(),
                 )

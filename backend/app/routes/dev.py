@@ -457,7 +457,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
         except ValueError:
             pass
 
-    logger.info(
+    logger.debug(
         "[SSE-DIAG] Stream opened task=%s user=%s status=%s resume_cursor=%d",
         task_id, user_id, task.status, resume_cursor,
     )
@@ -471,7 +471,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
             buf = get_pipeline_output(task_id)
             if cursor < len(buf):
                 if not first_data_sent:
-                    logger.info(
+                    logger.debug(
                         "[SSE-DIAG] First data for task=%s buf_size=%d cursor=%d",
                         task_id, len(buf), cursor,
                     )
@@ -482,7 +482,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
                     # Include event ID so client can resume on reconnect
                     yield f"id: {cursor}\ndata: {__import__('json').dumps(entry)}\n\n"
                     if entry.get("type") == "exit":
-                        logger.info("[SSE-DIAG] Exit event, closing task=%s", task_id)
+                        logger.debug("[SSE-DIAG] Exit event, closing task=%s", task_id)
                         return
                 idle_count = 0
                 keepalive_counter = 0
@@ -491,7 +491,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
                 keepalive_counter += 1
                 # Log buffer state periodically (every ~30s)
                 if idle_count % 60 == 0:
-                    logger.info(
+                    logger.debug(
                         "[SSE-DIAG] Idle task=%s idle_count=%d buf_size=%d cursor=%d",
                         task_id, idle_count, len(buf), cursor,
                     )
@@ -505,7 +505,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
                 if idle_count > 10:
                     t = await svc.get_by_id(task_id)
                     if not t or t.status not in ("running", "pending"):
-                        logger.info(
+                        logger.debug(
                             "[SSE-DIAG] Task done/gone, injecting exit task=%s status=%s buf=%d cursor=%d",
                             task_id, t.status if t else "None", len(buf), cursor,
                         )
@@ -522,7 +522,7 @@ async def stream_pipeline_output(task_id: str, request: Request):
                         return
                 # Stop after 10 min of no new output
                 if idle_count > 1200:
-                    logger.info("[SSE-DIAG] 10min idle timeout task=%s", task_id)
+                    logger.debug("[SSE-DIAG] 10min idle timeout task=%s", task_id)
                     return
             await asyncio.sleep(0.5)
 
