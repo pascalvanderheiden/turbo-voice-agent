@@ -190,13 +190,17 @@ class InMemorySkillsService:
             return []
         skill_dir = self._local_skills_dir / skill_name
         skill_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "write_skill_files: skill=%s, target_dir=%s, file_count=%d",
+            skill_name, skill_dir, len(files),
+        )
         written: list[str] = []
         for rel_path, content in files:
             dest = skill_dir / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(content)
             written.append(f"{skill_name}/{rel_path}")
-            logger.info("Wrote local skill file: %s", dest)
+            logger.info("Wrote local skill file: %s (%d bytes)", dest, len(content))
         return written
 
     def _delete_skill_dir(self, skill_name: str) -> None:

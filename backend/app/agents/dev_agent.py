@@ -588,6 +588,60 @@ class DevAgent:
         await self._checkpoint(task_id, "mockup-implement", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "implement", "completed")
 
+        # ── Start dev server for live preview ──
+        try:
+            sandbox_url = self._resolve_sandbox_url(task_id)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={
+                        "command": "npm install && npm run dev -- --port 3000 --host",
+                        "args": [],
+                        "workDir": work_dir,
+                    },
+                )
+                resp.raise_for_status()
+
+            # Poll until dev server is healthy (60s timeout)
+            ready = False
+            for _ in range(30):
+                await asyncio.sleep(2)
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        probe = await client.get(f"{sandbox_url}/proxy/3000/")
+                        if probe.status_code < 500:
+                            ready = True
+                            break
+                except Exception:
+                    pass
+
+            if ready:
+                preview_url = f"/api/dev/{task_id}/preview/"
+                _buf_append(task_id, {
+                    "type": "preview",
+                    "data": preview_url,
+                    "ts": time.time(),
+                })
+                logger.info(
+                    "Mockup dev server running for task %s — preview at %s",
+                    task_id, preview_url,
+                )
+
+                from app.routes.dev import _live_previews
+                _live_previews[task_id] = {
+                    "url": preview_url,
+                    "taskId": task_id,
+                    "port": 3000,
+                }
+            else:
+                logger.warning(
+                    "Mockup dev server did not start within 60s for task %s"
+                    " — skipping preview",
+                    task_id,
+                )
+        except Exception as e:
+            logger.warning("Failed to start dev server for preview: %s", e)
+
         # Stage: screenshots — Copilot CLI starts app + captures with Playwright
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
@@ -689,6 +743,60 @@ class DevAgent:
         )
         await self._checkpoint(task_id, "foundation-implement", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "implement-foundation", "completed")
+
+        # ── Start dev server for live preview ──
+        try:
+            sandbox_url = self._resolve_sandbox_url(task_id)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={
+                        "command": "npm install && npm run dev -- --port 3000 --host",
+                        "args": [],
+                        "workDir": work_dir,
+                    },
+                )
+                resp.raise_for_status()
+
+            # Poll until dev server is healthy (60s timeout)
+            ready = False
+            for _ in range(30):
+                await asyncio.sleep(2)
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        probe = await client.get(f"{sandbox_url}/proxy/3000/")
+                        if probe.status_code < 500:
+                            ready = True
+                            break
+                except Exception:
+                    pass
+
+            if ready:
+                preview_url = f"/api/dev/{task_id}/preview/"
+                _buf_append(task_id, {
+                    "type": "preview",
+                    "data": preview_url,
+                    "ts": time.time(),
+                })
+                logger.info(
+                    "Sequential dev server running for task %s — preview at %s",
+                    task_id, preview_url,
+                )
+
+                from app.routes.dev import _live_previews
+                _live_previews[task_id] = {
+                    "url": preview_url,
+                    "taskId": task_id,
+                    "port": 3000,
+                }
+            else:
+                logger.warning(
+                    "Sequential dev server did not start within 60s for task %s"
+                    " — skipping preview",
+                    task_id,
+                )
+        except Exception as e:
+            logger.warning("Failed to start dev server for preview: %s", e)
 
         # ── Implement features sequentially with --continue ──
         for idx, feat_prompt in enumerate(feature_prompts, start=1):

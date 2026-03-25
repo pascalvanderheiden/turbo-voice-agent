@@ -118,12 +118,20 @@ async def upload_local_skills(
         from app.services.in_memory_skills_service import InMemorySkillsService
 
         svc = _cosmos_skills
+        if svc is None:
+            logger.warning(
+                "upload_skill: _cosmos_skills is None — service not initialized yet"
+            )
         if isinstance(svc, InMemorySkillsService) and svc._local_skills_dir:
             file_pairs: list[tuple[str, bytes]] = []
             for file in files:
                 content = await file.read()
                 file_pairs.append((file.filename, content))
             written = svc.write_skill_files(skill_name, file_pairs)
+            logger.info(
+                "upload_skill: wrote %d file(s) for '%s' → %s",
+                len(written), skill_name, svc._local_skills_dir / skill_name,
+            )
 
             # Best-effort sandbox sync
             from app.main import _sync_sandbox_skills
@@ -576,32 +584,40 @@ async def start_live_preview(task_id: str, request: Request):
     task = await service.with_user(user_id).get_by_id(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.mode != "slides":
+    # Determine which stage must complete before preview is available
+    if task.mode == "slides":
+        preview_stage = "run"
+    elif task.mode == "mockup":
+        preview_stage = "implement"
+    elif task.mode == "sequential":
+        preview_stage = "implement-foundation"
+    else:
         raise HTTPException(
-            status_code=400, detail="Live preview only available for slides tasks"
+            status_code=400, detail=f"Live preview not supported for mode '{task.mode}'"
         )
 
-    # Already registered by the run stage
+    # Already registered by the pipeline stage
     if task_id in _live_previews:
         return _live_previews[task_id]
 
-    # Check if the run stage completed — if so, the server should be running
-    run_completed = False
+    # Check if the required stage completed — if so, the server should be running
+    stage_completed = False
     if task.iterations:
         for stage in task.iterations[0].stages:
-            if stage.name == "run" and stage.status == "completed":
-                run_completed = True
+            if stage.name == preview_stage and stage.status == "completed":
+                stage_completed = True
                 break
 
-    if not run_completed:
+    if not stage_completed:
         raise HTTPException(
             status_code=409,
-            detail="Run stage has not completed yet — dev server not started",
+            detail=f"{preview_stage} stage has not completed yet — dev server not started",
         )
 
-    # Run stage completed but preview not in memory (e.g. after restart) — register it
+    # Stage completed but preview not in memory (e.g. after restart) — register it
+    port = 3333 if task.mode == "slides" else 3000
     preview_url = f"/api/dev/{task_id}/preview/"
-    preview = {"url": preview_url, "taskId": task_id}
+    preview = {"url": preview_url, "taskId": task_id, "port": port}
     _live_previews[task_id] = preview
     return preview
 
@@ -642,7 +658,8 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
             ),
         )
 
-    target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/3333/{path}"
+    port = _live_previews[task_id].get("port", 3333)
+    target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/{port}/{path}"
     query = str(request.url.query)
     if query:
         target_url += f"?{query}"
