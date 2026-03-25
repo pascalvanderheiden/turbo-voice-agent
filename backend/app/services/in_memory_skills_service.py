@@ -1,12 +1,17 @@
 """In-memory skills service.
 
 Drop-in replacement for CosmosSkillsService when Cosmos DB is unavailable.
+When ``local_skills_dir`` is set, skill files are persisted to disk so the
+Docker-mounted sandbox container picks them up automatically.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 from datetime import UTC, datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +19,29 @@ DEFAULT_USER_ID = "default-user"
 
 
 class InMemorySkillsService:
-    """In-memory skill activation management."""
+    """In-memory skill activation management with optional local-disk persistence."""
 
-    def __init__(self, user_id: str = DEFAULT_USER_ID):
+    def __init__(
+        self,
+        user_id: str = DEFAULT_USER_ID,
+        local_skills_dir: Path | None = None,
+    ):
         self._user_id = user_id
         self._store: dict[str, dict[str, dict]] = {}
+        self._local_skills_dir = local_skills_dir
 
     def with_user(self, user_id: str) -> InMemorySkillsService:
         """Return a view of this service scoped to a specific user."""
-        return InMemorySkillsService._shared_view(self._store, user_id)
+        return InMemorySkillsService._shared_view(
+            self._store, user_id, self._local_skills_dir,
+        )
 
     @classmethod
-    def _shared_view(cls, store: dict, user_id: str) -> InMemorySkillsService:
+    def _shared_view(
+        cls, store: dict, user_id: str, local_skills_dir: Path | None = None,
+    ) -> InMemorySkillsService:
         """Create a new instance that shares the same store but with different user_id."""
-        instance = cls(user_id)
+        instance = cls(user_id, local_skills_dir=local_skills_dir)
         instance._store = store
         return instance
 
@@ -58,20 +72,129 @@ class InMemorySkillsService:
         return doc
 
     async def deactivate_skill(self, name: str) -> None:
-        """Remove the skill from in-memory storage."""
+        """Remove the skill from in-memory storage and delete local files."""
         if self._user_id in self._store and name in self._store[self._user_id]:
             del self._store[self._user_id][name]
             logger.info("Deactivated skill '%s' for user %s (in-memory)", name, self._user_id)
         else:
             logger.debug("Skill '%s' not found — nothing to deactivate", name)
+        self._delete_skill_dir(name)
 
-    async def upload_skill_from_github_to_blob(self, skill_name: str, repo: str) -> list[str]:
-        """No-op for in-memory service — blob storage unavailable without Cosmos."""
-        logger.warning(
-            "Blob upload skipped for skill '%s' — in-memory service has no blob storage",
-            skill_name,
-        )
-        return []
+    async def upload_skill_from_github_to_blob(
+        self, skill_name: str, repo: str,
+    ) -> list[str]:
+        """Download skill files from GitHub and write to LOCAL_SKILLS_DIR.
+
+        Falls back to no-op if ``local_skills_dir`` is not configured.
+        """
+        if not self._local_skills_dir:
+            logger.warning(
+                "Blob upload skipped for skill '%s' — no local_skills_dir configured",
+                skill_name,
+            )
+            return []
+
+        import httpx
+
+        github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+
+        files_to_write: list[tuple[str, bytes]] = []
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                for dir_path in [skill_name, f"skills/{skill_name}"]:
+                    try:
+                        await self._fetch_github_dir(
+                            client, repo, dir_path, dir_path, headers, files_to_write,
+                        )
+                    except Exception:
+                        files_to_write.clear()
+                        continue
+                    if files_to_write:
+                        logger.info(
+                            "Found skill '%s' at %s/%s", skill_name, repo, dir_path,
+                        )
+                        break
+
+            if not files_to_write:
+                logger.warning(
+                    "No files found on GitHub for skill '%s' in %s", skill_name, repo,
+                )
+                return []
+
+            return self.write_skill_files(skill_name, files_to_write)
+        except Exception as exc:
+            logger.warning(
+                "GitHub download for skill '%s' failed: %s", skill_name, exc,
+            )
+            return []
+
+    # ── Local filesystem helpers ──────────────────────────────────────
+
+    def write_skill_files(
+        self, skill_name: str, files: list[tuple[str, bytes]],
+    ) -> list[str]:
+        """Write skill files to ``local_skills_dir/{skill_name}/``.
+
+        Args:
+            skill_name: Directory name under local_skills_dir.
+            files: List of (relative_path, content) tuples.
+
+        Returns:
+            List of written file paths (relative to local_skills_dir).
+        """
+        if not self._local_skills_dir:
+            return []
+        skill_dir = self._local_skills_dir / skill_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        written: list[str] = []
+        for rel_path, content in files:
+            dest = skill_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(content)
+            written.append(f"{skill_name}/{rel_path}")
+            logger.info("Wrote local skill file: %s", dest)
+        return written
+
+    def _delete_skill_dir(self, skill_name: str) -> None:
+        """Remove a skill directory from local_skills_dir (best-effort)."""
+        if not self._local_skills_dir:
+            return
+        skill_dir = self._local_skills_dir / skill_name
+        if skill_dir.is_dir():
+            shutil.rmtree(skill_dir, ignore_errors=True)
+            logger.info("Deleted local skill directory: %s", skill_dir)
+
+    async def _fetch_github_dir(
+        self,
+        client,
+        repo: str,
+        dir_path: str,
+        base_dir: str,
+        headers: dict[str, str],
+        result: list[tuple[str, bytes]],
+    ) -> None:
+        """Recursively fetch files from a GitHub repo directory."""
+        url = f"https://api.github.com/repos/{repo}/contents/{dir_path}"
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        items = resp.json()
+
+        if isinstance(items, dict):
+            items = [items]
+
+        for item in items:
+            if item["type"] == "file" and item.get("download_url"):
+                file_resp = await client.get(item["download_url"])
+                file_resp.raise_for_status()
+                rel_path = item["path"].removeprefix(base_dir).lstrip("/")
+                result.append((rel_path, file_resp.content))
+            elif item["type"] == "dir":
+                await self._fetch_github_dir(
+                    client, repo, item["path"], base_dir, headers, result,
+                )
 
     async def list_activated(self) -> list[dict]:
         """Return all activated skills for the current user."""

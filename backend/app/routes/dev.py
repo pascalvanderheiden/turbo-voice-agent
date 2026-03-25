@@ -100,23 +100,49 @@ async def upload_local_skills(
     skill_name: str,
     files: list[UploadFile],
 ):
-    """Upload local skill files to Azure Blob Storage for sandbox use.
+    """Upload local skill files for sandbox use.
 
-    Uploads skill files (SKILL.md + any supporting files) to the `skills`
-    container in Blob Storage. The sandbox container downloads these on startup
-    into ~/.copilot/skills/, making them available to the Copilot CLI.
+    In Azure: uploads to Blob Storage (sandbox syncs from there).
+    Locally: writes to LOCAL_SKILLS_DIR (volume-mounted into sandbox).
     """
-    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-    if not storage_account:
-        raise HTTPException(
-            status_code=503,
-            detail="Blob Storage not configured — set AZURE_STORAGE_ACCOUNT_NAME",
-        )
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
     if not skill_name:
         raise HTTPException(status_code=400, detail="skill_name is required")
 
+    storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+
+    # ── Local fallback: write directly to LOCAL_SKILLS_DIR ────────────
+    if not storage_account:
+        from app.services.in_memory_skills_service import InMemorySkillsService
+
+        svc = _cosmos_skills
+        if isinstance(svc, InMemorySkillsService) and svc._local_skills_dir:
+            file_pairs: list[tuple[str, bytes]] = []
+            for file in files:
+                content = await file.read()
+                file_pairs.append((file.filename, content))
+            written = svc.write_skill_files(skill_name, file_pairs)
+
+            # Best-effort sandbox sync
+            from app.main import _sync_sandbox_skills
+            await _sync_sandbox_skills()
+
+            return {
+                "success": True,
+                "skillName": skill_name,
+                "uploadedFiles": written,
+                "message": (
+                    f"Wrote {len(written)} file(s) for skill '{skill_name}' to local skills dir. "
+                    "The sandbox will pick them up via the volume mount."
+                ),
+            }
+        raise HTTPException(
+            status_code=503,
+            detail="Blob Storage not configured and local skills dir unavailable",
+        )
+
+    # ── Azure path: upload to Blob Storage ────────────────────────────
     try:
         from azure.identity.aio import DefaultAzureCredential
         from azure.storage.blob.aio import BlobServiceClient

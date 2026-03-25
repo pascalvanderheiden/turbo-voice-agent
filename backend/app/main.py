@@ -58,6 +58,31 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _resolve_local_skills_dir() -> "Path | None":
+    """Resolve the local skills directory for disk-based skill persistence.
+
+    Precedence:
+      1. ``LOCAL_SKILLS_DIR`` env var (absolute path)
+      2. ``{project_root}/.agents/skills/`` derived from the backend dir
+
+    Returns ``None`` only if the directory cannot be determined.
+    """
+    from pathlib import Path
+
+    env_val = os.environ.get("LOCAL_SKILLS_DIR")
+    if env_val:
+        p = Path(env_val)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # Derive from backend dir: backend/app/main.py → backend → project_root
+    backend_dir = Path(__file__).resolve().parent.parent  # backend/
+    project_root = backend_dir.parent                     # project root
+    skills_dir = project_root / ".agents" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    return skills_dir
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: init Cosmos DB and agents. Shutdown: close client."""
@@ -99,9 +124,14 @@ async def lifespan(app: FastAPI):
     # Fallback to in-memory if Cosmos isn't available
     if cosmos_skills is None:
         from app.services.in_memory_skills_service import InMemorySkillsService
-        
-        cosmos_skills = InMemorySkillsService()
-        logger.warning("Using in-memory skills service (data will not persist)")
+
+        local_skills_dir = _resolve_local_skills_dir()
+        cosmos_skills = InMemorySkillsService(local_skills_dir=local_skills_dir)
+        logger.warning(
+            "Using in-memory skills service (data will not persist). "
+            "LOCAL_SKILLS_DIR=%s",
+            local_skills_dir,
+        )
 
     # User profile service
     app.state.user_profile_service = None

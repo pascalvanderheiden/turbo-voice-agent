@@ -40,3 +40,6 @@ android/
 .squad/sessions/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
+
+# Local skill files (volume-mounted into sandbox)
+.agents/skills/
