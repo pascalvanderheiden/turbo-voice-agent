@@ -33,11 +33,20 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 }
 
 // ──────────────────────────────────────────────
-// Default Project (already exists — reference only)
+// Default Project (idempotent — creates on fresh env, no-ops on existing)
 // ──────────────────────────────────────────────
-resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' existing = {
+resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: account
   name: 'default-westus'
+  location: location
+  kind: 'AIServices'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    description: 'Default project created with the resource'
+    displayName: 'default-westus'
+  }
 }
 
 // ──────────────────────────────────────────────
