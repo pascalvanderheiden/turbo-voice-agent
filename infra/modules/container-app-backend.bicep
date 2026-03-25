@@ -138,7 +138,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'AZURE_LOCATION', value: location }
             { name: 'ACI_RESOURCE_GROUP', value: aciResourceGroup }
-            { name: 'ACI_SUBNET_ID', value: aciSubnetId }
+            { name: 'ACI_SUBNET_ID', value: '' } // Public IP — CAE managed VNet can't peer to ACI VNet
             { name: 'ACI_IDENTITY_ID', value: aciIdentityId }
             { name: 'ACI_IDENTITY_CLIENT_ID', value: aciIdentityClientId }
             { name: 'ACI_ACR_LOGIN_SERVER', value: aciAcrLoginServer }
