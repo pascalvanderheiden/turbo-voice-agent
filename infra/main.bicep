@@ -145,6 +145,18 @@ module aciIdentity 'modules/aci-identity.bicep' = if (enableAciSandbox) {
 }
 
 // ──────────────────────────────────────────────
+// ACI Sandbox Network (standalone VNet, separate from CAE)
+// ──────────────────────────────────────────────
+module aciNetwork 'modules/aci-network.bicep' = if (enableAciSandbox) {
+  name: 'aci-network'
+  scope: rg
+  params: {
+    name: 'vnet-aci-sandbox-${resourceToken}'
+    location: location
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container App — Backend
 // ──────────────────────────────────────────────
 module backend 'modules/container-app-backend.bicep' = {
@@ -169,7 +181,7 @@ module backend 'modules/container-app-backend.bicep' = {
     sandboxFqdn: 'ca-sandbox-${resourceToken}.internal.${cae.outputs.defaultDomain}'
     enableAciSandbox: enableAciSandbox
     aciResourceGroup: rg.name
-    aciSubnetId: '' // Public IPs for now; add VNet peering later for private networking
+    aciSubnetId: enableAciSandbox ? aciNetwork.outputs.subnetId : ''
     aciIdentityId: enableAciSandbox ? aciIdentity.outputs.id : ''
     aciIdentityClientId: enableAciSandbox ? aciIdentity.outputs.clientId : ''
     aciAcrLoginServer: acr.outputs.loginServer

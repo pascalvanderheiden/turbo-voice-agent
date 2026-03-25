@@ -73,11 +73,16 @@ class AciSandboxService:
     def __init__(self) -> None:
         self._credential = DefaultAzureCredential()
         sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        if not sub_id:
-            # Try to extract from ACI_SUBNET_ID (format: /subscriptions/{id}/...)
+        if not sub_id and ACI_SUBNET_ID:
+            # Extract from ACI_SUBNET_ID (format: /subscriptions/{id}/...)
             parts = ACI_SUBNET_ID.split("/")
             if len(parts) > 2 and parts[1] == "subscriptions":
                 sub_id = parts[2]
+        if not sub_id:
+            raise RuntimeError(
+                "AZURE_SUBSCRIPTION_ID is required for ACI sandbox service. "
+                "Set it as an environment variable."
+            )
         self._client = ContainerInstanceManagementClient(self._credential, sub_id)
         # task_id → private IP mapping (cache)
         self._task_ips: dict[str, str] = {}

@@ -135,6 +135,8 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
             { name: 'USE_ACI_SANDBOX', value: enableAciSandbox ? 'true' : 'false' }
+            { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+            { name: 'AZURE_LOCATION', value: location }
             { name: 'ACI_RESOURCE_GROUP', value: aciResourceGroup }
             { name: 'ACI_SUBNET_ID', value: aciSubnetId }
             { name: 'ACI_IDENTITY_ID', value: aciIdentityId }
