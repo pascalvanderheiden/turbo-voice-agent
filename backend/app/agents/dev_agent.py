@@ -700,7 +700,7 @@ class DevAgent:
             return
 
         work_dir = f"/workspace/{task_id}"
-        deck_name = task.title.lower().replace(" ", "-")[:30]
+        deck_name = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))).strip("-")[:30]
         model = await self._get_user_model(user_id)
 
         # Provision ACI sandbox if in ACI mode
