@@ -1,25 +1,29 @@
 ## ADDED Requirements
 
 ### Requirement: Sandbox Container App provisioning
-The system SHALL provision a dedicated Azure Container App for running the GitHub Copilot CLI in a Docker sandbox with yolo mode enabled. The sandbox Container App SHALL be isolated from the backend Container App and expose an HTTP API for receiving task commands.
+The sandbox Container App (`ca-sandbox-{env}`) SHALL be retained as a fallback when `USE_ACI_SANDBOX` is disabled. When ACI mode is enabled, the Container App MAY be scaled to zero replicas to save cost, but SHALL remain deployed for rollback.
 
-#### Scenario: Sandbox Container App deployed
-- **WHEN** infrastructure is provisioned via `azd up`
-- **THEN** a separate Container App named `sandbox` is created with Docker-in-Docker support, pre-installed GitHub Copilot CLI, and inbound access restricted to the backend Container App only
+#### Scenario: Fallback mode uses Container App
+- **WHEN** `USE_ACI_SANDBOX` is not set or is `false`
+- **THEN** the backend routes all sandbox calls to the Container App via `SANDBOX_URL`
+
+#### Scenario: ACI mode bypasses Container App
+- **WHEN** `USE_ACI_SANDBOX=true`
+- **THEN** the backend provisions per-task ACI containers and does not use the Container App sandbox
 
 #### Scenario: Sandbox exposes task API
 - **WHEN** the sandbox Container App is running
 - **THEN** it SHALL accept POST requests to `/tasks` with command payloads and stream CLI output via SSE on `/tasks/{id}/stream`
 
 ### Requirement: Sandbox lifecycle management
-The system SHALL manage sandbox container lifecycle including creation, health monitoring, and recreation when skill configuration changes.
+The sandbox lifecycle SHALL be managed per-task when ACI mode is enabled. Each ACI container group starts fresh, runs the full pipeline, and is deleted on completion. There is no persistent sandbox process to restart on skill changes.
 
-#### Scenario: Sandbox recreation on skill change
-- **WHEN** a user installs or uninstalls a skill
-- **THEN** the sandbox SHALL be flagged for recreation and a fresh sandbox SHALL be provisioned with the updated skill set before the next dev task execution
+#### Scenario: ACI container exits after pipeline
+- **WHEN** a dev-task pipeline completes in ACI mode
+- **THEN** the ACI container group is deleted and no sandbox process remains running for that task
 
-#### Scenario: Sandbox health check
-- **WHEN** the backend attempts to delegate a task to the sandbox
+#### Scenario: Sandbox health check (Container App fallback)
+- **WHEN** the backend attempts to delegate a task to the Container App sandbox
 - **THEN** it SHALL first verify sandbox health via a `/health` endpoint and recreate the sandbox if unhealthy
 
 ### Requirement: Skills synchronization
@@ -77,10 +81,14 @@ The system SHALL capture screenshots of the generated application using Playwrig
 ## MODIFIED Requirements (from dev-task-runtime-fixes)
 
 ### Requirement: Sandbox task count reflects dev-tasks
-The sandbox status SHALL report the number of currently running dev-task pipelines, not the internal sandbox task count. One running dev-task equals one active task.
+When ACI mode is enabled, the sandbox status endpoint is not available globally. Task count SHALL be tracked by the backend's in-memory `_active_sandbox_tasks` map instead of querying a shared sandbox.
 
-#### Scenario: One dev-task running
-- **WHEN** one dev-task pipeline is running (which may use multiple internal sandbox calls)
+#### Scenario: Task count from backend state
+- **WHEN** the frontend queries active sandbox task count in ACI mode
+- **THEN** the backend returns the count from `_active_sandbox_tasks` without calling a sandbox endpoint
+
+#### Scenario: One dev-task running (Container App fallback)
+- **WHEN** one dev-task pipeline is running using the Container App sandbox
 - **THEN** the sandbox status SHALL report activeTasks as 1
 
 ### Requirement: Sandbox stop terminates all pipeline tasks

@@ -7,9 +7,17 @@ The system SHALL provide a flow in the profile settings page for users to connec
 - **WHEN** a user navigates to profile settings and clicks "Connect GitHub for Sandbox"
 - **THEN** the system SHALL present a form to input a GitHub personal access token or initiate an OAuth flow, store the token encrypted in Cosmos DB under the user's profile, and display a "Connected" status
 
-#### Scenario: Token injection at task start
-- **WHEN** a dev task is triggered and the sandbox is provisioned
-- **THEN** the stored GitHub token SHALL be injected into the sandbox via `gh auth login --with-token` before any Copilot CLI commands execute
+#### Scenario: Token injected at ACI creation
+- **WHEN** the backend creates an ACI container group for a dev-task and the user has a stored GitHub token
+- **THEN** the token is passed as a secure environment variable (`GH_TOKEN`) in the container group definition
+
+#### Scenario: Sandbox authenticates on startup
+- **WHEN** the ACI container starts with `GH_TOKEN` set
+- **THEN** the entrypoint runs `echo "$GH_TOKEN" | gh auth login --with-token` before starting the server
+
+#### Scenario: Token injection at task start (Container App fallback)
+- **WHEN** a dev task is triggered using the Container App sandbox
+- **THEN** the stored GitHub token SHALL be injected via `gh auth login --with-token` before any Copilot CLI commands execute
 
 #### Scenario: Token not configured
 - **WHEN** a user attempts to trigger a dev task without a configured GitHub token

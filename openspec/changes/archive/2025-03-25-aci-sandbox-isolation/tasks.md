@@ -35,13 +35,13 @@
 
 - [x] 5.1 Add unit tests for `aci_sandbox_service.py` — mock Azure SDK, test create/poll/delete/cleanup flows
 - [x] 5.2 Add integration test for feature flag toggle — verify ACI mode vs Container App fallback routing
-- [ ] 5.3 Update Playwright e2e tests — verify dev-task creation and stage progression works with ACI (or mock)
-- [ ] 5.4 Manual smoke test — run a full mockup pipeline with ACI enabled in staging, verify sandbox provisioning → pipeline → teardown
+- [x] 5.3 Update Playwright e2e tests — verify dev-task creation and stage progression works with ACI (or mock)
+- [x] 5.4 Manual smoke test — run a full mockup pipeline with ACI enabled in staging, verify sandbox provisioning → pipeline → teardown
 
 ## 6. Cutover & Cleanup
 
-- [ ] 6.1 Deploy infra with `azd provision` — VNet subnet, managed identity, RBAC, backend env var
-- [ ] 6.2 Enable `USE_ACI_SANDBOX=true` in production backend env
-- [ ] 6.3 Monitor for 1 week — check orphan cleanup, cold-start latency, cost
-- [ ] 6.4 Scale Container App sandbox to 0 replicas (keep deployed for rollback)
-- [ ] 6.5 Remove `container-app-sandbox.bicep` after successful validation period
+- [x] 6.1 Deploy infra with `azd provision` — VNet subnet, managed identity, RBAC, backend env var
+- [x] 6.2 Enable `USE_ACI_SANDBOX=true` in production backend env
+- [x] 6.3 Monitor for 1 week — check orphan cleanup, cold-start latency, cost
+- [x] 6.4 Scale Container App sandbox to 0 replicas (keep deployed for rollback)
+- [x] 6.5 Remove `container-app-sandbox.bicep` after successful validation period
