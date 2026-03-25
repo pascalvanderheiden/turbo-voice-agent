@@ -266,6 +266,7 @@ async def lifespan(app: FastAPI):
 
     # Start ACI orphan cleanup background task if ACI sandbox mode is enabled
     aci_cleanup_task = None
+    docker_sandbox_svc = None
     if os.getenv("USE_ACI_SANDBOX", "").lower() == "true":
         try:
             from app.services.aci_sandbox_service import AciSandboxService, ORPHAN_CLEANUP_INTERVAL
@@ -296,11 +297,39 @@ async def lifespan(app: FastAPI):
                 "falling back to static sandbox URL: %s", exc,
             )
 
+    # Auto-start local Docker sandbox when ACI is not in use
+    if (
+        os.getenv("USE_ACI_SANDBOX", "").lower() != "true"
+        and os.getenv("AUTO_START_SANDBOX", "true").lower() != "false"
+    ):
+        try:
+            from app.services.docker_sandbox_service import DockerSandboxService
+
+            docker_sandbox_svc = DockerSandboxService()
+            if docker_sandbox_svc.available:
+                healthy = await docker_sandbox_svc.start()
+                if healthy:
+                    logger.info("Local Docker sandbox auto-started successfully")
+                else:
+                    logger.warning(
+                        "Local Docker sandbox failed to start — "
+                        "dev pipelines will fail until sandbox is available. "
+                        "Try 'docker compose up -d sandbox' manually."
+                    )
+            else:
+                logger.debug("Docker not available — skipping sandbox auto-start")
+                docker_sandbox_svc = None
+        except Exception as exc:
+            logger.debug("Docker sandbox auto-start skipped: %s", exc)
+            docker_sandbox_svc = None
+
     yield
 
     # Shutdown
     if aci_cleanup_task:
         aci_cleanup_task.cancel()
+    if docker_sandbox_svc:
+        await docker_sandbox_svc.stop()
     await todo_mcp_client.stop()
     await work_mcp_client.stop()
     await close_cosmos_client()
