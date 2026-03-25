@@ -83,9 +83,10 @@ class InMemorySkillsService:
     async def upload_skill_from_github_to_blob(
         self, skill_name: str, repo: str,
     ) -> list[str]:
-        """Download skill files from GitHub and write to LOCAL_SKILLS_DIR.
+        """Download skill files from GitHub (or copy from local project) and write to LOCAL_SKILLS_DIR.
 
-        Falls back to no-op if ``local_skills_dir`` is not configured.
+        Falls back to copying from local `.github/skills/` when GitHub download
+        fails (e.g. private repo without token, or files not pushed yet).
         """
         if not self._local_skills_dir:
             logger.warning(
@@ -94,6 +95,25 @@ class InMemorySkillsService:
             )
             return []
 
+        # Try GitHub API first
+        files_written = await self._download_skill_from_github(skill_name, repo)
+        if files_written:
+            return files_written
+
+        # Fallback: copy from local project directory
+        files_written = self._copy_skill_from_local_project(skill_name)
+        if files_written:
+            return files_written
+
+        logger.warning(
+            "No skill files found for '%s' (tried GitHub + local project)", skill_name,
+        )
+        return []
+
+    async def _download_skill_from_github(
+        self, skill_name: str, repo: str,
+    ) -> list[str]:
+        """Try downloading skill files from GitHub API."""
         import httpx
 
         github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -104,7 +124,11 @@ class InMemorySkillsService:
         files_to_write: list[tuple[str, bytes]] = []
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                for dir_path in [skill_name, f"skills/{skill_name}"]:
+                for dir_path in [
+                    f".github/skills/{skill_name}",
+                    skill_name,
+                    f"skills/{skill_name}",
+                ]:
                     try:
                         await self._fetch_github_dir(
                             client, repo, dir_path, dir_path, headers, files_to_write,
@@ -114,22 +138,39 @@ class InMemorySkillsService:
                         continue
                     if files_to_write:
                         logger.info(
-                            "Found skill '%s' at %s/%s", skill_name, repo, dir_path,
+                            "Found skill '%s' at %s/%s (GitHub)", skill_name, repo, dir_path,
                         )
                         break
 
-            if not files_to_write:
-                logger.warning(
-                    "No files found on GitHub for skill '%s' in %s", skill_name, repo,
-                )
-                return []
-
-            return self.write_skill_files(skill_name, files_to_write)
+            if files_to_write:
+                return self.write_skill_files(skill_name, files_to_write)
         except Exception as exc:
-            logger.warning(
-                "GitHub download for skill '%s' failed: %s", skill_name, exc,
-            )
-            return []
+            logger.debug("GitHub download for skill '%s' failed: %s", skill_name, exc)
+        return []
+
+    def _copy_skill_from_local_project(self, skill_name: str) -> list[str]:
+        """Copy skill files from `.github/skills/{name}/` in the project root."""
+        # Walk up from local_skills_dir (.agents/skills) to find project root
+        project_root = self._local_skills_dir.parent.parent  # .agents/skills -> .agents -> project
+        search_paths = [
+            project_root / ".github" / "skills" / skill_name,
+            project_root / "skills" / skill_name,
+        ]
+        for src_dir in search_paths:
+            if not src_dir.is_dir():
+                continue
+            files_to_write: list[tuple[str, bytes]] = []
+            for file_path in src_dir.rglob("*"):
+                if file_path.is_file():
+                    rel = file_path.relative_to(src_dir)
+                    files_to_write.append((str(rel), file_path.read_bytes()))
+            if files_to_write:
+                logger.info(
+                    "Copying skill '%s' from local project: %s (%d files)",
+                    skill_name, src_dir, len(files_to_write),
+                )
+                return self.write_skill_files(skill_name, files_to_write)
+        return []
 
     # ── Local filesystem helpers ──────────────────────────────────────
 
