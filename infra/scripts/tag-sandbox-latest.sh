@@ -18,8 +18,9 @@ fi
 # Extract ACR short name (e.g. "acr2mta7feoalzyq" from "acr2mta7feoalzyq.azurecr.io")
 ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
 
-# Find the sandbox repo in ACR (pattern: turbo-voice-agent/sandbox-*)
-SANDBOX_REPO=$(az acr repository list --name "$ACR_NAME" -o tsv 2>/dev/null | grep "sandbox" | head -1)
+# Find the azd-deployed sandbox repo (pattern: */sandbox-{envName}).
+# Use "sandbox-" (with hyphen) to avoid matching the "sandbox:latest" target repo itself.
+SANDBOX_REPO=$(az acr repository list --name "$ACR_NAME" -o tsv 2>/dev/null | grep "sandbox-" | head -1)
 if [ -z "$SANDBOX_REPO" ]; then
   echo "⚠️  No sandbox repository found in $ACR_NAME — skipping."
   exit 0
