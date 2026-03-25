@@ -774,29 +774,22 @@ class DevAgent:
                 raise_on_error=False,
             )
 
-            # Scaffold deck via create-deckio CLI flags (non-interactive with --yes)
-            cfg_title = deck_config["title"].replace("'", "'\\''")
-            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "'\\''")
-            cfg_icon = (deck_config.get("icon") or "").replace("'", "'\\''")
-            cfg_theme = deck_config["theme"].replace("'", "'\\''")
-            cfg_appearance = deck_config["appearance"].replace("'", "'\\''")
-            cfg_palette = deck_config["palette"].replace("'", "'\\''")
-            scaffold_cmd = (
-                f"npx -y create-deckio@latest {deck_name}"
+            # Scaffold the deck project as a direct shell command (reliable)
+            cfg_title = deck_config["title"].replace("'", "\\'")
+            cfg_subtitle = (deck_config.get("subtitle") or "").replace("'", "\\'")
+            create_cmd = (
+                f"cd {work_dir}"
+                f" && npx -y create-deckio@latest {deck_name}"
                 f" --title '{cfg_title}'"
                 f" --subtitle '{cfg_subtitle}'"
-            )
-            if cfg_icon:
-                scaffold_cmd += f" --icon '{cfg_icon}'"
-            scaffold_cmd += (
-                f" --theme '{cfg_theme}'"
-                f" --appearance '{cfg_appearance}'"
-                f" --palette '{cfg_palette}'"
-                f" --yes"
+                f" --theme {deck_config['theme']}"
+                f" --appearance {deck_config['appearance']}"
+                f" --palette {deck_config['palette']}"
+                " --yes"
             )
             await self._sandbox_exec(
                 task_id=task_id,
-                command=scaffold_cmd,
+                command=create_cmd,
                 args=[],
                 stage_label="init-scaffold",
                 work_dir=work_dir,
