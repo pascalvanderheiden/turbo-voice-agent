@@ -1018,7 +1018,7 @@ class DevAgent:
                 resp = await client.post(
                     f"{sandbox_url}/tasks",
                     json={
-                        "command": "npm run dev",
+                        "command": "npm run dev -- --port 3333 --host",
                         "args": [],
                         "workDir": work_dir,
                     },
