@@ -24,7 +24,6 @@ import {
   IconPresentation,
   IconSparkles,
   IconExternalLink,
-  IconFileTypePdf,
   IconPackage,
   IconRefresh,
   IconRocket,
@@ -464,14 +463,18 @@ export default function DevTaskDetailPage() {
   useEffect(() => { loadTask(); }, [loadTask]);
 
   const isRunning = task?.status === "running";
-  // Auto-show preview when slides "run" stage completes
+  // Auto-show preview when the relevant stage completes (slides/mockup/sequential)
   useEffect(() => {
-    if (!task || task.mode !== "slides") return;
+    if (!task || !["slides", "mockup", "sequential"].includes(task.mode)) return;
     const allStages = task.iterations.length > 0
       ? task.iterations.flatMap((it) => it.stages)
       : task.stages;
-    const runStage = allStages.find((s) => s.name === "run");
-    if (runStage?.status === "completed" && !liveUrl) {
+    // Each mode has a different stage that triggers preview availability
+    const previewStage = task.mode === "slides" ? "run"
+      : task.mode === "mockup" ? "implement"
+      : "implement-foundation";
+    const stage = allStages.find((s) => s.name === previewStage);
+    if (stage?.status === "completed" && !liveUrl) {
       setLiveUrl(`${API_BASE}/api/dev/${task.id}/preview/`);
     }
   }, [task, liveUrl]);
@@ -582,12 +585,7 @@ export default function DevTaskDetailPage() {
             <IconDownload size={16} /> {t("dev.download")}
           </a>
         )}
-        {task.mode === "slides" && task.exportArtifacts?.pdfUrl && (
-          <a href={`/api/dev/${task.id}/pdf`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-pink)]/10 text-[var(--color-brand-pink)] hover:bg-[var(--color-brand-pink)]/20 transition-colors">
-            <IconFileTypePdf size={16} /> Download PDF
-          </a>
-        )}
-        {task.mode === "slides" && (
+        {["slides", "mockup", "sequential"].includes(task.mode) && (
           liveUrl ? (
             <div className="flex items-center gap-2">
               <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors">
@@ -601,7 +599,7 @@ export default function DevTaskDetailPage() {
               </button>
             </div>
           ) : (
-            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(`${API_BASE}${res.url}`); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => s.name === "run" && s.status === "completed")} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <button onClick={async () => { setStartingLive(true); try { const res = await devApi.startLive(task.id); setLiveUrl(`${API_BASE}${res.url}`); toast.success("Live preview started"); } catch { toast.error("Failed to start live preview"); } finally { setStartingLive(false); } }} disabled={startingLive || !iterations[0]?.stages.some(s => { const previewStage = task.mode === "slides" ? "run" : task.mode === "mockup" ? "implement" : "implement-foundation"; return s.name === previewStage && s.status === "completed"; })} className="flex items-center gap-2 px-4 py-2 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               <IconPlayerPlay size={16} /> {startingLive ? "Starting..." : "Start Preview"}
             </button>
           )
@@ -702,18 +700,18 @@ export default function DevTaskDetailPage() {
         </div>
       )}
 
-      {/* Slides Live Preview / Screenshots */}
-      {task.mode === "slides" ? (
+      {/* Live Preview */}
+      {["slides", "mockup", "sequential"].includes(task.mode) && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
           <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
-            <IconPresentation size={14} /> Slide Deck Preview
+            <IconPresentation size={14} /> {task.mode === "slides" ? "Slide Deck Preview" : "Live Preview"}
           </h2>
           {liveUrl ? (
             <div className="rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]" style={{ height: "70vh" }}>
               <iframe
                 src={liveUrl}
                 className="w-full h-full"
-                title="Slides Live Preview"
+                title="Live Preview"
               />
             </div>
           ) : (
@@ -724,15 +722,18 @@ export default function DevTaskDetailPage() {
               <p className="text-sm text-[var(--color-text-muted)]">No live preview yet</p>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
                 {task.status === "completed"
-                  ? "Click \"Start Preview\" above to launch the slide deck preview."
+                  ? 'Click "Start Preview" above to launch the preview.'
                   : task.status === "running"
-                  ? "Preview will auto-appear when the run stage completes."
+                  ? "Preview will auto-appear when the build stage completes."
                   : "Run the pipeline first — the preview will appear automatically."}
               </p>
             </div>
           )}
         </div>
-      ) : (
+      )}
+
+      {/* Screenshots — shown for all non-slides modes */}
+      {task.mode !== "slides" && (
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-6">
         <h2 className="text-sm font-medium text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
           <IconPhoto size={14} /> {t("dev.screenshots")}
