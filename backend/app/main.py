@@ -95,6 +95,13 @@ async def lifespan(app: FastAPI):
             logger.info("Cosmos skills service initialized.")
         except Exception:
             logger.exception("Failed to init Cosmos skills service.")
+    
+    # Fallback to in-memory if Cosmos isn't available
+    if cosmos_skills is None:
+        from app.services.in_memory_skills_service import InMemorySkillsService
+        
+        cosmos_skills = InMemorySkillsService()
+        logger.warning("Using in-memory skills service (data will not persist)")
 
     # User profile service
     app.state.user_profile_service = None
