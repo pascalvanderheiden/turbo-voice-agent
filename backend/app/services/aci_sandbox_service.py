@@ -5,6 +5,9 @@ resolves the private IP, and tears down the container on completion.
 
 Feature-gated by USE_ACI_SANDBOX env var. When disabled, the shared Container App
 sandbox is used via static SANDBOX_URL.
+
+Supports split provisioning: call start_provisioning() to kick off the ARM deployment,
+do other work concurrently, then call wait_until_ready() to block until healthy.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import httpx
@@ -31,6 +35,9 @@ from azure.mgmt.containerinstance.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Type alias for optional progress callbacks
+ProgressCallback = Callable[[str], Awaitable[None]] | None
 
 # ── Configuration from environment ──────────────────────────────────────
 ACI_RESOURCE_GROUP = os.getenv("ACI_RESOURCE_GROUP", "")
@@ -53,7 +60,8 @@ _DEFAULT_ENV = {
 
 # Timeouts
 PROVISION_TIMEOUT = 120  # seconds to wait for ACI to become ready
-HEALTH_POLL_INTERVAL = 5  # seconds between health polls
+HEALTH_POLL_INTERVAL = 2  # seconds between health polls (ARM state check)
+HEALTH_FAST_POLL_INTERVAL = 0.5  # seconds between polls once ARM reports Succeeded
 ORPHAN_MAX_AGE_HOURS = 2
 ORPHAN_CLEANUP_INTERVAL = 900  # 15 minutes
 
@@ -68,7 +76,13 @@ def _container_group_name(task_id: str) -> str:
 
 
 class AciSandboxService:
-    """Manages per-task ACI sandbox container groups."""
+    """Manages per-task ACI sandbox container groups.
+
+    Supports two provisioning modes:
+    - **All-in-one**: ``create_container_group()`` — blocks until healthy.
+    - **Split**: ``start_provisioning()`` → do other work → ``wait_until_ready()``
+      to overlap preparation with the ARM deploy + image pull.
+    """
 
     def __init__(self) -> None:
         self._credential = DefaultAzureCredential()
@@ -86,17 +100,74 @@ class AciSandboxService:
         self._client = ContainerInstanceManagementClient(self._credential, sub_id)
         # task_id → private IP mapping (cache)
         self._task_ips: dict[str, str] = {}
+        # task_id → container group name (for split provisioning)
+        self._pending_provisions: dict[str, str] = {}
+
+    # ── Split provisioning: start + wait ───────────────────────────────
+
+    async def start_provisioning(
+        self,
+        task_id: str,
+        extra_env: dict[str, str] | None = None,
+        on_progress: ProgressCallback = None,
+    ) -> None:
+        """Kick off the ARM deployment without waiting for completion.
+
+        Call ``wait_until_ready(task_id)`` later to block until healthy.
+        """
+        name = _container_group_name(task_id)
+        group = self._build_container_group(task_id, extra_env)
+
+        if on_progress:
+            await on_progress("Submitting sandbox to Azure…")
+        logger.info("Creating ACI container group %s for task %s", name, task_id)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self._client.container_groups.begin_create_or_update(
+                ACI_RESOURCE_GROUP, name, group
+            ).result(),
+        )
+        self._pending_provisions[task_id] = name
+        if on_progress:
+            await on_progress("ARM deployment accepted — waiting for container…")
+
+    async def wait_until_ready(
+        self,
+        task_id: str,
+        on_progress: ProgressCallback = None,
+    ) -> str:
+        """Block until a previously-started ACI sandbox is healthy. Returns the IP."""
+        name = self._pending_provisions.pop(task_id, _container_group_name(task_id))
+        ip = await self._poll_until_ready(task_id, name, on_progress=on_progress)
+        self._task_ips[task_id] = ip
+        logger.info("ACI container group %s ready at %s for task %s", name, ip, task_id)
+        return ip
+
+    # ── All-in-one provisioning (backwards-compatible) ─────────────────
 
     async def create_container_group(
         self,
         task_id: str,
         extra_env: dict[str, str] | None = None,
+        on_progress: ProgressCallback = None,
     ) -> str:
         """Provision an ACI container group for a dev-task. Returns the private IP.
 
         Raises RuntimeError if provisioning times out.
         """
-        name = _container_group_name(task_id)
+        await self.start_provisioning(task_id, extra_env, on_progress=on_progress)
+        return await self.wait_until_ready(task_id, on_progress=on_progress)
+
+    # ── Internal helpers ───────────────────────────────────────────────
+
+    def _build_container_group(
+        self,
+        task_id: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> ContainerGroup:
+        """Build the ContainerGroup model for ARM."""
         env_vars = {**_DEFAULT_ENV, **(extra_env or {})}
 
         container = Container(
@@ -114,7 +185,7 @@ class AciSandboxService:
             ],
         )
 
-        group = ContainerGroup(
+        return ContainerGroup(
             location=os.getenv("AZURE_LOCATION", "eastus2"),
             identity={
                 "type": "UserAssigned",
@@ -138,29 +209,25 @@ class AciSandboxService:
             },
         )
 
-        logger.info("Creating ACI container group %s for task %s", name, task_id)
+    async def _poll_until_ready(
+        self,
+        task_id: str,
+        name: str,
+        on_progress: ProgressCallback = None,
+    ) -> str:
+        """Poll ACI provisioning state + health endpoint until ready.
 
-        # ARM create is blocking — run in executor to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: self._client.container_groups.begin_create_or_update(
-                ACI_RESOURCE_GROUP, name, group
-            ).result(),
-        )
-
-        # Poll for readiness
-        ip = await self._poll_until_ready(task_id, name)
-        self._task_ips[task_id] = ip
-        logger.info("ACI container group %s ready at %s for task %s", name, ip, task_id)
-        return ip
-
-    async def _poll_until_ready(self, task_id: str, name: str) -> str:
-        """Poll ACI provisioning state + health endpoint until ready."""
+        Uses a two-phase strategy:
+        - Phase 1 (ARM provisioning): poll every HEALTH_POLL_INTERVAL (2s)
+        - Phase 2 (health check after ARM Succeeded): poll every HEALTH_FAST_POLL_INTERVAL (0.5s)
+        """
         deadline = asyncio.get_event_loop().time() + PROVISION_TIMEOUT
         ip = ""
+        arm_succeeded = False
+        poll_count = 0
 
         while asyncio.get_event_loop().time() < deadline:
+            poll_count += 1
             loop = asyncio.get_event_loop()
             cg = await loop.run_in_executor(
                 None,
@@ -173,16 +240,33 @@ class AciSandboxService:
 
             if state == "Succeeded" and cg.ip_address and cg.ip_address.ip:
                 ip = cg.ip_address.ip
+                if not arm_succeeded:
+                    arm_succeeded = True
+                    elapsed = int(PROVISION_TIMEOUT - (deadline - asyncio.get_event_loop().time()))
+                    logger.info(
+                        "ACI ARM succeeded for %s after ~%ds, checking health at %s",
+                        task_id, elapsed, ip,
+                    )
+                    if on_progress:
+                        await on_progress(
+                            f"Container provisioned ({elapsed}s) — waiting for health check…"
+                        )
+
                 # Check sandbox health endpoint
                 try:
-                    async with httpx.AsyncClient(timeout=5.0) as client:
+                    async with httpx.AsyncClient(timeout=3.0) as client:
                         resp = await client.get(f"http://{ip}:3000/health")
                         if resp.status_code == 200:
                             return ip
                 except Exception:
                     pass  # Not ready yet
+            elif on_progress and poll_count % 5 == 0:
+                elapsed = int(PROVISION_TIMEOUT - (deadline - asyncio.get_event_loop().time()))
+                await on_progress(f"Provisioning sandbox… ({elapsed}s, state={state})")
 
-            await asyncio.sleep(HEALTH_POLL_INTERVAL)
+            # Faster polling once ARM is done (just waiting for process startup)
+            interval = HEALTH_FAST_POLL_INTERVAL if arm_succeeded else HEALTH_POLL_INTERVAL
+            await asyncio.sleep(interval)
 
         raise RuntimeError(
             f"ACI sandbox provisioning timed out after {PROVISION_TIMEOUT}s for task {task_id}"

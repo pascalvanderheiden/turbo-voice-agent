@@ -88,7 +88,10 @@ class CosmosSkillsService:
 
         storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
         if not storage_account:
-            logger.warning("AZURE_STORAGE_ACCOUNT_NAME not set — skipping blob cleanup for '%s'", skill_name)
+            logger.debug(
+                "AZURE_STORAGE_ACCOUNT_NAME not set — skipping blob cleanup for '%s'",
+                skill_name,
+            )
             return
 
         try:
@@ -109,8 +112,11 @@ class CosmosSkillsService:
                     logger.info("Deleted skill blob: %s", blob.name)
             await credential.close()
             logger.info("Cleaned up %d blob(s) for local skill '%s'", deleted, skill_name)
-        except Exception:
-            logger.exception("Failed to delete blobs for skill '%s' — Cosmos record already removed", skill_name)
+        except Exception as exc:
+            logger.warning(
+                "Blob cleanup for skill '%s' skipped (storage unreachable): %s",
+                skill_name, exc,
+            )
 
     # ── Read ──────────────────────────────────────────────────────────
 
@@ -199,8 +205,11 @@ class CosmosSkillsService:
                 "Uploaded %d file(s) for marketplace skill '%s'", len(uploaded), skill_name,
             )
             return uploaded
-        except Exception:
-            logger.exception("Failed to upload marketplace skill '%s' to blob", skill_name)
+        except Exception as exc:
+            logger.warning(
+                "Blob upload for skill '%s' skipped (storage unreachable): %s",
+                skill_name, exc,
+            )
             return []
 
     async def _fetch_github_dir(

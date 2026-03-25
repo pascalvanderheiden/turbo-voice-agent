@@ -402,7 +402,7 @@ async def download_archive(task_id: str, request: Request):
 
 @router.get("/{task_id}/pdf")
 async def download_pdf(task_id: str, request: Request):
-    """Download the exported PDF from blob storage."""
+    """Download the exported PDF from blob storage or local file."""
     user_id = getattr(request.state, "user_id", "default-user")
     svc = _get_service().with_user(user_id)
     task = await svc.get_by_id(task_id)
@@ -413,9 +413,31 @@ async def download_pdf(task_id: str, request: Request):
     if not pdf_url:
         raise HTTPException(status_code=404, detail="No PDF available for this task")
 
+    filename = f"{task.title.replace(' ', '-').lower()[:40]}-slides.pdf"
+
+    # Local file path (e.g. /uploads/exports/{task_id}/slides.pdf)
+    if pdf_url.startswith("/uploads/"):
+        from pathlib import Path
+
+        local_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / pdf_url.lstrip("/")
+        )
+        if not local_path.exists():
+            raise HTTPException(status_code=404, detail="PDF file not found on disk")
+        return Response(
+            content=local_path.read_bytes(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+    # Blob storage path
     storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
     if not storage_account:
-        raise HTTPException(status_code=500, detail="Storage not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Blob storage not configured and PDF is not stored locally",
+        )
 
     try:
         from azure.identity.aio import DefaultAzureCredential
@@ -433,7 +455,6 @@ async def download_pdf(task_id: str, request: Request):
             download = await blob_client.download_blob()
             pdf_bytes = await download.readall()
 
-        filename = f"{task.title.replace(' ', '-').lower()[:40]}-slides.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

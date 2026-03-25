@@ -143,10 +143,54 @@ class DevAgent:
         if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
             return
         logger.info("Provisioning ACI sandbox for task %s", task_id)
+
+        async def _on_progress(msg: str) -> None:
+            _buf_append(task_id, {
+                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
+            })
+
         try:
             extra_env = {"GH_TOKEN": gh_token} if gh_token else None
             ip = await self._aci_sandbox_service.create_container_group(
-                task_id, extra_env=extra_env
+                task_id, extra_env=extra_env, on_progress=_on_progress,
+            )
+            logger.info("ACI sandbox ready for task %s at %s", task_id, ip)
+        except Exception as exc:
+            logger.error("ACI sandbox provisioning failed for %s: %s", task_id, exc)
+            raise
+
+    async def _start_aci_provisioning(self, task_id: str, gh_token: str = "") -> None:
+        """Start ACI provisioning without waiting for health. Pair with _finish_aci_provisioning.
+
+        Use this for pipelines that can overlap content gathering with sandbox startup.
+        """
+        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
+            return
+        logger.info("Starting ACI sandbox provisioning (async) for task %s", task_id)
+
+        async def _on_progress(msg: str) -> None:
+            _buf_append(task_id, {
+                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
+            })
+
+        extra_env = {"GH_TOKEN": gh_token} if gh_token else None
+        await self._aci_sandbox_service.start_provisioning(
+            task_id, extra_env=extra_env, on_progress=_on_progress,
+        )
+
+    async def _finish_aci_provisioning(self, task_id: str) -> None:
+        """Wait for a previously-started ACI sandbox to become healthy."""
+        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
+            return
+
+        async def _on_progress(msg: str) -> None:
+            _buf_append(task_id, {
+                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
+            })
+
+        try:
+            ip = await self._aci_sandbox_service.wait_until_ready(
+                task_id, on_progress=_on_progress,
             )
             logger.info("ACI sandbox ready for task %s at %s", task_id, ip)
         except Exception as exc:
@@ -358,6 +402,16 @@ class DevAgent:
 
     # ── Pipeline execution ──────────────────────────────────────────
 
+    async def _is_sandbox_reachable(self, task_id: str = "") -> bool:
+        """Quick health check to see if the sandbox is reachable."""
+        sandbox_url = self._resolve_sandbox_url(task_id)
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{sandbox_url}/health")
+                return resp.status_code == 200
+        except Exception:
+            return False
+
     async def run_pipeline(self, task_id: str, user_id: str = "default-user") -> None:
         """Run the pipeline based on task mode, delegating to sandbox."""
         logger.info("Pipeline starting: task=%s, user=%s", task_id, user_id)
@@ -376,6 +430,24 @@ class DevAgent:
             logger.warning("CLI sandbox disabled — skipping pipeline for task %s", task_id)
             await service.set_status(task_id, "completed")
             return
+
+        # Pre-flight: verify sandbox is reachable (skip for ACI mode which provisions on demand)
+        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
+            if not await self._is_sandbox_reachable():
+                sandbox_url = self._resolve_sandbox_url()
+                msg = (
+                    f"Sandbox not reachable at {sandbox_url}. "
+                    "Dev pipelines require a running sandbox container. "
+                    "Start it with 'docker compose up -d' or set USE_CLI_SANDBOX=false "
+                    "to skip pipeline execution."
+                )
+                logger.warning("Pipeline aborted for task %s: %s", task_id, msg)
+                _buf_append(task_id, {
+                    "type": "stderr", "data": f"{msg}\n", "ts": time.time(),
+                })
+                _buf_append(task_id, {"type": "exit", "code": 1, "ts": time.time()})
+                await service.set_status(task_id, "failed")
+                return
 
         pipeline_failed = False
         try:
@@ -709,8 +781,9 @@ class DevAgent:
             r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))
         ).strip("-")[:30]
 
-        # Provision ACI sandbox if in ACI mode
-        await self._provision_aci_sandbox(task_id)
+        # Start ACI provisioning and gather slides content concurrently.
+        # The ARM deploy + image pull takes 30-60s; content gathering is pure DB reads.
+        await self._start_aci_provisioning(task_id)
 
         # Gather slides content and deck config from refined draft
         slides_prompt = f"Create a slide deck for: {task.title}"
@@ -765,6 +838,16 @@ class DevAgent:
                             pptx_url = pptx_files[0]
             except Exception:
                 logger.warning("Could not load slides data for task %s", task_id)
+
+        # Defaults if no config parsed
+        deck_config.setdefault("title", task.title)
+        deck_config.setdefault("subtitle", "")
+        deck_config.setdefault("theme", "default")
+        deck_config.setdefault("appearance", "dark")
+        deck_config.setdefault("palette", "blue")
+
+        # Wait for ACI sandbox to be healthy before executing commands
+        await self._finish_aci_provisioning(task_id)
 
         # Defaults if no config parsed
         deck_config.setdefault("title", task.title)
@@ -1793,12 +1876,10 @@ class DevAgent:
     async def _upload_slides_pdf(
         self, task_id: str, work_dir: str, user_id: str | None = None
     ) -> str | None:
-        """Fetch the exported PDF from sandbox and upload to Azure Blob Storage."""
-        storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-        if not storage_account:
-            logger.warning("No AZURE_STORAGE_ACCOUNT_NAME — skipping PDF upload")
-            return None
+        """Fetch the exported PDF from sandbox and upload to Azure Blob Storage.
 
+        Falls back to local file storage if blob storage is not configured.
+        """
         try:
             # Find the PDF file in the sandbox workspace
             sandbox_url = self._resolve_sandbox_url(task_id)
@@ -1827,40 +1908,80 @@ class DevAgent:
                 pdf_bytes = fresp.content
 
             if len(pdf_bytes) < 100:
-                logger.warning("PDF file too small (%d bytes), skipping upload", len(pdf_bytes))
+                logger.warning(
+                    "PDF file too small (%d bytes), skipping upload", len(pdf_bytes),
+                )
                 return None
 
-            # Upload to blob storage
-            from azure.identity.aio import DefaultAzureCredential
-            from azure.storage.blob.aio import BlobServiceClient
-
-            credential = DefaultAzureCredential()
-            blob_service = BlobServiceClient(
-                account_url=f"https://{storage_account}.blob.core.windows.net",
-                credential=credential,
-            )
-            blob_name = f"exports/{task_id}/slides.pdf"
-            async with blob_service:
-                container = blob_service.get_container_client("exports")
+            # Try blob storage first, fall back to local file storage
+            storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+            if storage_account:
                 try:
-                    await container.create_container()
-                except Exception:
-                    pass  # Already exists
-                blob_client = container.get_blob_client(blob_name)
-                from azure.storage.blob import ContentSettings
-                await blob_client.upload_blob(
-                    pdf_bytes,
-                    overwrite=True,
-                    content_settings=ContentSettings(content_type="application/pdf"),
-                )
+                    return await self._upload_pdf_to_blob(
+                        storage_account, task_id, pdf_bytes,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Blob upload failed for PDF, falling back to local: %s", exc,
+                    )
 
-            pdf_url = f"https://{storage_account}.blob.core.windows.net/exports/{blob_name}"
-            logger.info("Uploaded slides PDF: %s (%d bytes)", pdf_url, len(pdf_bytes))
-            return pdf_url
+            # Local fallback: save to uploads/exports/{task_id}/
+            return await self._save_pdf_locally(task_id, pdf_bytes)
 
         except Exception as e:
-            logger.error("Failed to upload slides PDF for task %s: %s", task_id, e)
+            logger.error("Failed to export slides PDF for task %s: %s", task_id, e)
             return None
+
+    async def _upload_pdf_to_blob(
+        self, storage_account: str, task_id: str, pdf_bytes: bytes,
+    ) -> str:
+        """Upload PDF to Azure Blob Storage. Returns the blob URL."""
+        from azure.identity.aio import DefaultAzureCredential
+        from azure.storage.blob.aio import BlobServiceClient
+
+        credential = DefaultAzureCredential()
+        blob_service = BlobServiceClient(
+            account_url=f"https://{storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+        blob_name = f"exports/{task_id}/slides.pdf"
+        async with blob_service:
+            container = blob_service.get_container_client("exports")
+            try:
+                await container.create_container()
+            except Exception:
+                pass  # Already exists
+            blob_client = container.get_blob_client(blob_name)
+            from azure.storage.blob import ContentSettings
+            await blob_client.upload_blob(
+                pdf_bytes,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="application/pdf"),
+            )
+
+        pdf_url = (
+            f"https://{storage_account}.blob.core.windows.net/exports/{blob_name}"
+        )
+        logger.info("Uploaded slides PDF to blob: %s (%d bytes)", pdf_url, len(pdf_bytes))
+        return pdf_url
+
+    async def _save_pdf_locally(
+        self, task_id: str, pdf_bytes: bytes,
+    ) -> str:
+        """Save PDF to local uploads directory. Returns a /uploads/... URL."""
+        from pathlib import Path
+
+        export_dir = (
+            Path(__file__).resolve().parent.parent.parent / "uploads" / "exports" / task_id
+        )
+        export_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = export_dir / "slides.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        local_url = f"/uploads/exports/{task_id}/slides.pdf"
+        logger.info(
+            "Saved slides PDF locally: %s (%d bytes)", local_url, len(pdf_bytes),
+        )
+        return local_url
 
     # ── Shared pipeline stages ──────────────────────────────────────
 
@@ -2049,6 +2170,14 @@ class DevAgent:
                         })
 
                 logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
+        except httpx.ConnectError:
+            logger.warning("Skills sync skipped for task %s — sandbox not reachable", task_id)
+            if task_id in _pipeline_outputs:
+                _buf_append(task_id, {
+                    "type": "stdout",
+                    "data": "Skills sync skipped (sandbox not reachable).\n",
+                    "stage": "skills",
+                })
         except Exception as exc:
             logger.warning("Skills sync failed for task %s: %s", task_id, exc)
             if task_id in _pipeline_outputs:

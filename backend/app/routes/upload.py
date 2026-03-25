@@ -16,6 +16,7 @@ MAX_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_TYPES = {
     "image/png", "image/jpeg", "image/gif", "image/webp",
     "application/pdf",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 
 
