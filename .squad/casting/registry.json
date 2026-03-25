@@ -1,0 +1,54 @@
+{
+  "universe": "the-usual-suspects",
+  "capacity": 6,
+  "entries": [
+    {
+      "persistent_name": "Keaton",
+      "universe": "the-usual-suspects",
+      "role": "Lead",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Fenster",
+      "universe": "the-usual-suspects",
+      "role": "Backend Dev",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "McManus",
+      "universe": "the-usual-suspects",
+      "role": "Frontend Dev",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Hockney",
+      "universe": "the-usual-suspects",
+      "role": "Mobile Dev",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Verbal",
+      "universe": "the-usual-suspects",
+      "role": "Infra/DevOps",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    {
+      "persistent_name": "Kobayashi",
+      "universe": "the-usual-suspects",
+      "role": "Tester",
+      "created_at": "2026-03-25T16:58:00Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  ]
+}

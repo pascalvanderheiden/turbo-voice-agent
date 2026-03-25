@@ -1,0 +1,17 @@
+{
+  "assignments": [
+    {
+      "assignment_id": "turbo-voice-agent-001",
+      "universe": "the-usual-suspects",
+      "timestamp": "2026-03-25T16:58:00Z",
+      "agents": [
+        { "name": "Keaton", "role": "Lead" },
+        { "name": "Fenster", "role": "Backend Dev" },
+        { "name": "McManus", "role": "Frontend Dev" },
+        { "name": "Hockney", "role": "Mobile Dev" },
+        { "name": "Verbal", "role": "Infra/DevOps" },
+        { "name": "Kobayashi", "role": "Tester" }
+      ]
+    }
+  ]
+}
