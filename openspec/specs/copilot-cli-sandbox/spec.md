@@ -23,7 +23,7 @@ The system SHALL manage sandbox container lifecycle including creation, health m
 - **THEN** it SHALL first verify sandbox health via a `/health` endpoint and recreate the sandbox if unhealthy
 
 ### Requirement: Skills synchronization
-The system SHALL make the user's installed skills available inside the sandbox container at `/home/agent/.copilot/skills/`. Skills are synchronized at container build/restart time, not at runtime.
+The system SHALL make the user's installed skills available inside the sandbox container at `/home/agent/.copilot/skills/`. Skills are synchronized at container startup via the entrypoint script and hot-reloaded at runtime via the sandbox `/skills/sync` endpoint. Dev-task pipelines SHALL NOT include a skills installation stage.
 
 #### Scenario: Skills copied at sandbox creation
 - **WHEN** a new sandbox container is started
@@ -32,6 +32,12 @@ The system SHALL make the user's installed skills available inside the sandbox c
 #### Scenario: Skills refreshed on rebuild
 - **WHEN** the sandbox container is rebuilt or restarted after new skills are installed
 - **THEN** the updated skill set SHALL be available inside the container
+
+#### Scenario: No skills installation during dev-task pipeline
+- **WHEN** a dev-task pipeline starts (mockup, sequential, or slides mode)
+- **THEN** the pipeline SHALL NOT include a "skills" stage
+- **AND** the pipeline SHALL NOT call `_install_skills_in_sandbox()` or `_verify_skills_in_sandbox()`
+- **AND** skills SHALL already be present from startup sync or hot-reload
 
 ### Requirement: Real-time CLI output streaming
 The system SHALL stream GitHub Copilot CLI output from the sandbox to the frontend in real-time so users can observe the CLI processing their requests.
