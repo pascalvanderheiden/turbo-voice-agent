@@ -109,25 +109,6 @@ resource gpt4oTranscribe 'Microsoft.CognitiveServices/accounts/deployments@2025-
   dependsOn: [gpt41]
 }
 
-resource gpt53Codex 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
-  parent: account
-  name: 'gpt-5.3-codex'
-  sku: {
-    name: 'GlobalStandard'
-    capacity: 500
-  }
-  properties: {
-    model: {
-      format: 'OpenAI'
-      name: 'gpt-5.3-codex'
-      version: '2026-02-24'
-    }
-    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
-    raiPolicyName: 'Microsoft.DefaultV2'
-  }
-  dependsOn: [gpt4oTranscribe]
-}
-
 // sora-2 deployed manually — commenting out to avoid quota conflicts
 // resource sora2 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
 //   parent: account
@@ -145,7 +126,7 @@ resource gpt53Codex 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01
 //     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
 //     raiPolicyName: 'Microsoft.DefaultV2'
 //   }
-//   dependsOn: [gpt53Codex]
+//   dependsOn: [gpt4oTranscribe]
 // }
 
 output endpoint string = account.properties.endpoint
