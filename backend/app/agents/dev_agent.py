@@ -723,8 +723,6 @@ class DevAgent:
                             slides_data.refined_draft
                         )
                         # Extract the ## Slides section as the prompt
-                        import re
-
                         slides_match = re.search(
                             r"## Slides\s*\n(.+)",
                             slides_data.refined_draft,
