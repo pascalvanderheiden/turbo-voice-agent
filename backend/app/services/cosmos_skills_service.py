@@ -152,14 +152,25 @@ class CosmosSkillsService:
 
             files_to_upload: list[tuple[str, bytes]] = []
             async with httpx.AsyncClient(timeout=30) as client:
-                await self._fetch_github_dir(
-                    client, repo, skill_name, skill_name, headers, files_to_upload,
-                )
+                # Try root-level path first, then skills/ subdirectory
+                for dir_path in [skill_name, f"skills/{skill_name}"]:
+                    try:
+                        await self._fetch_github_dir(
+                            client, repo, dir_path, dir_path, headers, files_to_upload,
+                        )
+                    except Exception:
+                        files_to_upload.clear()
+                        continue
+                    if files_to_upload:
+                        logger.info(
+                            "Found skill '%s' at %s/%s", skill_name, repo, dir_path,
+                        )
+                        break
 
             if not files_to_upload:
                 logger.warning(
-                    "No files found on GitHub for skill '%s' at %s/%s",
-                    skill_name, repo, skill_name,
+                    "No files found on GitHub for skill '%s' in %s",
+                    skill_name, repo,
                 )
                 return []
 

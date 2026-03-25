@@ -340,7 +340,18 @@ app.post("/skills/sync", (_req, res) => {
     const lines = output.trim().split("\n");
     const synced = parseInt(lines[lines.length - 1], 10) || 0;
     console.log(`[skills] Synced ${synced} skill(s) from blob storage`);
-    res.json({ synced, output: lines.slice(0, -1).join("\n") });
+
+    // List available skill directories
+    let skills = [];
+    const skillsDir = "/home/agent/.copilot/skills";
+    if (fs.existsSync(skillsDir)) {
+      skills = fs.readdirSync(skillsDir).filter((f) => {
+        const fullPath = path.join(skillsDir, f);
+        return fs.statSync(fullPath).isDirectory() && !f.startsWith(".");
+      });
+    }
+
+    res.json({ synced, skills });
   } catch (err) {
     console.error(`[skills] Sync failed: ${err.message}`);
     res.status(500).json({ error: "Skill sync failed", details: err.message });

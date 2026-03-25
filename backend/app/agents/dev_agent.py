@@ -1948,46 +1948,25 @@ class DevAgent:
                 resp.raise_for_status()
                 result = resp.json()
                 synced = result.get("synced", 0)
-                output = result.get("output", "")
+                skills = result.get("skills", [])
+
                 if task_id in _pipeline_outputs:
-                    _buf_append(task_id, {
-                        "type": "stdout",
-                        "data": f"Skills synced from blob storage: {synced} skill(s)\n",
-                        "stage": "skills",
-                    })
-                    if output:
+                    if skills:
+                        skill_list = ", ".join(skills)
                         _buf_append(task_id, {
                             "type": "stdout",
-                            "data": f"{output}\n",
+                            "data": (
+                                f"Skills synced: {synced} skill(s) from blob storage\n"
+                                f"Available: {skill_list}\n"
+                            ),
                             "stage": "skills",
                         })
-
-                # List available skills for visibility
-                ls_resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={
-                        "command": "ls -1 /home/agent/.copilot/skills/ 2>/dev/null || echo '(none)'",
-                        "args": [],
-                        "workDir": "/home/agent",
-                    },
-                )
-                if ls_resp.status_code == 200:
-                    ls_task = ls_resp.json()
-                    ls_id = ls_task.get("id", "")
-                    if ls_id:
-                        await asyncio.sleep(2)
-                        status_resp = await client.get(
-                            f"{sandbox_url}/tasks/{ls_id}/status"
-                        )
-                        if status_resp.status_code == 200:
-                            status_data = status_resp.json()
-                            skill_list = status_data.get("output", "").strip()
-                            if skill_list and task_id in _pipeline_outputs:
-                                _buf_append(task_id, {
-                                    "type": "stdout",
-                                    "data": f"Available skills:\n{skill_list}\n",
-                                    "stage": "skills",
-                                })
+                    else:
+                        _buf_append(task_id, {
+                            "type": "stdout",
+                            "data": "No skills available in sandbox.\n",
+                            "stage": "skills",
+                        })
 
                 logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
         except Exception as exc:
