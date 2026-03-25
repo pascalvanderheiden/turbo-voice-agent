@@ -127,7 +127,6 @@ module cae 'modules/container-apps-env.bicep' = {
   params: {
     name: 'cae-${resourceToken}'
     location: location
-    enableAciSubnet: enableAciSandbox
   }
 }
 
