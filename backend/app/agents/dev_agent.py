@@ -948,50 +948,7 @@ class DevAgent:
             await svc.set_status(task_id, "failed")
             return
 
-        # ── Stage 2: Slides — copilot --autopilot --yolo in deck dir ──
-        await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
-        try:
-            # Build the prompt for slides generation
-            pptx_instruction = ""
-            if pptx_url:
-                pptx_instruction = (
-                    "\n\nA PowerPoint file is attached. Use the "
-                    "`deck-port-powerpoint` skill to import content from: "
-                    f"{pptx_url}\n"
-                )
-
-            full_slides_prompt = (
-                "Add the following slides to this deck project. "
-                "Use the skills and instructions provided in the .github folder."
-                f"{pptx_instruction}\n\n"
-                f"{slides_prompt}"
-            )
-
-            # Write prompt to a temp file and run copilot --autopilot --yolo
-            escaped_prompt = full_slides_prompt.replace("'", "'\\''")
-            await self._sandbox_exec(
-                task_id=task_id,
-                command=(
-                    f"echo '{escaped_prompt}' | "
-                    "copilot --autopilot --yolo"
-                ),
-                args=[],
-                stage_label="slides",
-                work_dir=work_dir,
-                timeout=2400,
-                stall_timeout=600,
-            )
-
-            await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
-        except Exception as e:
-            logger.error("Slides generation failed for %s: %s", task_id, e)
-            await svc.set_iteration_stage_status(
-                task_id, 0, "slides", "failed", error=str(e)
-            )
-            await svc.set_status(task_id, "failed")
-            return
-
-        # ── Stage 3: Run — npm install + npm run dev + health check ──
+        # ── Stage 2: Run — npm install + dev server (preview visible immediately) ──
         await svc.set_iteration_stage_status(task_id, 0, "run", "running")
         try:
             # npm install
@@ -1060,6 +1017,49 @@ class DevAgent:
             logger.error("Slides run stage failed for %s: %s", task_id, e)
             await svc.set_iteration_stage_status(
                 task_id, 0, "run", "failed", error=str(e)
+            )
+            await svc.set_status(task_id, "failed")
+            return
+
+        # ── Stage 3: Slides — copilot generates content, hot-reloaded in preview ──
+        await svc.set_iteration_stage_status(task_id, 0, "slides", "running")
+        try:
+            # Build the prompt for slides generation
+            pptx_instruction = ""
+            if pptx_url:
+                pptx_instruction = (
+                    "\n\nA PowerPoint file is attached. Use the "
+                    "`deck-port-powerpoint` skill to import content from: "
+                    f"{pptx_url}\n"
+                )
+
+            full_slides_prompt = (
+                "Add the following slides to this deck project. "
+                "Use the skills and instructions provided in the .github folder."
+                f"{pptx_instruction}\n\n"
+                f"{slides_prompt}"
+            )
+
+            # Write prompt to a temp file and run copilot --autopilot --yolo
+            escaped_prompt = full_slides_prompt.replace("'", "'\\''")
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"echo '{escaped_prompt}' | "
+                    "copilot --autopilot --yolo"
+                ),
+                args=[],
+                stage_label="slides",
+                work_dir=work_dir,
+                timeout=2400,
+                stall_timeout=600,
+            )
+
+            await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
+        except Exception as e:
+            logger.error("Slides generation failed for %s: %s", task_id, e)
+            await svc.set_iteration_stage_status(
+                task_id, 0, "slides", "failed", error=str(e)
             )
             await svc.set_status(task_id, "failed")
             return
