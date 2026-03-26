@@ -496,7 +496,7 @@ export default function DevTaskDetailPage() {
         const data = await devApi.get(id);
         setTask((prev) => {
           if (prev && prev.status === "running" && data.status !== "running") {
-            if (data.status === "completed") toast.success("Pipeline completed!");
+            if (data.status === "completed") { toast.success("Pipeline completed!"); setPreviewKey((k) => k + 1); }
             if (data.status === "failed") toast.error("Pipeline failed");
           }
           return data;
@@ -526,8 +526,6 @@ export default function DevTaskDetailPage() {
       toast.success("Prompt sent — updating deck...");
       setPromptText("");
       loadTask();
-      // Auto-refresh the preview iframe after a short delay for hot reload
-      setTimeout(() => setPreviewKey((k) => k + 1), 4000);
     } catch {
       toast.error("Failed to send prompt");
     } finally {
