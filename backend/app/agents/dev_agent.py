@@ -642,34 +642,20 @@ class DevAgent:
         except Exception as e:
             logger.warning("Failed to start dev server for preview: %s", e)
 
-        # Stage: screenshots — Copilot CLI starts app + captures with Playwright
+        # Stage: screenshots — lightweight shell capture from running dev server
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
             task_id=task_id,
-            prompt=(
-                "Look at the project in the current directory. "
-                "Find the main application entry point and figure out how to start it. "
-                "Then:\n"
-                "1. Install dependencies if needed (npm install or pip install etc)\n"
-                "2. Start the app in background (e.g. `npm run dev &` or `npx serve . &`)\n"
-                "3. Wait a few seconds for it to be ready\n"
-                "4. Take screenshots of the key pages/views using Playwright CLI:\n"
-                "   npx playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000 {work_dir}/screenshot-overview.png\n"
-                "5. Navigate to different routes/pages (e.g. /analytics, /reports, /users, "
-                "/settings) and take a screenshot of each:\n"
-                "   npx playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000/analytics {work_dir}/screenshot-analytics.png\n"
-                "6. Aim for 3-5 screenshots covering the main features/views of the app\n"
-                "7. If port 3000 doesn't work, check package.json for the correct port\n"
-                "8. If the app has no dev server, try `npx serve . -l 3000 &` to serve static files\n"
-                "Save all screenshots as PNG files in the current directory."
+            command=(
+                f"npx --yes playwright screenshot --viewport-size='1280,800' "
+                f"http://localhost:3000 {work_dir}/screenshot-overview.png 2>/dev/null || true"
             ),
-            model=model,
+            args=[],
             stage_label="screenshots",
+            timeout=60,
+            stall_timeout=45,
             raise_on_error=False,
             work_dir=work_dir,
-            continue_session=True,
         )
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
@@ -837,33 +823,20 @@ class DevAgent:
                             task_id, it.iteration_index, propose_instr, user_id
                         )
 
-        # ── Screenshots ──
+        # ── Screenshots — lightweight shell capture from running dev server ──
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         await self._sandbox_exec(
             task_id=task_id,
-            prompt=(
-                "Look at the project in the current directory. "
-                "Find the main application entry point and figure out how to start it. "
-                "Then:\n"
-                "1. Install dependencies if needed (npm install or pip install etc)\n"
-                "2. Start the app in background (e.g. `npm run dev &` or `npx serve . &`)\n"
-                "3. Wait a few seconds for it to be ready\n"
-                "4. Take screenshots of the key pages/views using Playwright CLI:\n"
-                "   npx playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000 {work_dir}/screenshot-overview.png\n"
-                "5. Navigate to different routes/pages and take a screenshot of each:\n"
-                "   npx playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000/<route> {work_dir}/screenshot-<route>.png\n"
-                "6. Aim for 3-5 screenshots covering the main features/views of the app\n"
-                "7. If port 3000 doesn't work, check package.json for the correct port\n"
-                "8. If the app has no dev server, try `npx serve . -l 3000 &` to serve static files\n"
-                "Save all screenshots as PNG files in the current directory."
+            command=(
+                f"npx --yes playwright screenshot --viewport-size='1280,800' "
+                f"http://localhost:3000 {work_dir}/screenshot-overview.png 2>/dev/null || true"
             ),
-            model=model,
+            args=[],
             stage_label="screenshots",
+            timeout=60,
+            stall_timeout=45,
             raise_on_error=False,
             work_dir=work_dir,
-            continue_session=True,
         )
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
