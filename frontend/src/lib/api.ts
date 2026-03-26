@@ -509,6 +509,8 @@ export const devApi = {
     fetchApi(`/api/dev/${id}/live`),
   stopLive: (id: string): Promise<{ stopped: boolean }> =>
     fetchApi(`/api/dev/${id}/live`, { method: "DELETE" }),
+  sendPrompt: (id: string, prompt: string): Promise<{ status: string; taskId: string }> =>
+    fetchApi(`/api/dev/${id}/prompt`, { method: "POST", body: JSON.stringify({ prompt }), headers: { "Content-Type": "application/json" } }),
 };
 
 /* ── Skills ── */

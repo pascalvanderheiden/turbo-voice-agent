@@ -27,6 +27,7 @@ import {
   IconPackage,
   IconRefresh,
   IconRocket,
+  IconSend,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { devApi, marketingApi, type DevTask, type DevIteration, type MarketingVideo, type SquadInfo, getAccessToken, API_BASE } from "@/lib/api";
@@ -441,6 +442,8 @@ export default function DevTaskDetailPage() {
   const [marketingVideos, setMarketingVideos] = useState<MarketingVideo[]>([]);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [startingLive, setStartingLive] = useState(false);
+  const [promptText, setPromptText] = useState("");
+  const [sendingPrompt, setSendingPrompt] = useState(false);
   const { t } = useI18n();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -508,6 +511,21 @@ export default function DevTaskDetailPage() {
     } catch {
       toast.error("Sandbox is not running. Task is paused until the sandbox is available.");
       loadTask();
+    }
+  };
+
+  const handleSendPrompt = async () => {
+    if (!task || !promptText.trim()) return;
+    setSendingPrompt(true);
+    try {
+      await devApi.sendPrompt(task.id, promptText.trim());
+      toast.success("Prompt sent — updating deck...");
+      setPromptText("");
+      loadTask();
+    } catch {
+      toast.error("Failed to send prompt");
+    } finally {
+      setSendingPrompt(false);
     }
   };
 
@@ -679,6 +697,34 @@ export default function DevTaskDetailPage() {
 
       {/* Live Sandbox Terminal */}
       <TerminalView taskId={task.id} isRunning={task.status === "running"} taskStatus={task.status} />
+
+      {/* Prompt Input — send changes to the active deck */}
+      {["slides", "mockup", "sequential"].includes(task.mode) && (task.status === "completed" || task.status === "failed") && (
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-dark)] rounded-[var(--radius-lg)] p-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendPrompt(); } }}
+              placeholder="Send changes to Copilot (e.g. 'Add a slide about pricing')..."
+              disabled={sendingPrompt}
+              className="flex-1 px-4 py-2.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-brand-cyan)] disabled:opacity-50"
+            />
+            <button
+              onClick={handleSendPrompt}
+              disabled={sendingPrompt || !promptText.trim()}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-[var(--radius-md)] text-sm font-medium bg-[var(--color-brand-cyan)]/10 text-[var(--color-brand-cyan)] hover:bg-[var(--color-brand-cyan)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {sendingPrompt ? <IconLoader2 size={16} className="animate-spin" /> : <IconSend size={16} />}
+              Send
+            </button>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
+            Sends a --continue Copilot prompt to update the deck in the sandbox. Changes appear in real-time via hot reload.
+          </p>
+        </div>
+      )}
 
       {/* Agent Decisions */}
       {task.decisions && task.decisions.length > 0 && (

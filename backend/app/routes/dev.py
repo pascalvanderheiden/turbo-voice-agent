@@ -400,6 +400,46 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
     return await service.get_by_id(task_id)
 
 
+class PromptRequest(BaseModel):
+    prompt: str
+
+
+@router.post("/{task_id}/prompt")
+async def send_prompt(task_id: str, body: PromptRequest, request: Request):
+    """Send a --continue copilot prompt to update an existing dev-task.
+
+    The prompt is executed in the sandbox workspace with full context
+    of the previous Copilot session. Output streams into the terminal.
+    """
+    user_id = getattr(request.state, "user_id", "default-user")
+    service = _get_service().with_user(user_id)
+    task = await service.get_by_id(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Only allow prompts for completed or failed tasks (not while running)
+    if task.status == "running" and task_id in _running_pipelines:
+        atask = _running_pipelines[task_id]
+        if not atask.done():
+            raise HTTPException(status_code=400, detail="Task is currently running")
+
+    # Get the DevAgent instance and run send_prompt in background
+    if not _dev_agent:
+        raise HTTPException(status_code=500, detail="Dev agent not available")
+
+    async def _run_prompt():
+        try:
+            await _dev_agent.send_prompt(task_id, body.prompt, user_id=user_id)
+        except Exception as exc:
+            logger.error("Prompt execution failed for %s: %s", task_id, exc)
+
+    loop = asyncio.get_running_loop()
+    prompt_task = loop.create_task(_run_prompt())
+    _running_pipelines[task_id] = prompt_task
+
+    return {"status": "started", "taskId": task_id}
+
+
 @router.get("/{task_id}/download")
 async def download_archive(task_id: str, request: Request):
     """Download the generated code archive from the sandbox workspace."""

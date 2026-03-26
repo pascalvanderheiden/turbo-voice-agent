@@ -1070,8 +1070,23 @@ class DevAgent:
                 raise_on_error=True,
             )
 
-            # Start npm run dev as a long-running task (don't wait for exit)
+            # Kill stale Vite processes so port 3333 is available
             sandbox_url = self._resolve_sandbox_url(task_id)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    await client.post(
+                        f"{sandbox_url}/tasks",
+                        json={
+                            "command": "pkill -f 'vite --port' || true",
+                            "args": [],
+                            "workDir": work_dir,
+                        },
+                    )
+                    await asyncio.sleep(2)
+                except Exception:
+                    pass
+
+            # Start npm run dev as a long-running task (don't wait for exit)
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"{sandbox_url}/tasks",
@@ -1082,23 +1097,50 @@ class DevAgent:
                     },
                 )
                 resp.raise_for_status()
+                dev_task_data = resp.json()
+                dev_task_id = dev_task_data.get("id")
 
-            # Poll /proxy/3333/ until the dev server is healthy (60s timeout)
-            ready = False
+            # Detect actual Vite port (may differ from 3333 if port is occupied)
+            actual_port = 3333
             for _ in range(30):
                 await asyncio.sleep(2)
                 try:
                     async with httpx.AsyncClient(timeout=5) as client:
-                        probe = await client.get(f"{sandbox_url}/proxy/3333/")
+                        status = await client.get(
+                            f"{sandbox_url}/tasks/{dev_task_id}/status"
+                        )
+                        if status.status_code == 200:
+                            output = status.json().get("recentOutput", [])
+                            for entry in output:
+                                data = entry.get("data", "")
+                                # Vite prints: Local: http://localhost:NNNN/
+                                port_match = re.search(
+                                    r"Local:\s+http://localhost:(\d+)", data
+                                )
+                                if port_match:
+                                    actual_port = int(port_match.group(1))
+                                    break
+                except Exception:
+                    pass
+                # Probe the detected port
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        probe = await client.get(
+                            f"{sandbox_url}/proxy/{actual_port}/"
+                        )
                         if probe.status_code < 500:
-                            ready = True
                             break
                 except Exception:
                     pass
-
-            if not ready:
+            else:
                 raise RuntimeError(
                     "Dev server did not become healthy within 60s"
+                )
+
+            if actual_port != 3333:
+                logger.info(
+                    "Vite port fallback: 3333 → %d for task %s",
+                    actual_port, task_id,
                 )
 
             # Report the preview URL
@@ -1109,8 +1151,8 @@ class DevAgent:
                 "ts": time.time(),
             })
             logger.info(
-                "Slides dev server running for task %s — preview at %s",
-                task_id, preview_url,
+                "Slides dev server running for task %s on port %d — preview at %s",
+                task_id, actual_port, preview_url,
             )
 
             # Store preview info so routes can look it up
@@ -1118,6 +1160,7 @@ class DevAgent:
             _live_previews[task_id] = {
                 "url": preview_url,
                 "taskId": task_id,
+                "port": actual_port,
             }
 
             await svc.set_iteration_stage_status(task_id, 0, "run", "completed")
@@ -1148,15 +1191,11 @@ class DevAgent:
                 f"{slides_prompt}"
             )
 
-            # Write prompt to a temp file and run copilot --autopilot --yolo
-            escaped_prompt = full_slides_prompt.replace("'", "'\\''")
+            # Run Copilot CLI via the prompt parameter (not shell pipe)
+            # so the sandbox properly injects GH_TOKEN and handles escaping
             await self._sandbox_exec(
                 task_id=task_id,
-                command=(
-                    f"echo '{escaped_prompt}' | "
-                    "copilot --autopilot --yolo"
-                ),
-                args=[],
+                prompt=full_slides_prompt,
                 stage_label="slides",
                 work_dir=work_dir,
                 timeout=2400,
@@ -1174,6 +1213,53 @@ class DevAgent:
 
         await svc.set_status(task_id, "completed")
         logger.info("Slides pipeline COMPLETED for task %s", task_id)
+
+    # ── Send prompt to active sandbox workspace ──────────────────
+
+    async def send_prompt(
+        self,
+        task_id: str,
+        prompt_text: str,
+        user_id: str = "default-user",
+    ) -> None:
+        """Send a --continue copilot prompt to the sandbox for an existing task.
+
+        Streams output into the pipeline buffer so the terminal stays live.
+        The workspace and Copilot session context are preserved.
+        """
+        svc = self._service.with_user(user_id)
+        task = await svc.get_by_id(task_id)
+        if not task:
+            raise ValueError("Task not found")
+
+        # Determine workspace directory
+        deck_name = re.sub(
+            r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))
+        ).strip("-")[:30]
+        work_dir = f"/workspace/{task_id}/{deck_name}"
+
+        # Ensure output buffer exists
+        if task_id not in _pipeline_outputs:
+            _pipeline_outputs[task_id] = []
+
+        # Mark task as running during the prompt execution
+        await svc.set_status(task_id, "running")
+
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                prompt=prompt_text,
+                stage_label="prompt",
+                work_dir=work_dir,
+                timeout=1200,
+                stall_timeout=600,
+                continue_session=True,
+            )
+            await svc.set_status(task_id, "completed")
+        except Exception as e:
+            logger.error("Prompt failed for %s: %s", task_id, e)
+            await svc.set_status(task_id, "failed")
+            raise
 
     # ── Incremental feature addition ─────────────────────────────
 
