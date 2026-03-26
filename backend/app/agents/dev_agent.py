@@ -962,6 +962,11 @@ class DevAgent:
         # ── Stage 1: Init — scaffold + skills sync ──
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
+            # Emit a single init marker (sub-steps suppress theirs)
+            _buf_append(task_id, {
+                "type": "stage", "data": "── init ──\n", "ts": time.time()
+            })
+
             # Clean workspace
             await self._sandbox_exec(
                 task_id=task_id,
@@ -971,6 +976,7 @@ class DevAgent:
                 work_dir="/workspace",
                 timeout=30,
                 raise_on_error=False,
+                emit_marker=False,
             )
 
             # Scaffold the deck project
@@ -994,6 +1000,7 @@ class DevAgent:
                 work_dir=work_dir,
                 timeout=300,
                 raise_on_error=True,
+                emit_marker=False,
             )
 
             deck_dir = f"/workspace/{task_id}/{deck_name}"
@@ -1013,6 +1020,7 @@ class DevAgent:
                 work_dir=deck_dir,
                 timeout=15,
                 raise_on_error=False,
+                emit_marker=False,
             )
             if "DECK_DIR_OK" not in verify_output:
                 raise RuntimeError(
@@ -1041,6 +1049,7 @@ class DevAgent:
                 stage_label="init-git",
                 work_dir=work_dir,
                 timeout=30,
+                emit_marker=False,
             )
             logger.info("Git init output for %s: %s", task_id, git_output[:300])
 
@@ -1423,6 +1432,7 @@ class DevAgent:
         continue_session: bool = False,
         agent: str | None = None,
         autopilot: bool = False,
+        emit_marker: bool = True,
     ) -> str:
         """Submit a task to the sandbox and stream output via SSE.
 
@@ -1436,6 +1446,8 @@ class DevAgent:
             continue_session: If True, adds --continue flag to Copilot CLI to
                 resume the previous session and maintain context across stages.
             agent: If set (e.g. "squad"), adds --agent flag to Copilot CLI.
+            emit_marker: If False, suppress the stage marker in the terminal.
+                Use for sub-steps when a parent marker was already emitted.
         """
         payload: dict = {"workDir": work_dir}
         if prompt:
@@ -1472,8 +1484,8 @@ class DevAgent:
             stage_label, task_id, self._resolve_sandbox_url(task_id), id(output_buf),
         )
 
-        # Emit stage marker
-        if task_id:
+        # Emit stage marker (unless suppressed for sub-steps)
+        if task_id and emit_marker:
             _buf_append(task_id, {
                 "type": "stage", "data": f"── {stage_label} ──\n", "ts": time.time()
             })

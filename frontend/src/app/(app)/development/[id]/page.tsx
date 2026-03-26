@@ -261,10 +261,13 @@ function TerminalView({ taskId, isRunning, taskStatus }: { taskId: string; isRun
 
       es.onmessage = (ev) => {
         try {
-          // Track cursor from event ID for reconnection
+          // Track cursor from event ID for reconnection & dedup
           if (ev.lastEventId) {
             const id = parseInt(ev.lastEventId, 10);
-            if (!isNaN(id)) cursorRef.current = id;
+            if (!isNaN(id)) {
+              if (id <= cursorRef.current) return; // Duplicate — skip
+              cursorRef.current = id;
+            }
           }
           const entry = JSON.parse(ev.data);
           if (entry.type === "stdout" || entry.type === "stderr" || entry.type === "stage" || entry.type === "decision") {
