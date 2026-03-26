@@ -589,74 +589,29 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "implement", "completed")
 
         # ── Start dev server for live preview ──
+        preview_port = 3000
         try:
-            sandbox_url = self._resolve_sandbox_url(task_id)
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={
-                        "command": "npm install && npm run dev -- --port 3000 --host",
-                        "args": [],
-                        "workDir": work_dir,
-                    },
-                )
-                resp.raise_for_status()
-
-            # Poll until dev server is healthy (60s timeout)
-            ready = False
-            for _ in range(30):
-                await asyncio.sleep(2)
-                try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        probe = await client.get(f"{sandbox_url}/proxy/3000/")
-                        if probe.status_code < 500:
-                            ready = True
-                            break
-                except Exception:
-                    pass
-
-            if ready:
-                preview_url = f"/api/dev/{task_id}/preview/"
-                _buf_append(task_id, {
-                    "type": "preview",
-                    "data": preview_url,
-                    "ts": time.time(),
-                })
-                logger.info(
-                    "Mockup dev server running for task %s — preview at %s",
-                    task_id, preview_url,
-                )
-
-                from app.routes.dev import _live_previews
-                _live_previews[task_id] = {
-                    "url": preview_url,
-                    "taskId": task_id,
-                    "port": 3000,
-                }
-            else:
-                logger.warning(
-                    "Mockup dev server did not start within 60s for task %s"
-                    " — skipping preview",
-                    task_id,
-                )
+            preview_port = await self._start_mockup_dev_server(task_id, work_dir)
         except Exception as e:
             logger.warning("Failed to start dev server for preview: %s", e)
 
         # Stage: screenshots — lightweight shell capture from running dev server
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
-        await self._sandbox_exec(
-            task_id=task_id,
-            command=(
-                f"npx --yes playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000 {work_dir}/screenshot-overview.png 2>/dev/null || true"
-            ),
-            args=[],
-            stage_label="screenshots",
-            timeout=60,
-            stall_timeout=45,
-            raise_on_error=False,
-            work_dir=work_dir,
-        )
+        if preview_port:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"npx --yes playwright screenshot --viewport-size='1280,800' "
+                    f"http://localhost:{preview_port} "
+                    f"{work_dir}/screenshot-overview.png 2>/dev/null || true"
+                ),
+                args=[],
+                stage_label="screenshots",
+                timeout=60,
+                stall_timeout=45,
+                raise_on_error=False,
+                work_dir=work_dir,
+            )
         await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "completed")
 
@@ -732,55 +687,7 @@ class DevAgent:
 
         # ── Start dev server for live preview ──
         try:
-            sandbox_url = self._resolve_sandbox_url(task_id)
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={
-                        "command": "npm install && npm run dev -- --port 3000 --host",
-                        "args": [],
-                        "workDir": work_dir,
-                    },
-                )
-                resp.raise_for_status()
-
-            # Poll until dev server is healthy (60s timeout)
-            ready = False
-            for _ in range(30):
-                await asyncio.sleep(2)
-                try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        probe = await client.get(f"{sandbox_url}/proxy/3000/")
-                        if probe.status_code < 500:
-                            ready = True
-                            break
-                except Exception:
-                    pass
-
-            if ready:
-                preview_url = f"/api/dev/{task_id}/preview/"
-                _buf_append(task_id, {
-                    "type": "preview",
-                    "data": preview_url,
-                    "ts": time.time(),
-                })
-                logger.info(
-                    "Sequential dev server running for task %s — preview at %s",
-                    task_id, preview_url,
-                )
-
-                from app.routes.dev import _live_previews
-                _live_previews[task_id] = {
-                    "url": preview_url,
-                    "taskId": task_id,
-                    "port": 3000,
-                }
-            else:
-                logger.warning(
-                    "Sequential dev server did not start within 60s for task %s"
-                    " — skipping preview",
-                    task_id,
-                )
+            await self._start_mockup_dev_server(task_id, work_dir)
         except Exception as e:
             logger.warning("Failed to start dev server for preview: %s", e)
 
@@ -825,11 +732,15 @@ class DevAgent:
 
         # ── Screenshots — lightweight shell capture from running dev server ──
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
+        from app.routes.dev import _live_previews
+        preview_entry = _live_previews.get(task_id)
+        seq_port = preview_entry["port"] if preview_entry else 3000
         await self._sandbox_exec(
             task_id=task_id,
             command=(
                 f"npx --yes playwright screenshot --viewport-size='1280,800' "
-                f"http://localhost:3000 {work_dir}/screenshot-overview.png 2>/dev/null || true"
+                f"http://localhost:{seq_port} "
+                f"{work_dir}/screenshot-overview.png 2>/dev/null || true"
             ),
             args=[],
             stage_label="screenshots",
@@ -1822,6 +1733,69 @@ class DevAgent:
             )
         except Exception as e:
             logger.debug("Checkpoint failed (non-critical): %s", e)
+
+    async def _start_mockup_dev_server(
+        self, task_id: str, work_dir: str
+    ) -> int:
+        """Start a dev server in the sandbox for live preview.
+
+        Tries npm-based dev server first, falls back to npx serve for static apps.
+        Returns the port the server is running on, or 0 if no server started.
+        """
+        sandbox_url = self._resolve_sandbox_url(task_id)
+        from app.routes.dev import _live_previews
+
+        # Strategy 1: npm run dev (for Node.js apps with package.json)
+        # Strategy 2: npx serve (for static HTML apps)
+        strategies = [
+            ("npm install --legacy-peer-deps 2>/dev/null && npm run dev -- --port 3000 --host", 3000),
+            (f"npx --yes serve {work_dir} -l 3000 --no-clipboard", 3000),
+        ]
+
+        for cmd, port in strategies:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={"command": cmd, "args": [], "workDir": work_dir},
+                )
+                resp.raise_for_status()
+
+            # Poll until dev server is healthy (30s per strategy)
+            ready = False
+            for _ in range(15):
+                await asyncio.sleep(2)
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        probe = await client.get(f"{sandbox_url}/proxy/{port}/")
+                        if probe.status_code < 500:
+                            ready = True
+                            break
+                except Exception:
+                    pass
+
+            if ready:
+                preview_url = f"/api/dev/{task_id}/preview/"
+                _buf_append(task_id, {
+                    "type": "preview",
+                    "data": preview_url,
+                    "ts": time.time(),
+                })
+                logger.info(
+                    "Dev server running for task %s on port %d — preview at %s",
+                    task_id, port, preview_url,
+                )
+                _live_previews[task_id] = {
+                    "url": preview_url,
+                    "taskId": task_id,
+                    "port": port,
+                }
+                return port
+
+        logger.warning(
+            "No dev server started within timeout for task %s — skipping preview",
+            task_id,
+        )
+        return 0
 
     async def _read_sandbox_file(self, path: str, dev_task_id: str = "") -> str | None:
         """Read a text file from the sandbox container via HTTP."""
