@@ -710,7 +710,11 @@ export default function DevTaskDetailPage() {
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendPrompt(); } }}
-              placeholder="Send changes to Copilot (e.g. 'Add a slide about pricing')..."
+              placeholder={
+                task.mode === "slides"
+                  ? "Describe changes to your deck (e.g. 'Add a slide about pricing')..."
+                  : "Describe what to build or change (e.g. 'Add a dark mode toggle')..."
+              }
               disabled={sendingPrompt}
               className="flex-1 px-4 py-2.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] border border-[var(--color-border-dark)] text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-brand-cyan)] disabled:opacity-50"
             />
@@ -724,7 +728,9 @@ export default function DevTaskDetailPage() {
             </button>
           </div>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
-            Sends a --continue Copilot prompt to update the deck in the sandbox. Changes appear in real-time via hot reload.
+            {task.mode === "slides"
+              ? "Sends a prompt to update your slide deck. Changes appear in real-time via hot reload."
+              : "Sends a prompt to refine your app. Changes appear live in the preview."}
           </p>
         </div>
       )}

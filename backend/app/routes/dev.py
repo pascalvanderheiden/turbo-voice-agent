@@ -690,13 +690,35 @@ async def stop_live_preview(task_id: str):
 async def proxy_live_preview(task_id: str, path: str, request: Request):
     """Reverse proxy: voice.turboagent.nl → backend → sandbox → localhost:3333."""
     if task_id not in _live_previews:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "No live preview available for this task. "
-                "The pipeline run stage must complete before the preview is accessible."
-            ),
-        )
+        # Auto-recover: check if the preview stage completed and register it
+        user_id = getattr(request.state, "user_id", "default-user")
+        task = await _get_service().with_user(user_id).get_by_id(task_id)
+        if task and task.iterations:
+            preview_stage = (
+                "run" if task.mode == "slides"
+                else "implement" if task.mode == "mockup"
+                else "implement-foundation" if task.mode == "sequential"
+                else None
+            )
+            stage_ok = preview_stage and any(
+                s.name == preview_stage and s.status == "completed"
+                for s in task.iterations[0].stages
+            )
+            if stage_ok:
+                port = 3333 if task.mode == "slides" else 3000
+                _live_previews[task_id] = {
+                    "url": f"/api/dev/{task_id}/preview/",
+                    "taskId": task_id,
+                    "port": port,
+                }
+        if task_id not in _live_previews:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No live preview available for this task. "
+                    "The pipeline run stage must complete before the preview is accessible."
+                ),
+            )
 
     port = _live_previews[task_id].get("port", 3333)
     target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/{port}/{path}"
