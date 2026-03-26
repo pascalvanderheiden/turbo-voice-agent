@@ -445,6 +445,7 @@ export default function DevTaskDetailPage() {
   const [marketingVideos, setMarketingVideos] = useState<MarketingVideo[]>([]);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [startingLive, setStartingLive] = useState(false);
+  const [previewKey, setPreviewKey] = useState(0);
   const [promptText, setPromptText] = useState("");
   const [sendingPrompt, setSendingPrompt] = useState(false);
   const { t } = useI18n();
@@ -525,6 +526,8 @@ export default function DevTaskDetailPage() {
       toast.success("Prompt sent — updating deck...");
       setPromptText("");
       loadTask();
+      // Auto-refresh the preview iframe after a short delay for hot reload
+      setTimeout(() => setPreviewKey((k) => k + 1), 4000);
     } catch {
       toast.error("Failed to send prompt");
     } finally {
@@ -764,6 +767,7 @@ export default function DevTaskDetailPage() {
           {liveUrl ? (
             <div className="rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-border-dark)]" style={{ height: "70vh" }}>
               <iframe
+                key={previewKey}
                 src={liveUrl}
                 className="w-full h-full"
                 title="Live Preview"
