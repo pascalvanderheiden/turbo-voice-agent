@@ -49,30 +49,88 @@ _live_previews: dict[str, dict] = {}  # task_id → {url, sandbox_task_id}
 async def _restart_dev_server(task_id: str, mode: str) -> dict:
     """Restart a dev server in the sandbox from existing workspace files.
 
-    Checks the workspace directory exists, starts the right command based on mode,
-    polls for health, and registers in _live_previews.
-    Returns the preview info dict on success, raises HTTPException on failure.
+    Checks the workspace directory exists, discovers the actual project
+    subdirectory (slides use a deckio subfolder), starts the right dev
+    server command, polls for health, and registers in _live_previews.
     """
     sandbox_url = _resolve_sandbox_url(task_id)
-    work_dir = f"/workspace/{task_id}"
+    base_dir = f"/workspace/{task_id}"
 
-    # 1. Verify workspace files still exist in sandbox
+    # 1. Verify workspace exists and discover project directory
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            probe = await client.get(f"{sandbox_url}/files/{task_id}/")
-            if probe.status_code == 404:
+        async with httpx.AsyncClient(timeout=15) as client:
+            probe = await client.post(
+                f"{sandbox_url}/tasks",
+                json={"command": "ls -1", "args": [], "workDir": base_dir},
+            )
+            if probe.status_code >= 400:
                 raise HTTPException(
                     status_code=410,
                     detail=(
-                        f"Workspace files for task {task_id} no longer exist in the sandbox. "
-                        "The sandbox container may have been restarted and files were lost."
+                        f"Workspace for task {task_id} not found in sandbox. "
+                        "The container may have been restarted."
                     ),
                 )
+            probe_id = probe.json().get("id")
+            # Give ls a moment to complete, then read output
+            await asyncio.sleep(2)
+            status_resp = await client.get(f"{sandbox_url}/tasks/{probe_id}/status")
+            ls_output = ""
+            if status_resp.status_code == 200:
+                for entry in status_resp.json().get("recentOutput", []):
+                    ls_output += entry.get("data", "")
     except httpx.ConnectError:
         raise HTTPException(
             status_code=502,
             detail="Cannot reach sandbox — it may be stopped or restarting.",
         )
+
+    if not ls_output.strip():
+        raise HTTPException(
+            status_code=410,
+            detail="Workspace directory is empty or missing.",
+        )
+
+    # For slides: the deckio project lives in a subdirectory (e.g. slidedeck-xxx/)
+    # Find the subdir that contains package.json by looking for it
+    if mode == "slides":
+        work_dir = base_dir
+        # Check if package.json is in a subdirectory
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                find_resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={
+                        "command": (
+                            "find . -maxdepth 2 -name package.json"
+                            " -not -path '*/node_modules/*' | head -1"
+                        ),
+                        "args": [],
+                        "workDir": base_dir,
+                    },
+                )
+                if find_resp.status_code < 300:
+                    find_id = find_resp.json().get("id")
+                    await asyncio.sleep(2)
+                    find_status = await client.get(
+                        f"{sandbox_url}/tasks/{find_id}/status"
+                    )
+                    if find_status.status_code == 200:
+                        find_out = ""
+                        for entry in find_status.json().get("recentOutput", []):
+                            find_out += entry.get("data", "")
+                        pkg_path = find_out.strip()
+                        if pkg_path and pkg_path != "./package.json":
+                            # e.g. "./slidedeck-xxx/package.json" → use that dir
+                            subdir = pkg_path.rsplit("/", 1)[0]
+                            work_dir = f"{base_dir}/{subdir.lstrip('./')}"
+                            logger.info(
+                                "Slides project found in subdir: %s", work_dir
+                            )
+        except Exception:
+            pass  # Fall back to base_dir
+    else:
+        work_dir = base_dir
 
     # 2. Pick port and commands based on mode
     if mode == "slides":
@@ -82,12 +140,12 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
         ]
     else:
         port = 3000
-        npm_cmd = (
-            "npm install --legacy-peer-deps 2>/dev/null "
-            "&& npm run dev -- --port 3000 --host"
-        )
         strategies = [
-            (npm_cmd, 3000),
+            (
+                f"cd {work_dir} && npm install --legacy-peer-deps 2>/dev/null"
+                f" && npm run dev -- --port 3000 --host",
+                3000,
+            ),
             (f"npx --yes serve {work_dir} -l 3000 --no-clipboard", 3000),
         ]
 
@@ -116,7 +174,9 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
                 )
                 resp.raise_for_status()
         except Exception as e:
-            logger.warning("Failed to start dev server for task %s: %s", task_id, e)
+            logger.warning(
+                "Failed to start dev server for task %s: %s", task_id, e
+            )
             continue
 
         # Poll until healthy (30s)
@@ -124,18 +184,20 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
             await asyncio.sleep(2)
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
-                    health = await client.get(f"{sandbox_url}/proxy/{cmd_port}/")
+                    health = await client.get(
+                        f"{sandbox_url}/proxy/{cmd_port}/"
+                    )
                     if health.status_code < 500:
-                        preview_url = f"/api/dev/{task_id}/preview/"
                         preview = {
-                            "url": preview_url,
+                            "url": f"/api/dev/{task_id}/preview/",
                             "taskId": task_id,
                             "port": cmd_port,
                         }
                         _live_previews[task_id] = preview
                         logger.info(
-                            "Restarted dev server for task %s (mode=%s) on port %d",
-                            task_id, mode, cmd_port,
+                            "Restarted dev server for task %s (mode=%s, "
+                            "dir=%s) on port %d",
+                            task_id, mode, work_dir, cmd_port,
                         )
                         return preview
             except Exception:
