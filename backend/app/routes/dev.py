@@ -10,8 +10,8 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from app.models.dev_task import DevTask, DevTaskCreate
 from app.agents.dev_agent import cancel_sandbox_task_for
+from app.models.dev_task import DevTask, DevTaskCreate
 from app.services.dev_service import InMemoryDevService
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,110 @@ _running_pipelines: dict[str, asyncio.Task] = {}  # task_id → asyncio.Task
 
 # Track live preview server processes
 _live_previews: dict[str, dict] = {}  # task_id → {url, sandbox_task_id}
+
+
+async def _restart_dev_server(task_id: str, mode: str) -> dict:
+    """Restart a dev server in the sandbox from existing workspace files.
+
+    Checks the workspace directory exists, starts the right command based on mode,
+    polls for health, and registers in _live_previews.
+    Returns the preview info dict on success, raises HTTPException on failure.
+    """
+    sandbox_url = _resolve_sandbox_url(task_id)
+    work_dir = f"/workspace/{task_id}"
+
+    # 1. Verify workspace files still exist in sandbox
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            probe = await client.get(f"{sandbox_url}/files/{task_id}/")
+            if probe.status_code == 404:
+                raise HTTPException(
+                    status_code=410,
+                    detail=(
+                        f"Workspace files for task {task_id} no longer exist in the sandbox. "
+                        "The sandbox container may have been restarted and files were lost."
+                    ),
+                )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=502,
+            detail="Cannot reach sandbox — it may be stopped or restarting.",
+        )
+
+    # 2. Pick port and commands based on mode
+    if mode == "slides":
+        port = 3333
+        strategies = [
+            (f"cd {work_dir} && npm run dev -- --port 3333 --host", 3333),
+        ]
+    else:
+        port = 3000
+        npm_cmd = (
+            "npm install --legacy-peer-deps 2>/dev/null "
+            "&& npm run dev -- --port 3000 --host"
+        )
+        strategies = [
+            (npm_cmd, 3000),
+            (f"npx --yes serve {work_dir} -l 3000 --no-clipboard", 3000),
+        ]
+
+    # 3. Kill stale processes on the target port
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{sandbox_url}/tasks",
+                json={
+                    "command": f"pkill -f 'port {port}' || true",
+                    "args": [],
+                    "workDir": work_dir,
+                },
+            )
+            await asyncio.sleep(1)
+    except Exception:
+        pass
+
+    # 4. Try each strategy, poll for health
+    for cmd, cmd_port in strategies:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{sandbox_url}/tasks",
+                    json={"command": cmd, "args": [], "workDir": work_dir},
+                )
+                resp.raise_for_status()
+        except Exception as e:
+            logger.warning("Failed to start dev server for task %s: %s", task_id, e)
+            continue
+
+        # Poll until healthy (30s)
+        for _ in range(15):
+            await asyncio.sleep(2)
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    health = await client.get(f"{sandbox_url}/proxy/{cmd_port}/")
+                    if health.status_code < 500:
+                        preview_url = f"/api/dev/{task_id}/preview/"
+                        preview = {
+                            "url": preview_url,
+                            "taskId": task_id,
+                            "port": cmd_port,
+                        }
+                        _live_previews[task_id] = preview
+                        logger.info(
+                            "Restarted dev server for task %s (mode=%s) on port %d",
+                            task_id, mode, cmd_port,
+                        )
+                        return preview
+            except Exception:
+                pass
+
+    raise HTTPException(
+        status_code=504,
+        detail=(
+            "Dev server failed to start within timeout. "
+            "The workspace exists but the server could not be launched."
+        ),
+    )
 
 
 def set_dev_service(service: InMemoryDevService, pipeline_fn=None, skills_service=None, cosmos_skills=None, spec_service=None, dev_agent=None) -> None:
@@ -614,10 +718,11 @@ async def stream_debug(task_id: str, request: Request):
 
 @router.post("/{task_id}/live")
 async def start_live_preview(task_id: str, request: Request):
-    """Return the proxy URL for a slides task.
+    """Start or re-start the live preview dev server for a completed task.
 
-    The dev server is already running from the pipeline run stage — this endpoint
-    just looks up the preview URL instead of starting a new server.
+    If the dev server is already running (registered in _live_previews), returns
+    the existing preview URL. Otherwise, verifies the pipeline stage completed
+    and restarts the dev server from the persisted workspace files.
     """
     user_id = getattr(request.state, "user_id", "default-user")
     service = _get_service()
@@ -636,11 +741,23 @@ async def start_live_preview(task_id: str, request: Request):
             status_code=400, detail=f"Live preview not supported for mode '{task.mode}'"
         )
 
-    # Already registered by the pipeline stage
+    # Already registered — verify the server is actually reachable
     if task_id in _live_previews:
-        return _live_previews[task_id]
+        preview = _live_previews[task_id]
+        port = preview.get("port", 3333)
+        try:
+            sandbox_url = _resolve_sandbox_url(task_id)
+            async with httpx.AsyncClient(timeout=5) as client:
+                probe = await client.get(f"{sandbox_url}/proxy/{port}/")
+                if probe.status_code < 500:
+                    return preview
+        except Exception:
+            pass
+        # Server was registered but is not responding — remove stale entry and restart
+        _live_previews.pop(task_id, None)
+        logger.info("Stale preview entry for task %s — will restart dev server", task_id)
 
-    # Check if the required stage completed — if so, the server should be running
+    # Check if the required stage completed
     stage_completed = False
     if task.iterations:
         for stage in task.iterations[0].stages:
@@ -654,12 +771,8 @@ async def start_live_preview(task_id: str, request: Request):
             detail=f"{preview_stage} stage has not completed yet — dev server not started",
         )
 
-    # Stage completed but preview not in memory (e.g. after restart) — register it
-    port = 3333 if task.mode == "slides" else 3000
-    preview_url = f"/api/dev/{task_id}/preview/"
-    preview = {"url": preview_url, "taskId": task_id, "port": port}
-    _live_previews[task_id] = preview
-    return preview
+    # Stage completed — restart the dev server from persisted workspace files
+    return await _restart_dev_server(task_id, task.mode)
 
 
 @router.get("/{task_id}/live")
@@ -690,7 +803,7 @@ async def stop_live_preview(task_id: str):
 async def proxy_live_preview(task_id: str, path: str, request: Request):
     """Reverse proxy: voice.turboagent.nl → backend → sandbox → localhost:3333."""
     if task_id not in _live_previews:
-        # Auto-recover: check if the preview stage completed and register it
+        # Auto-recover: if pipeline stage completed, restart the dev server
         user_id = getattr(request.state, "user_id", "default-user")
         task = await _get_service().with_user(user_id).get_by_id(task_id)
         if task and task.iterations:
@@ -705,12 +818,10 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
                 for s in task.iterations[0].stages
             )
             if stage_ok:
-                port = 3333 if task.mode == "slides" else 3000
-                _live_previews[task_id] = {
-                    "url": f"/api/dev/{task_id}/preview/",
-                    "taskId": task_id,
-                    "port": port,
-                }
+                try:
+                    await _restart_dev_server(task_id, task.mode)
+                except HTTPException:
+                    pass  # Fall through to the 404 below
         if task_id not in _live_previews:
             raise HTTPException(
                 status_code=404,
@@ -733,7 +844,6 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
     }
 
     # Retry a few times — dev server may still be starting
-    last_err = None
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -789,8 +899,7 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
                     status_code=resp.status_code,
                     headers=headers,
                 )
-        except httpx.ConnectError as e:
-            last_err = e
+        except httpx.ConnectError:
             if attempt < 2:
                 await asyncio.sleep(2)
         except Exception as e:
