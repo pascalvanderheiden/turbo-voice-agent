@@ -265,6 +265,7 @@ module sandbox 'modules/container-app-sandbox.bicep' = {
     containerAppsEnvId: cae.outputs.id
     backendFqdn: backend.outputs.fqdn
     storageAccountName: storage.outputs.name
+    acrLoginServer: acr.outputs.loginServer
   }
 }
 

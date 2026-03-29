@@ -16,6 +16,9 @@ param copilotModel string = 'claude-opus-4.6'
 @description('Azure Storage account name for skill sync')
 param storageAccountName string = ''
 
+@description('ACR login server for image pulls')
+param acrLoginServer string = ''
+
 resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
@@ -34,9 +37,12 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 3000
         transport: 'http'  // Force HTTP/1.1 — required for reliable SSE streaming
       }
-      // Note: registries are NOT configured here because during initial creation
-      // the system identity doesn't have AcrPull yet (RBAC runs after this module).
-      // azd deploy will configure ACR registry auth when deploying the actual image.
+      registries: !empty(acrLoginServer) ? [
+        {
+          server: acrLoginServer
+          identity: 'system'
+        }
+      ] : []
     }
     template: {
       containers: [

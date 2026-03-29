@@ -18,6 +18,14 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
         name: 'snet-cae-infra'
         properties: {
           addressPrefix: '10.2.0.0/23'
+          delegations: [
+            {
+              name: 'delegation-cae'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
         }
       }
       {
