@@ -18,6 +18,7 @@
 | Hockney | Mobile Dev | `.squad/agents/hockney/charter.md` | 🟢 Active |
 | Verbal | Infra/DevOps | `.squad/agents/verbal/charter.md` | 🟢 Active |
 | Kobayashi | Tester | `.squad/agents/kobayashi/charter.md` | 🟢 Active |
+| Redfoot | Spec Manager | `.squad/agents/redfoot/charter.md` | 🟢 Active |
 | Scribe | Scribe | `.squad/agents/scribe/charter.md` | 🟢 Active |
 | Ralph | Work Monitor | — | 🔄 Monitor |
 

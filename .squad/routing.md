@@ -16,6 +16,8 @@ How to decide who handles what.
 | Infrastructure / Bicep / Azure | Verbal ⚙️ | Bicep modules, Container Apps, Cosmos DB provisioning |
 | ACI sandbox / pipelines | Verbal ⚙️ | ACI containers, sandbox server.js, pipeline stages |
 | CI/CD / GitHub Actions | Verbal ⚙️ | Deploy workflows, postdeploy scripts, ACR tagging |
+| OpenSpec / specs / changes | Redfoot 📐 | Propose, explore, implement, archive OpenSpec changes |
+| Spec management / archiving | Redfoot 📐 | Organize specs, archive completed changes, maintain project.md |
 | Code review | Keaton 🏗️ | Review PRs, check quality, approve/reject |
 | Testing | Kobayashi 🧪 | pytest, Playwright, edge cases, quality gates |
 | Scope & priorities | Keaton 🏗️ | What to build next, trade-offs, decisions |
