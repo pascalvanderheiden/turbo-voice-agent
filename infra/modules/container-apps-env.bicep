@@ -4,6 +4,9 @@ param name string
 @description('Location')
 param location string
 
+@description('Infrastructure subnet ID for VNet integration (optional — leave empty for managed networking)')
+param infrastructureSubnetId string = ''
+
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'log-${name}'
   location: location
@@ -26,6 +29,10 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
     }
+    vnetConfiguration: infrastructureSubnetId != '' ? {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false
+    } : null
   }
 }
 

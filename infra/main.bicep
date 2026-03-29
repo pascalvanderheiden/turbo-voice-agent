@@ -119,6 +119,34 @@ module aiCentralUs 'modules/ai-foundry-centralus.bicep' = {
 }
 
 // ──────────────────────────────────────────────
+// VNet for Container Apps + Private Endpoints
+// ──────────────────────────────────────────────
+module vnetCae 'modules/vnet-cae.bicep' = {
+  name: 'vnet-cae'
+  scope: rg
+  params: {
+    name: 'vnet-cae-${resourceToken}'
+    location: location
+  }
+}
+
+// ──────────────────────────────────────────────
+// Cosmos DB Private Endpoint + DNS
+// ──────────────────────────────────────────────
+module cosmosPrivateEndpoint 'modules/cosmos-private-endpoint.bicep' = {
+  name: 'cosmos-private-endpoint'
+  scope: rg
+  params: {
+    name: 'pe-cosmos-${resourceToken}'
+    location: location
+    cosmosAccountId: cosmos.outputs.id
+    cosmosAccountName: cosmos.outputs.name
+    subnetId: vnetCae.outputs.privateEndpointsSubnetId
+    vnetId: vnetCae.outputs.vnetId
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container Apps Environment
 // ──────────────────────────────────────────────
 module cae 'modules/container-apps-env.bicep' = {
@@ -127,6 +155,7 @@ module cae 'modules/container-apps-env.bicep' = {
   params: {
     name: 'cae-${resourceToken}'
     location: location
+    infrastructureSubnetId: vnetCae.outputs.infraSubnetId
   }
 }
 
@@ -154,6 +183,31 @@ module aciNetwork 'modules/aci-network.bicep' = if (enableAciSandbox) {
     name: 'vnet-aci-sandbox-${resourceToken}'
     location: location
   }
+}
+
+// ──────────────────────────────────────────────
+// VNet Peering — CAE ↔ ACI Sandbox (bidirectional)
+// ──────────────────────────────────────────────
+module peerCaeToAci 'modules/vnet-peering.bicep' = if (enableAciSandbox) {
+  name: 'peer-cae-to-aci'
+  scope: rg
+  params: {
+    localVnetName: 'vnet-cae-${resourceToken}'
+    remoteVnetId: enableAciSandbox ? aciNetwork.outputs.vnetId : ''
+    peeringName: 'peer-cae-to-aci'
+  }
+  dependsOn: [vnetCae, aciNetwork]
+}
+
+module peerAciToCae 'modules/vnet-peering.bicep' = if (enableAciSandbox) {
+  name: 'peer-aci-to-cae'
+  scope: rg
+  params: {
+    localVnetName: 'vnet-aci-sandbox-${resourceToken}'
+    remoteVnetId: vnetCae.outputs.vnetId
+    peeringName: 'peer-aci-to-cae'
+  }
+  dependsOn: [vnetCae, aciNetwork]
 }
 
 // ──────────────────────────────────────────────
