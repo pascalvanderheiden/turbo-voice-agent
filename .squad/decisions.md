@@ -57,6 +57,30 @@ Slides preview iframe auto-displays when `run` stage completes using `/api/dev/{
 
 **Impact:** Frontend only—no backend API contract change. Both `development/page.tsx` and `development/[id]/page.tsx` updated.
 
+### Cosmos DB Private Networking Architecture
+
+**Author:** Verbal  
+**Date:** 2025-07-25  
+**Status:** Implemented (IaC only — deployment pending)
+
+Cosmos DB now uses a private endpoint for data-plane traffic. VNet peering connects CAE and ACI sandbox networks.
+
+**Key Architecture:**
+- CAE VNet (10.2.0.0/16) with 3 subnets
+- Private endpoint for Cosmos DB (privatelink.documents.azure.com DNS zone)
+- Bidirectional VNet peering between CAE VNet and ACI sandbox VNet
+- Public access disabled on Cosmos DB account
+
+**Files Changed:** `infra/modules/vnet-cae.bicep`, `cosmos-private-endpoint.bicep`, `vnet-peering.bicep`, `container-apps-env.bicep`, `cosmos-db.bicep`, `main.bicep`
+
+### Model Preference Directive
+
+**Author:** Pascal van der Heiden  
+**Date:** 2026-03-29T10:35:13Z  
+**Status:** Active
+
+Use `claude-opus-4.6` as the preferred model for all squad agent spawns. Do not use `claude-sonnet-4.5` as default.
+
 ## Governance
 
 - All meaningful changes require team consensus
