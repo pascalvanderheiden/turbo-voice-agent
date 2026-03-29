@@ -15,12 +15,20 @@ The system SHALL provision a dedicated Container App for the GitHub Copilot CLI 
 - **WHEN** the sandbox Container App is configured
 - **THEN** it SHALL have min 1 / max 5 replicas with HTTP-based scaling to support concurrent dev task execution
 
+#### Scenario: Sandbox connectivity via VNet peering
+- **WHEN** the Container Apps Environment has VNet integration and peering is established with the ACI VNet
+- **THEN** the sandbox Container App SHALL be able to communicate with ACI sandbox containers over the peered VNet
+
 ### Requirement: Cosmos DB container for sandbox state
 The system SHALL add a Cosmos DB container to store sandbox configuration and task state per user.
 
 #### Scenario: Sandbox state container provisioned
 - **WHEN** infrastructure is provisioned
 - **THEN** a Cosmos DB container named `sandbox_state` SHALL be created with partition key `/userId` and 400 RU/s throughput
+
+#### Scenario: Sandbox state accessible via private endpoint
+- **WHEN** the Cosmos DB private endpoint is active and public access is disabled
+- **THEN** the sandbox state container SHALL remain accessible from the backend Container App via the private endpoint
 
 ### Requirement: Sandbox Docker image in ACR
 The system SHALL build and store the sandbox Docker image in the existing Azure Container Registry.

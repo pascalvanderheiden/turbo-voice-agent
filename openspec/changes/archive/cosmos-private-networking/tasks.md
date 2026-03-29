@@ -32,5 +32,5 @@
 
 ## 7. Cleanup and Documentation
 
-- [ ] 7.1 Update `openspec/project.md` to reflect new network topology (CAE VNet integration, private endpoint)
-- [ ] 7.2 Commit all Bicep changes with descriptive commit message
+- [x] 7.1 Update `openspec/project.md` to reflect new network topology (CAE VNet integration, private endpoint)
+- [x] 7.2 Commit all Bicep changes with descriptive commit message
