@@ -15,7 +15,7 @@ export default function DashboardPage() {
         notesApi.list().then((r) => r.length).catch(() => null),
         ideasApi.list().then((r) => r.length).catch(() => null),
         researchApi.list().then((r) => r.length).catch(() => null),
-        specsApi.list().then((r) => r.length).catch(() => null),
+        specsApi.list().then((r) => r.filter(s => !s.parentId).length).catch(() => null),
         devApi.list().then((r) => r.length).catch(() => null),
         marketingApi.list().then((r) => r.length).catch(() => null),
         todosApi.list().then((r) => r.length).catch(() => null),

@@ -114,7 +114,7 @@ export default function AgentsPage() {
         notes: notesList.length,
         brainstorm: ideasList.length,
         research: researchList.length,
-        spec: specsList.length,
+        spec: specsList.filter((s: { parentId?: string | null }) => !s.parentId).length,
         dev: devList.length,
       });
     } catch {
