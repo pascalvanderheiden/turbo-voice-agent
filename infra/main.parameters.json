@@ -10,6 +10,7 @@
     "entraClientSecret": { "value": "${ENTRA_CLIENT_SECRET}" },
     "customDomainName": { "value": "${CUSTOM_DOMAIN_NAME}" },
     "existingCertName": { "value": "${EXISTING_CERT_NAME}" },
-    "deployerPrincipalId": { "value": "${DEPLOYER_PRINCIPAL_ID}" }
+    "deployerPrincipalId": { "value": "${DEPLOYER_PRINCIPAL_ID}" },
+    "deployRbac": { "value": "${DEPLOY_RBAC=true}" }
   }
 }

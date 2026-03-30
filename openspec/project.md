@@ -37,11 +37,12 @@ Turbo Voice Agent is a real-time conversational AI voice agent (general purpose)
 ### Network Topology
 - **CAE VNet** (`vnet-cae`, `10.2.0.0/16`): Hosts Container Apps and private endpoints
   - `snet-cae-infra` (`10.2.0.0/23`) — Container Apps Environment infrastructure subnet
-  - `snet-private-endpoints` (`10.2.2.0/24`) — Private endpoints (Cosmos DB)
+  - `snet-private-endpoints` (`10.2.2.0/24`) — Private endpoints (Cosmos DB, Storage blob, Storage file)
   - `snet-reserved` (`10.2.3.0/24`) — Reserved for future use
 - **ACI VNet** (`10.1.0.0/16`): Sandbox VNet for Azure Container Instances
 - **VNet Peering**: Bidirectional peering between CAE VNet and ACI VNet
 - **Cosmos DB Private Endpoint**: In `snet-private-endpoints`, with private DNS zone `privatelink.documents.azure.com` for automatic A-record registration. Public access is disabled (Azure Policy requirement). Backend connects via `DefaultAzureCredential` — DNS handles routing transparently, no code changes needed.
+- **Storage Private Endpoints**: Two private endpoints in `snet-private-endpoints` — one for blob (`privatelink.blob.core.windows.net`) and one for file (`privatelink.file.core.windows.net`). Public access is denied (`networkAcls.defaultAction: Deny`). Azure Files mount uses shared key access over SMB within the VNet (managed identity not supported for SMB mounts).
 
 ### Branding
 - **Identity**: Turbo Agent

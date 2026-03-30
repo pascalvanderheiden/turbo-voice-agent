@@ -8,20 +8,20 @@
 
 ## 3. Phase 1 Deployment — Private Endpoints (public access stays Allow)
 
-- [ ] 3.1 Run `azd up` to provision storage private endpoints and DNS zones
-- [ ] 3.2 Verify private endpoint connections are approved and DNS resolves to private IPs
-- [ ] 3.3 Verify Container Apps can access blob storage and Azure Files mount works
+- [x] 3.1 Run `azd up` to provision storage private endpoints and DNS zones
+- [x] 3.2 Verify private endpoint connections are approved and DNS resolves to private IPs
+- [x] 3.3 Verify Container Apps can access blob storage and Azure Files mount works
 
 ## 4. Deny Public Access on Storage Account
 
-- [ ] 4.1 Update `infra/modules/storage.bicep` — change `networkAcls.defaultAction` from `'Allow'` to `'Deny'`
+- [x] 4.1 Update `infra/modules/storage.bicep` — change `networkAcls.defaultAction` from `'Allow'` to `'Deny'`
 
 ## 5. Phase 2 Deployment — Deny Public Access
 
-- [ ] 5.1 Run `azd up` to apply the network ACL change
-- [ ] 5.2 Verify Container Apps health check passes, blob operations work, and Azure Files mount remains functional
-- [ ] 5.3 Verify all existing data (blob containers + file share) is intact and accessible
+- [x] 5.1 Run `azd up` to apply the network ACL change
+- [x] 5.2 Verify Container Apps health check passes, blob operations work, and Azure Files mount remains functional
+- [x] 5.3 Verify all existing data (blob containers + file share) is intact and accessible
 
 ## 6. Update Documentation
 
-- [ ] 6.1 Update `openspec/project.md` network topology section to reflect storage private endpoints in `snet-private-endpoints` alongside Cosmos DB PE
+- [x] 6.1 Update `openspec/project.md` network topology section to reflect storage private endpoints in `snet-private-endpoints` alongside Cosmos DB PE
