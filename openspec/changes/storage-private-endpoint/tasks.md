@@ -1,10 +1,10 @@
 ## 1. Create Storage Private Endpoint Bicep Module
 
-- [ ] 1.1 Create `infra/modules/storage-private-endpoint.bicep` — two private endpoints (blob + file) targeting the storage account in `snet-private-endpoints` subnet, with private DNS zones (`privatelink.blob.core.windows.net`, `privatelink.file.core.windows.net`), VNet links, and DNS zone groups for auto A-record registration. Follow the pattern in `cosmos-private-endpoint.bicep`. Parameters: `name`, `location`, `storageAccountId`, `storageAccountName`, `subnetId`, `vnetId`.
+- [x] 1.1 Create `infra/modules/storage-private-endpoint.bicep` — two private endpoints (blob + file) targeting the storage account in `snet-private-endpoints` subnet, with private DNS zones (`privatelink.blob.core.windows.net`, `privatelink.file.core.windows.net`), VNet links, and DNS zone groups for auto A-record registration. Follow the pattern in `cosmos-private-endpoint.bicep`. Parameters: `name`, `location`, `storageAccountId`, `storageAccountName`, `subnetId`, `vnetId`.
 
 ## 2. Wire Storage Private Endpoint into main.bicep
 
-- [ ] 2.1 Add a `storagePrivateEndpoint` module call in `infra/main.bicep`, passing the storage account ID/name, VNet ID, and private endpoints subnet ID from existing module outputs. Place it after the `storage` module and `vnetCae` module.
+- [x] 2.1 Add a `storagePrivateEndpoint` module call in `infra/main.bicep`, passing the storage account ID/name, VNet ID, and private endpoints subnet ID from existing module outputs. Place it after the `storage` module and `vnetCae` module.
 
 ## 3. Phase 1 Deployment — Private Endpoints (public access stays Allow)
 

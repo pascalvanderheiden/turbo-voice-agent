@@ -147,6 +147,22 @@ module cosmosPrivateEndpoint 'modules/cosmos-private-endpoint.bicep' = {
 }
 
 // ──────────────────────────────────────────────
+// Storage Private Endpoints + DNS (blob + file)
+// ──────────────────────────────────────────────
+module storagePrivateEndpoint 'modules/storage-private-endpoint.bicep' = {
+  name: 'storage-private-endpoint'
+  scope: rg
+  params: {
+    name: 'pe-st-${resourceToken}'
+    location: location
+    storageAccountId: storage.outputs.id
+    storageAccountName: storage.outputs.name
+    subnetId: vnetCae.outputs.privateEndpointsSubnetId
+    vnetId: vnetCae.outputs.vnetId
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container Apps Environment
 // ──────────────────────────────────────────────
 module cae 'modules/container-apps-env.bicep' = {
