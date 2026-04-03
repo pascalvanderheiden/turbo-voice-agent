@@ -16,6 +16,7 @@ concurrency:
 jobs:
   detect-changes:
     name: Detect changes
+    if: ${{ false }}
     runs-on: ubuntu-latest
     outputs:
       infra: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
@@ -41,7 +42,7 @@ jobs:
   deploy:
     name: ${{ needs.detect-changes.outputs.infra == 'true' && 'Provision & Deploy' || 'Deploy' }}
     needs: detect-changes
-    if: needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.app == 'true' || needs.detect-changes.outputs.sandbox == 'true'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: production
     env:
