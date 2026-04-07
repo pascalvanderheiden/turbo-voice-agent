@@ -560,8 +560,8 @@ class MarketingAgent:
                     "role": "system",
                     "content": (
                         "You are a creative marketing scriptwriter for software products. "
-                        "You will create a ~60 second promotional video script broken into "
-                        "3 individual segments of 20 seconds each.\n\n"
+                        "You will create a ~36 second promotional video script broken into "
+                        "3 individual segments of 12 seconds each.\n\n"
                         "Each segment will be generated as a separate Sora-2 video clip, "
                         "then stitched together into one final video.\n\n"
                         "IMPORTANT: Each segment will receive a reference image as input to Sora-2. "
@@ -685,7 +685,7 @@ class MarketingAgent:
                         "model": deployment,
                         "prompt": prompt,
                         "size": "1280x720",
-                        "seconds": 20,
+                        "seconds": 12,
                     }
 
                     section = seg.get("section", "").lower()

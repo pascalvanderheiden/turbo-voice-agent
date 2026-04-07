@@ -329,8 +329,9 @@ module rbac 'modules/rbac.bicep' = if (deployRbac) {
 // ──────────────────────────────────────────────
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_CONTAINER_REGISTRY string = acr.outputs.loginServer
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = acr.outputs.loginServer
 output BACKEND_URL string = 'https://${backend.outputs.fqdn}'
-output FRONTEND_URL string = 'https://${frontend.outputs.fqdn}'
+output FRONTEND_URL string = customDomainName != '' ? 'https://${customDomainName}' : 'https://${frontend.outputs.fqdn}'
 output COSMOS_ENDPOINT string = cosmos.outputs.endpoint
 output AI_EASTUS2_ENDPOINT string = aiEastUs2.outputs.endpoint
 output AI_WESTUS_ENDPOINT string = aiWestUs.outputs.endpoint

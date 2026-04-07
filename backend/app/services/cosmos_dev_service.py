@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_USER_ID = "default-user"
 
 MOCKUP_STAGE_NAMES = ["init", "skills", "implement", "screenshots"]
-SLIDES_STAGE_NAMES = ["init", "skills", "slides"]
+SLIDES_STAGE_NAMES = ["init", "run", "slides"]
 
 
 def build_sequential_stages(features: list[str] | None = None) -> list[str]:

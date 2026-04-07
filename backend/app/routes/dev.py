@@ -793,11 +793,11 @@ async def start_live_preview(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Task not found")
     # Determine which stage must complete before preview is available
     if task.mode == "slides":
-        preview_stage = "run"
+        preview_stages = ["run", "slides"]
     elif task.mode == "mockup":
-        preview_stage = "implement"
+        preview_stages = ["implement"]
     elif task.mode == "sequential":
-        preview_stage = "implement-foundation"
+        preview_stages = ["implement-foundation"]
     else:
         raise HTTPException(
             status_code=400, detail=f"Live preview not supported for mode '{task.mode}'"
@@ -819,18 +819,18 @@ async def start_live_preview(task_id: str, request: Request):
         _live_previews.pop(task_id, None)
         logger.info("Stale preview entry for task %s — will restart dev server", task_id)
 
-    # Check if the required stage completed
+    # Check if any of the required stages completed
     stage_completed = False
     if task.iterations:
         for stage in task.iterations[0].stages:
-            if stage.name == preview_stage and stage.status == "completed":
+            if stage.name in preview_stages and stage.status == "completed":
                 stage_completed = True
                 break
 
     if not stage_completed:
         raise HTTPException(
             status_code=409,
-            detail=f"{preview_stage} stage has not completed yet — dev server not started",
+            detail=f"None of {preview_stages} stages have completed yet — dev server not started",
         )
 
     # Stage completed — restart the dev server from persisted workspace files
@@ -869,14 +869,14 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
         user_id = getattr(request.state, "user_id", "default-user")
         task = await _get_service().with_user(user_id).get_by_id(task_id)
         if task and task.iterations:
-            preview_stage = (
-                "run" if task.mode == "slides"
-                else "implement" if task.mode == "mockup"
-                else "implement-foundation" if task.mode == "sequential"
-                else None
+            preview_stages = (
+                ["run", "slides"] if task.mode == "slides"
+                else ["implement"] if task.mode == "mockup"
+                else ["implement-foundation"] if task.mode == "sequential"
+                else []
             )
-            stage_ok = preview_stage and any(
-                s.name == preview_stage and s.status == "completed"
+            stage_ok = preview_stages and any(
+                s.name in preview_stages and s.status == "completed"
                 for s in task.iterations[0].stages
             )
             if stage_ok:
