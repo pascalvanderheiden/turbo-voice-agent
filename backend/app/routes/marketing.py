@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -81,24 +82,31 @@ async def trigger_video(video_id: str, request: Request):
 
 @router.get("/{video_id}/video")
 async def stream_video(video_id: str, request: Request):
-    """Stream the generated video file with HTTP Range support for seeking."""
+    """Stream the generated video file with HTTP Range support for seeking.
+
+    Tries local disk first, then falls back to streaming from Azure Blob Storage.
+    """
     user_id = getattr(request.state, "user_id", "default-user")
     service = _get_service().with_user(user_id)
     video = await service.get_by_id(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
-    if not video.video_path:
-        raise HTTPException(status_code=404, detail="Video not yet generated")
 
-    file_path = Path(video.video_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found on disk")
+    # Try local file first
+    if video.video_path:
+        file_path = Path(video.video_path)
+        if file_path.exists():
+            return _stream_local_file(file_path, request)
 
+    # Fall back to blob storage
+    return await _stream_from_blob(video_id, request)
+
+def _stream_local_file(file_path: Path, request: Request) -> StreamingResponse:
+    """Stream a video from local disk with Range support."""
     file_size = file_path.stat().st_size
     range_header = request.headers.get("range")
 
     if range_header:
-        # Parse range header: "bytes=start-end"
         range_spec = range_header.replace("bytes=", "")
         parts = range_spec.split("-")
         start = int(parts[0]) if parts[0] else 0
@@ -129,7 +137,6 @@ async def stream_video(video_id: str, request: Request):
             },
         )
 
-    # Full file response
     async def file_iterator():
         with open(file_path, "rb") as f:
             while chunk := f.read(8192):
@@ -143,6 +150,76 @@ async def stream_video(video_id: str, request: Request):
             "Content-Length": str(file_size),
         },
     )
+
+
+async def _stream_from_blob(video_id: str, request: Request) -> StreamingResponse:
+    """Stream a video from Azure Blob Storage (marketing-videos container)."""
+    storage_account = os.environ.get(
+        "AZURE_STORAGE_ACCOUNT_NAME", os.environ.get("AZURE_STORAGE_ACCOUNT", "")
+    )
+    if not storage_account:
+        raise HTTPException(status_code=404, detail="Video file not available")
+
+    try:
+        from azure.identity.aio import DefaultAzureCredential
+        from azure.storage.blob.aio import BlobServiceClient
+
+        blob_url = f"https://{storage_account}.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        try:
+            blob_service = BlobServiceClient(account_url=blob_url, credential=credential)
+            container_client = blob_service.get_container_client("marketing-videos")
+            blob_client = container_client.get_blob_client(f"{video_id}.mp4")
+
+            props = await blob_client.get_blob_properties()
+            blob_size = props.size
+
+            range_header = request.headers.get("range")
+            if range_header:
+                range_spec = range_header.replace("bytes=", "")
+                parts = range_spec.split("-")
+                start = int(parts[0]) if parts[0] else 0
+                end = int(parts[1]) if parts[1] else blob_size - 1
+                end = min(end, blob_size - 1)
+                content_length = end - start + 1
+
+                stream = await blob_client.download_blob(offset=start, length=content_length)
+
+                async def blob_range_iter():
+                    async for chunk in stream.chunks():
+                        yield chunk
+
+                return StreamingResponse(
+                    blob_range_iter(),
+                    status_code=206,
+                    media_type="video/mp4",
+                    headers={
+                        "Content-Range": f"bytes {start}-{end}/{blob_size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(content_length),
+                    },
+                )
+
+            stream = await blob_client.download_blob()
+
+            async def blob_iter():
+                async for chunk in stream.chunks():
+                    yield chunk
+
+            return StreamingResponse(
+                blob_iter(),
+                media_type="video/mp4",
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(blob_size),
+                },
+            )
+        finally:
+            await credential.close()
+            await blob_service.close()
+    except Exception:
+        logger.exception("Failed to stream video %s from blob storage", video_id)
+        raise HTTPException(status_code=404, detail="Video file not available")
 
 
 @router.get("/by-dev-task/{dev_task_id}", response_model=list[MarketingVideo])

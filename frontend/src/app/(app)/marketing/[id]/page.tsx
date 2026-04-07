@@ -67,8 +67,8 @@ export default function MarketingDetailPage() {
   }
 
   const isInProgress = ["pending", "scripting", "generating", "composing"].includes(video.status);
-  // Use blob storage URL if available, otherwise fall back to streaming endpoint
-  const effectiveVideoUrl = video.videoUrl || (video.videoPath ? marketingApi.videoUrl(video.id) : null);
+  // Always use the backend streaming endpoint — it handles local disk + blob fallback
+  const effectiveVideoUrl = video.status === "completed" ? marketingApi.videoUrl(video.id) : null;
 
   const statusSteps = [
     { key: "pending", label: "Pending", icon: IconVideo },
