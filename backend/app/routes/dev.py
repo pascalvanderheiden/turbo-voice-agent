@@ -136,7 +136,7 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
     if mode == "slides":
         port = 3333
         strategies = [
-            (f"cd {work_dir} && npm run dev -- --port 3333 --host", 3333),
+            (f"cd {work_dir} && npm install 2>/dev/null && npm run dev -- --port 3333 --host", 3333),
         ]
     else:
         port = 3000
