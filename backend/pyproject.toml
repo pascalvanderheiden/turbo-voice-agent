@@ -1,7 +1,9 @@
 [project]
 name = "turbo-voice-agent-backend"
 version = "0.1.0"
-description = "Turbo Voice Agent – FastAPI backend with Voice Live, Agent Framework, and Cosmos DB"
+description = "FastAPI backend for the turbo-voice-agent multi-agent voice AI platform"
+authors = [{ name = "turbo-voice-agent contributors" }]
+license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

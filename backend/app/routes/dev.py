@@ -863,7 +863,7 @@ async def stop_live_preview(task_id: str):
 
 @router.get("/{task_id}/preview/{path:path}")
 async def proxy_live_preview(task_id: str, path: str, request: Request):
-    """Reverse proxy: voice.turboagent.nl → backend → sandbox → localhost:3333."""
+    """Reverse proxy: custom preview domain → backend → sandbox → localhost:3333."""
     if task_id not in _live_previews:
         # Auto-recover: if pipeline stage completed, restart the dev server
         user_id = getattr(request.state, "user_id", "default-user")

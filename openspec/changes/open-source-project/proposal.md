@@ -32,4 +32,4 @@ This project is ready to be shared with the developer community as an open-sourc
 - **Repository metadata**: Updates to `frontend/package.json`, `backend/pyproject.toml` author/repository fields
 - **Assets**: New `docs/screenshot.png` (or similar path)
 - **Deployment**: Requires running `azd down --force --purge` on existing environment before redeployment
-- **.squad/ folder**: Local team context files (.squad/) are NOT part of the OSS distribution — they contain local agent history and should be gitignored or clarified as project-specific artifacts
+- **.squad/ folder**: Keep `.squad/` in the OSS distribution as optional Squad metadata, but anonymize maintainer-specific seeded context and clarify that it is not required for deployment.

@@ -3,7 +3,7 @@
 ## Project Context
 Turbo Voice Agent — Azure infrastructure and DevOps.
 Stack: Bicep IaC, Azure Container Apps, ACI sandbox, GitHub Actions CI/CD, Docker.
-User: Pascal van der Heiden.
+User: the project maintainer.
 
 Infrastructure: Azure Container Apps for backend + frontend, ACI for sandbox containers, Cosmos DB, Azure Storage for skills, ACR for container images. Deployed via `azd up`.
 
@@ -96,3 +96,11 @@ Cosmos DB private networking deployment session completed. All critical componen
 - All Bicep IaC in `infra/modules/`
 
 **Outstanding:** CAE VNet integration (pending Microsoft.ContainerService provider registration)
+
+### OSS Infra Genericization (2026-05-19)
+- `infra/main.parameters.json` now defaults optional OSS parameters to empty strings (`ENTRA_CLIENT_SECRET`, `CUSTOM_DOMAIN_NAME`, `EXISTING_CERT_NAME`, `DEPLOYER_PRINCIPAL_ID`) so `azd env set` can stay minimal for default deployments.
+- `azure.yaml` now declares custom pipeline variables/secrets for GitHub Actions and documents the required `azd env set` names inline.
+- `.github/workflows/deploy.yml` is OIDC-only and now reads deployer RBAC behavior from configuration instead of a hardcoded `false`; deploys are re-enabled for relevant path changes.
+- `az bicep build --file infra/main.bicep` compiles successfully after the OSS parameterization changes (existing Bicep warnings remain in unrelated modules).
+- Git history audit found one critical tracked key file (`backend/key.pem`, first committed in `4fdbe03`) and one suspicious tracked local env artifact (`frontend/.!38121!.env.local`, also `4fdbe03`).
+- GUIDs still present in `infra/` are Azure built-in role definition IDs, not personal subscription, tenant, or principal identifiers.

@@ -6,6 +6,26 @@ infra:
   provider: bicep
   path: infra
   module: main
+  # Infrastructure parameters are resolved from azd environment values via infra/main.parameters.json.
+  # Required: ENTRA_TENANT_ID, ENTRA_CLIENT_ID
+  # Optional: ENTRA_CLIENT_SECRET, CUSTOM_DOMAIN_NAME, EXISTING_CERT_NAME,
+  #           DEPLOYER_PRINCIPAL_ID, DEPLOY_RBAC
+
+pipeline:
+  # Additional GitHub Actions variables used by .github/workflows/deploy.yml.
+  # Core Azure variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+  # AZURE_ENV_NAME, AZURE_LOCATION) are populated by azd pipeline config.
+  variables:
+    - AZURE_RESOURCE_GROUP
+    - ENTRA_TENANT_ID
+    - ENTRA_CLIENT_ID
+    - CUSTOM_DOMAIN_NAME
+    - EXISTING_CERT_NAME
+    - DEPLOY_RBAC
+    - DEPLOYER_PRINCIPAL_ID
+    - GITHUB_ENVIRONMENT_NAME
+  secrets:
+    - ENTRA_CLIENT_SECRET
 
 services:
   backend:

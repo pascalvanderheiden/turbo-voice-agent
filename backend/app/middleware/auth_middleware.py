@@ -19,7 +19,7 @@ SKIP_PREFIXES = ("/uploads/", "/static/", "/install-cert", "/api/auth/callback/"
 
 MOCK_USER = {
     "oid": "00000000-0000-0000-0000-000000000000",
-    "preferred_username": "dev@turboagent.nl",
+    "preferred_username": "dev@example.com",
     "name": "Local Dev User",
     "tid": "local",
 }

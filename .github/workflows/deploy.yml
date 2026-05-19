@@ -16,7 +16,6 @@ concurrency:
 jobs:
   detect-changes:
     name: Detect changes
-    if: ${{ false }}
     runs-on: ubuntu-latest
     outputs:
       infra: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
@@ -42,9 +41,9 @@ jobs:
   deploy:
     name: ${{ needs.detect-changes.outputs.infra == 'true' && 'Provision & Deploy' || 'Deploy' }}
     needs: detect-changes
-    if: ${{ false }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.app == 'true' || needs.detect-changes.outputs.sandbox == 'true' }}
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ vars.GITHUB_ENVIRONMENT_NAME || 'production' }}
     env:
       AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
       AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
@@ -91,7 +90,10 @@ jobs:
           azd env set ENTRA_CLIENT_ID "${{ vars.ENTRA_CLIENT_ID }}" -e "$AZURE_ENV_NAME"
           azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}" -e "$AZURE_ENV_NAME"
           azd env set EXISTING_CERT_NAME "${{ vars.EXISTING_CERT_NAME }}" -e "$AZURE_ENV_NAME"
-          azd env set DEPLOY_RBAC "false" -e "$AZURE_ENV_NAME"
+          azd env set DEPLOY_RBAC "${{ vars.DEPLOY_RBAC || 'true' }}" -e "$AZURE_ENV_NAME"
+          if [ -n "${{ vars.DEPLOYER_PRINCIPAL_ID }}" ]; then
+            azd env set DEPLOYER_PRINCIPAL_ID "${{ vars.DEPLOYER_PRINCIPAL_ID }}" -e "$AZURE_ENV_NAME"
+          fi
           if [ -n "${{ secrets.ENTRA_CLIENT_SECRET }}" ]; then
             azd env set ENTRA_CLIENT_SECRET "${{ secrets.ENTRA_CLIENT_SECRET }}" -e "$AZURE_ENV_NAME"
           fi

@@ -25,7 +25,7 @@
 ## Project Context
 
 - **Project:** turbo-voice-agent
-- **User:** Pascal van der Heiden
+- **User:** Project Maintainer
 - **Created:** 2026-03-25
 - **Stack:** Python 3.12/FastAPI backend, Next.js 15 frontend, React Native/Expo mobile, Azure (Cosmos DB, Voice Live, Container Apps, ACI sandbox), Bicep IaC
 - **Architecture:** Multi-agent voice system — SupervisorAgent routes to 12 specialist agents, ACI sandbox for Copilot CLI pipelines, WebSocket voice streaming

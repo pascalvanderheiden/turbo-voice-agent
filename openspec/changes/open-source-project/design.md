@@ -12,9 +12,9 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 - GitHub Actions workflow uses repo variables (some potentially personal)
 - README is developer-focused (copilot-instructions.md) but lacks deployment instructions for new users
 - No LICENSE, CODE_OF_CONDUCT.md, or SECURITY.md
-- `.squad/` folder contains local team context (not part of OSS distribution)
+- `.squad/` folder contains project team context that will stay in the repository as optional Squad metadata after anonymization
 
-**Stakeholders:** Pascal van der Heiden (project owner), future open-source contributors
+**Stakeholders:** the project maintainer, future open-source contributors
 
 ## Goals / Non-Goals
 
@@ -32,7 +32,7 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 - Migrating existing data or state
 - Creating a hosted/SaaS version
 - Providing Windows-specific deployment paths (Mac/Linux primary)
-- Open-sourcing `.squad/` team context (local-only artifacts)
+- Reworking the Squad toolchain or removing optional `.squad/` metadata from the repository
 
 ## Decisions
 
@@ -64,8 +64,8 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 **Decision:** Use automated search (grep) across entire repo for common personal identifiers, then manual review of high-risk files.
 
 **Search terms:**
-- `pascalvanderheiden` (GitHub username, likely in URLs)
-- `pascal.vanderheiden` (email pattern)
+- Maintainer GitHub username strings (likely in URLs or local paths)
+- Maintainer email local-part strings
 - Subscription IDs (GUID pattern in `infra/`, `azure.yaml`, workflows)
 - Tenant IDs (GUID pattern in Entra ID configs)
 - Custom domain names (e.g., specific `.azurewebsites.net` or custom domains in Bicep)
@@ -88,7 +88,7 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 - Fresh repo: Loses git history, which is valuable for understanding evolution
 
 ### D4: Decommission Existing Environment
-**Decision:** Run `azd down --force --purge` to tear down Pascal's current Azure deployment before finalizing OSS release.
+**Decision:** Have the maintainer run `azd down --force --purge` on the current Azure deployment before finalizing OSS release.
 
 **Rationale:**
 - Validates that redeployment from updated instructions works end-to-end
@@ -144,21 +144,21 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 - Prompt user during `azd up`: Not supported for all parameter types (e.g., principal IDs)
 
 ### D7: .squad/ Folder Handling
-**Decision:** Leave `.squad/` folder in repository but add `.gitignore` entry to exclude it from forks, OR document that it's project-specific local context.
+**Decision:** Keep `.squad/` in the repository, anonymize maintainer-specific seeded context, and document it as optional Squad metadata.
 
 **Rationale:**
-- `.squad/` contains local team agent history and decisions
-- Not part of the OSS distribution — it's metadata about *this specific project instance*
-- Other users won't have a `.squad/` folder unless they set up their own squad
+- `.squad/` contains project-specific team context used by Squad workflows
+- Safe to ship in OSS once personal seeded context is anonymized
+- New users can ignore it entirely unless they also use Squad
 
 **Implementation:**
-- Verify `.squad/` is not referenced in deployment instructions
-- If `.squad/` is committed to git: add note in README that it's optional local tooling
-- If `.squad/` should be private: add to `.gitignore` and remove from git
+- Verify deployment instructions do not require `.squad/`
+- Add a README note describing `.squad/` as optional project metadata for Squad
+- Limit direct edits in append-only logs to maintainer identifiers needed for OSS scrubbing
 
 **Alternatives considered:**
 - Delete `.squad/`: Loses project context for maintainers
-- Make `.squad/` part of OSS: Confusing for new users, exposes internal workflow
+- Hide `.squad/`: Blocks maintainers from reusing the team metadata in future work
 
 ### D8: Code of Conduct & Security Policy
 **Decision:** Use GitHub's standard templates for `CODE_OF_CONDUCT.md` and `SECURITY.md`.
@@ -226,7 +226,7 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 - Encourage community PRs to report any missed references
 
 ### R2: Decommission breaks existing workflows
-**Risk:** Running `azd down` on Pascal's deployment could disrupt active development or demos.
+**Risk:** Running `azd down` on the maintainer's deployment could disrupt active development or demos.
 
 **Mitigation:**
 - Schedule decommission immediately before OSS release (not during active development)
@@ -270,7 +270,7 @@ This project (Turbo Voice Agent) was developed as a personal implementation and 
 1. Create OpenSpec change proposal (this document)
 2. Implement all tasks (README rewrite, scrubbing, license addition, etc.)
 3. Test deployment on a fresh Azure subscription + GitHub account
-4. Run `azd down --force --purge` on Pascal's existing environment
+4. Have the maintainer run `azd down --force --purge` on the existing environment
 5. Redeploy from scratch using updated README instructions to validate
 6. Make repository public on GitHub
 
