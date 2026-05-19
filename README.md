@@ -215,6 +215,16 @@ npx expo start --ios
 
 The mobile app currently targets iOS development.
 
+#### Optional: HTTPS for on-device microphone access
+
+iOS devices require HTTPS for microphone access when the Expo client talks to a backend over the LAN. A helper script generates a self-signed certificate pinned to your machine's LAN IP:
+
+```bash
+./scripts/gen-dev-cert.sh
+```
+
+The script writes `key.pem`, `cert.pem`, and `cert.der` to `backend/.local-certs/` (gitignored). Run the backend with TLS using the printed `uvicorn` command, then install `cert.der` as a trusted profile on your iOS device. These files are for local development only — never commit them.
+
 ## Testing
 
 ### Backend

@@ -49,6 +49,9 @@ android/
 *.key
 *.pfx
 *.p12
+*.der
+*.crt
+backend/.local-certs/
 
 # Editor temp / swap files
 .!*
