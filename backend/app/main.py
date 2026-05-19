@@ -420,16 +420,6 @@ app.include_router(user_router)
 app.include_router(sandbox_routes.router)
 
 
-@app.get("/install-cert")
-async def install_cert():
-    """Serve the self-signed cert as DER for iOS trust installation."""
-    from fastapi.responses import FileResponse
-    cert_path = Path(__file__).parent / "static" / "turbo-voice.der"
-    if cert_path.exists():
-        return FileResponse(cert_path, media_type="application/x-x509-ca-cert", filename="turbo-voice.cer")
-    return {"error": "cert not found"}
-
-
 @app.get("/health")
 async def health():
     """Health check with dependency status."""
