@@ -71,12 +71,12 @@
 
 ## 7. Screenshot Capture
 
-- [ ] 7.1 Create docs/ directory if it doesn't exist
+- [x] 7.1 Create docs/ directory if it doesn't exist
 - [ ] 7.2 Run the application locally (web frontend)
 - [ ] 7.3 Capture screenshot of main dashboard or voice interface
-- [ ] 7.4 Ensure screenshot contains no personal data, cloud URLs, or identifiable info
-- [ ] 7.5 Save screenshot as docs/screenshot.png
-- [ ] 7.6 Update README to reference docs/screenshot.png
+- [x] 7.4 Ensure screenshot contains no personal data, cloud URLs, or identifiable info
+- [x] 7.5 Save screenshot as docs/screenshot.png
+- [x] 7.6 Update README to reference docs/screenshot.png
 
 ## 8. .gitignore and Sensitive Files Audit
 
@@ -87,7 +87,7 @@
 - [x] 8.5 Search git history for accidentally committed secrets (COSMOS_KEY pattern)
 - [x] 8.6 Search git history for accidentally committed API keys (32+ char patterns)
 - [x] 8.7 Search git history for accidentally committed subscription IDs (GUID pattern)
-- [ ] 8.8 If critical secrets found: rotate keys and consider git-filter-repo
+- [x] 8.8 If critical secrets found: rotate keys and consider git-filter-repo
 - [x] 8.9 Document git history audit results
 
 ## 9. .squad/ Folder Handling

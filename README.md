@@ -6,10 +6,15 @@ Turbo Voice Agent is a full-stack reference implementation for building voice-fi
 
 It is designed for teams who want a production-style starting point for real-time speech, multi-agent orchestration, and modern Azure deployment patterns without starting from scratch.
 
-## Screenshot
+## Screenshots
 
-<!-- Screenshot will be added by the maintainer in Phase 2. -->
-![Turbo Voice Agent](docs/screenshot.png)
+![Turbo Voice Agent dashboard](docs/screenshot.png)
+
+The dashboard surfaces every specialist capability — notes, ideas, research, specs, dev, marketing, video, journal, and skills — behind a single voice-first experience.
+
+![Voice mode](docs/voice-mode.png)
+
+Voice Mode is a real-time, full-duplex conversation with the supervisor agent powered by the Azure Voice Live API.
 
 ## Key Features
 
@@ -23,6 +28,10 @@ It is designed for teams who want a production-style starting point for real-tim
 - Dark-mode-first product styling and reusable frontend component patterns
 
 ## Architecture
+
+![Agent architecture](docs/agents-architecture.png)
+
+A `SupervisorAgent` routes voice and chat requests to nine specialist agents, each owning a focused capability and its own tools.
 
 ```mermaid
 flowchart LR

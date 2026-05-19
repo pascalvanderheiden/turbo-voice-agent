@@ -43,3 +43,15 @@ android/
 
 # Local skill files (volume-mounted into sandbox)
 .agents/skills/
+
+# Secrets and credentials (never commit these)
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Editor temp / swap files
+.!*
+*.swp
+*.swo
+*~
