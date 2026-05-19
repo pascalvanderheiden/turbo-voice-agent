@@ -6,7 +6,7 @@
  * 2. Detail page shows correct 3 pipeline stages (Init, Implement, Screenshots)
  * 3. StatusPanel renders (terminal/sandbox section present)
  * 4. Mode badge shows "Mockup" for mockup tasks
- * 5. Slides mode task shows 2 stages (Init, Slides)
+ * 5. Slides mode task shows 3 stages (Init, Slides, Run)
  * 6. Archive filter tabs work on development list page
  * 7. Archive/unarchive round-trip works
  *
@@ -146,8 +146,8 @@ test.describe("Mockup Dev-Task Pipeline", () => {
 
 // ── 2. Slides Dev-Task Stages ──────────────────────────────────────────────
 
-// Current slides pipeline: init → skills → slides
-const SLIDES_LABELS = ["Init", "Skills", "Slides"];
+// Current slides pipeline: init → slides → run
+const SLIDES_LABELS = ["Init", "Slides", "Run"];
 
 test.describe("Slides Dev-Task Pipeline", () => {
   let token: string;

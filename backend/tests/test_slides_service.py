@@ -70,10 +70,12 @@ async def test_slides_dev_task_has_correct_stages(dev_service):
     )
     assert task.mode == "slides"
     assert task.slides_id == "s1"
-    # Slides mode should have 3 stages: init, skills, slides
+    # Slides mode should expose the new stage set: init, slides, run
     assert len(task.iterations) == 1
     stage_names = [s.name for s in task.iterations[0].stages]
-    assert stage_names == ["init", "skills", "slides"]
+    assert len(stage_names) == 3
+    assert set(stage_names) == {"init", "slides", "run"}
+    assert "skills" not in stage_names
 
 
 @pytest.mark.asyncio

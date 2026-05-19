@@ -18,20 +18,19 @@ The Docker Compose sandbox service SHALL bind-mount the host `.agents/skills/` d
 - **THEN** the sandbox SHALL start normally with an empty skills directory
 
 ### Requirement: Azure skills downloaded from Blob Storage at startup
-When `AZURE_STORAGE_ACCOUNT_NAME` is set, the sandbox entrypoint SHALL download skills from the `skills` blob container into `/home/agent/.copilot/skills/` before starting the server. In ACI mode, skills are downloaded once at container start (each container is single-use). In Container App mode, skills are also hot-reloaded at runtime via the `/skills/sync` endpoint.
+When `AZURE_STORAGE_ACCOUNT_NAME` is set, the sandbox entrypoint SHALL download skills from the `skills` blob container into `/home/agent/.copilot/skills/` before starting the server. Additionally, skills SHALL be hot-reloaded at runtime via the `/skills/sync` endpoint without requiring a container restart.
 
-#### Scenario: Skills available at container start in ACI
-- **WHEN** an ACI sandbox container starts with `AZURE_STORAGE_ACCOUNT_NAME` set
-- **THEN** `sync-skills.sh` downloads all skills from Blob Storage before the Express server starts accepting requests
-
-#### Scenario: New skills available on next task
-- **WHEN** a user activates a new skill in the marketplace
-- **THEN** the skill is uploaded to Blob Storage and the next ACI container provisioned will include it at startup
+#### Scenario: Skills downloaded on container start in Azure
+- **WHEN** the sandbox container starts in Azure with `AZURE_STORAGE_ACCOUNT_NAME` set
+- **THEN** the entrypoint SHALL download all skill blobs into `/home/agent/.copilot/skills/`
+- **AND** the Copilot CLI SHALL have access to the downloaded skills
 
 #### Scenario: Blob Storage unavailable at startup
 - **WHEN** the sandbox container starts and Blob Storage is unreachable
 - **THEN** the entrypoint SHALL log a warning and continue starting the server without custom skills
 
-#### Scenario: Hot-reload still works for Container App fallback
-- **WHEN** `USE_ACI_SANDBOX=false` and the backend calls `POST /skills/sync` on the shared Container App
-- **THEN** skills are synced from Blob Storage as before
+#### Scenario: Skill activated after container start
+- **WHEN** a user activates a new skill while the sandbox container is already running
+- **THEN** the backend SHALL trigger a `/skills/sync` call to the sandbox
+- **AND** the skill SHALL be available in `/home/agent/.copilot/skills/` within seconds
+- **AND** no container restart SHALL be required
