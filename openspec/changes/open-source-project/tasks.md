@@ -72,10 +72,10 @@
 ## 7. Screenshot Capture
 
 - [x] 7.1 Create docs/ directory if it doesn't exist
-- [ ] 7.2 Run the application locally (web frontend)
-- [ ] 7.3 Capture screenshot of main dashboard or voice interface
+- [x] 7.2 Run the application locally (web frontend)
+- [x] 7.3 Capture screenshot of main dashboard or voice interface (3 screenshots delivered: dashboard, agents architecture, voice mode)
 - [x] 7.4 Ensure screenshot contains no personal data, cloud URLs, or identifiable info
-- [x] 7.5 Save screenshot as docs/screenshot.png
+- [x] 7.5 Save screenshot as docs/screenshot.png (+ docs/agents-architecture.png, docs/voice-mode.png)
 - [x] 7.6 Update README to reference docs/screenshot.png
 
 ## 8. .gitignore and Sensitive Files Audit
@@ -99,16 +99,16 @@
 
 ## 10. Environment Variable Examples
 
-- [ ] 10.1 Review backend/.env.example for personal references
-- [ ] 10.2 Remove any personal Azure endpoints or IDs from .env.example
-- [ ] 10.3 Replace with placeholder comments (e.g., # Set to your Cosmos DB endpoint)
+- [x] 10.1 Review backend/.env.example for personal references
+- [x] 10.2 Remove any personal Azure endpoints or IDs from .env.example
+- [x] 10.3 Replace with placeholder comments (e.g., # Set to your Cosmos DB endpoint) — uses `<your-...>` placeholders
 - [x] 10.4 Review frontend/.env.local.example for personal references
 - [x] 10.5 Ensure only generic localhost URLs in frontend example
 
 ## 11. Testing and Validation
 
-- [ ] 11.1 Run grep searches again to verify all personal references removed
-- [ ] 11.2 Test azd up deployment on a fresh Azure subscription
+- [x] 11.1 Run grep searches again to verify all personal references removed (Phase 1 audit + git-filter-repo cleanup)
+- [ ] 11.2 Test azd up deployment on a fresh Azure subscription (in progress — Pascal's redeploy)
 - [ ] 11.3 Verify all parameters are prompted or documented
 - [ ] 11.4 Test local development setup following new README
 - [ ] 11.5 Verify backend starts without errors
@@ -117,12 +117,12 @@
 
 ## 12. Decommission Existing Environment
 
-- [ ] 12.1 Verify all OSS preparation tasks are complete
-- [ ] 12.2 Back up any critical data (if any exists)
-- [ ] 12.3 Run azd down --force --purge on existing Azure deployment
-- [ ] 12.4 Verify all Azure resources are deleted in portal
-- [ ] 12.5 Verify soft-deleted resources (Key Vault) are purged
-- [ ] 12.6 Document decommission completion date
+- [x] 12.1 Verify all OSS preparation tasks are complete (sections 1–10 done; force-push to origin/main complete)
+- [x] 12.2 Back up any critical data (if any exists) — Pascal confirmed N/A
+- [x] 12.3 Run azd down --force --purge on existing Azure deployment — Pascal confirmed decommissioned 2026-05-19
+- [x] 12.4 Verify all Azure resources are deleted in portal — Pascal handled
+- [x] 12.5 Verify soft-deleted resources (Key Vault) are purged — Pascal handled
+- [x] 12.6 Document decommission completion date — 2026-05-19
 
 ## 13. Fresh Redeployment Validation
 
