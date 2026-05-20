@@ -159,6 +159,57 @@ collect_location() {
 }
 
 # ──────────────────────────────────────────────────────────────────
+# Param: AZURE_RESOURCE_GROUP
+# Keep the fixed Bicep resource group discoverable by azd even if the
+# first provision run fails before outputs are persisted back to azd env.
+# ──────────────────────────────────────────────────────────────────
+collect_resource_group() {
+    local resource_group
+    resource_group=$(get_azd_env AZURE_RESOURCE_GROUP)
+
+    if [ -n "$resource_group" ]; then
+        echo "✅ Resource group: $resource_group (from azd env)"
+        return 0
+    fi
+
+    resource_group="rg-turbo-voice-agent"
+    azd env set AZURE_RESOURCE_GROUP "$resource_group"
+    echo "✅ Resource group: $resource_group (default)"
+}
+
+# ──────────────────────────────────────────────────────────────────
+# Param: AZURE_RESOURCE_LOCATION
+# The Azure region where Bicep deploys ACR, Cosmos, VNet, Container Apps etc.
+# Separate from AZURE_LOCATION (which azd uses for its own env tracking).
+# Auto-discovers from the existing resource group; defaults to eastus2.
+# ──────────────────────────────────────────────────────────────────
+collect_resource_location() {
+    local loc
+    loc=$(get_azd_env AZURE_RESOURCE_LOCATION)
+
+    if [ -n "$loc" ]; then
+        echo "✅ Resource location: $loc (from azd env)"
+        return 0
+    fi
+
+    # Auto-discover from the existing resource group (handles re-runs)
+    local rg
+    rg=$(get_azd_env AZURE_RESOURCE_GROUP)
+    rg=${rg:-rg-turbo-voice-agent}
+
+    loc=$(az group show -n "$rg" --query location -o tsv 2>/dev/null || echo "")
+
+    if [ -z "$loc" ]; then
+        loc="eastus2"
+        echo "✅ Resource location: $loc (default)"
+    else
+        echo "✅ Resource location: $loc (from existing resource group '$rg')"
+    fi
+
+    azd env set AZURE_RESOURCE_LOCATION "$loc"
+}
+
+# ──────────────────────────────────────────────────────────────────
 # Param: ENTRA_TENANT_ID
 # Auto-discover from az account show. Never prompt.
 # ──────────────────────────────────────────────────────────────────
@@ -354,6 +405,8 @@ main() {
     # Collect params in order
     collect_subscription
     collect_location
+    collect_resource_group
+    collect_resource_location
     collect_tenant
     collect_custom_domain
     collect_cert_name
@@ -366,6 +419,8 @@ main() {
     echo "=== Resolved Deployment Parameters ==="
     echo "  Subscription:    $(v=$(get_azd_env AZURE_SUBSCRIPTION_ID); echo "${v:-N/A}")"
     echo "  Location:        $(v=$(get_azd_env AZURE_LOCATION); echo "${v:-N/A}")"
+    echo "  Resource group:  $(v=$(get_azd_env AZURE_RESOURCE_GROUP); echo "${v:-rg-turbo-voice-agent}")"
+    echo "  Resource loc:    $(v=$(get_azd_env AZURE_RESOURCE_LOCATION); echo "${v:-eastus2}")"
     echo "  Tenant ID:       $(v=$(get_azd_env ENTRA_TENANT_ID); echo "${v:-N/A}")"
     echo "  Custom domain:   $(v=$(get_azd_env CUSTOM_DOMAIN_NAME); echo "${v:-none}")"
     echo "  Certificate:     $(v=$(get_azd_env EXISTING_CERT_NAME); echo "${v:-none}")"

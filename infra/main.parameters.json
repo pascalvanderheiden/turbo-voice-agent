@@ -2,8 +2,9 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "location": { "value": "eastus2" },
-    "resourceGroupName": { "value": "rg-turbo-voice-agent" },
+    "location": { "value": "${AZURE_RESOURCE_LOCATION=eastus2}" },
+    "resourceGroupName": { "value": "${AZURE_RESOURCE_GROUP=rg-turbo-voice-agent}" },
+    "azdEnvironmentName": { "value": "${AZURE_ENV_NAME=}" },
     "cosmosDbThroughput": { "value": 400 },
     "primaryAiLocation": { "value": "${AZURE_OPENAI_LOCATION_PRIMARY=eastus2}" },
     "voiceAiLocation": { "value": "${AZURE_OPENAI_LOCATION_VOICE=centralus}" },
