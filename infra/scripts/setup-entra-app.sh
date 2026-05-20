@@ -88,6 +88,8 @@ if [ -n "$CUSTOM_DOMAIN" ]; then
     azd env set CUSTOM_DOMAIN_NAME "$CUSTOM_DOMAIN"
 fi
 
+echo "Entra ID app configuration persisted to azd environment"
+
 echo ""
 echo "=== Entra ID Setup Complete ==="
 echo "  Tenant ID:    $TENANT_ID"

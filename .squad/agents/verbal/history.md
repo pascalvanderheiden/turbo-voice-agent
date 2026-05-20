@@ -144,3 +144,35 @@ Cosmos DB private networking deployment session completed. All critical componen
 - Some models (o3-deep-research, mistral-document-ai) only available in 2-3 regions worldwide — candidate list is intentionally broad
 - Quota API returns OpenAI.Standard aggregate, not per-model granularity — conservative check (if ANY OpenAI.Standard has remaining quota, region is considered viable)
 - If NO regions with quota, script prints manual override instructions and exits 1
+
+### Deployment Parameter Orchestrator (2026-05-19)
+**Problem:** README instructed users to manually `azd env new`, then `azd env set` six parameters by hand. Poor first-run experience.
+
+**Solution:** Created `infra/scripts/collect-deployment-params.sh` preprovision hook that:
+- Runs FIRST in preprovision (before region selection, before Entra setup)
+- For each param: (1) check `azd env get-value`, (2) auto-discover from Azure CLI, (3) prompt if interactive, (4) persist via `azd env set`
+- Fully idempotent — safe to run multiple times, only prompts once per param
+- CI guard: no prompts in `GITHUB_ACTIONS=true`, only auto-discovery, fails fast with clear list of missing vars
+
+**Parameters collected (in order):**
+1. `AZURE_SUBSCRIPTION_ID` — auto-discover via `az account show --query id -o tsv`, or list subs and prompt if multiple available. Persist + `az account set`.
+2. `AZURE_LOCATION` — used by azd for resource group. Check `azd env get-value` first (azd normally sets this); only prompt if truly empty.
+3. `ENTRA_TENANT_ID` — auto-discover via `az account show --query tenantId -o tsv`. Never prompt.
+4. `CUSTOM_DOMAIN_NAME` — optional. Prompt once: "Custom domain (leave empty to use Container Apps default):". Persist (empty string is valid).
+5. `EXISTING_CERT_NAME` — optional. Only prompt if CUSTOM_DOMAIN_NAME is non-empty.
+6. `ENTRA_CLIENT_SECRET` — optional. Prompt once with explanation ("Only needed for Microsoft To Do OAuth — press Enter to skip:"). Persist using `azd env set --secret` if available.
+7. `DEPLOYER_PRINCIPAL_ID` — auto-discover via `az ad signed-in-user show --query id -o tsv`. Never prompt. Falls back to empty if service principal (CI).
+8. `DEPLOY_RBAC` — default to `true`. Never prompt.
+
+**Auto-discovery sources:**
+- Subscription ID: `az account show --query id -o tsv` (or list via `az account list --query "[].{name:name,id:id}" -o tsv`)
+- Tenant ID: `az account show --query tenantId -o tsv`
+- Deployer principal ID: `az ad signed-in-user show --query id -o tsv`
+- Location: `azd env get-value AZURE_LOCATION` (azd sets during `env new`)
+
+**Integration changes:**
+- `azure.yaml`: preprovision hook order is now: collect-deployment-params.sh → select-model-regions.sh → setup-entra-app.sh
+- `setup-entra-app.sh`: now persists `ENTRA_CLIENT_ID` and `ENTRA_TENANT_ID` back to azd env after creating/finding the app (idempotent)
+- `README.md`: Manual Deployment section rewritten from 7 steps (with explicit `azd env new` + 6 manual `azd env set` commands) to 3 steps: clone+auth, `azd up`, verify. All param collection happens automatically.
+
+**Pattern:** Same `azd env get-value` + auto-discovery + persist pattern as the region picker. Reusable for ANY azd preprovision param.

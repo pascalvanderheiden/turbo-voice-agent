@@ -2,29 +2,324 @@
 
 **Category:** Azure Developer CLI (azd) · Infrastructure as Code · Deployment Automation  
 **Created:** 2026-05-19  
-**Author:** Verbal
+**Author:** Verbal  
+**Updated:** 2026-05-19 (generalized to "Idempotent Parameter Collection")
 
 ## Summary
 
-A reusable pattern for implementing quota-aware, interactive region selection in `azd` preprovision hooks. Queries Azure APIs to discover resource availability and quota, then prompts users to select regions where resources can actually be deployed.
+A reusable pattern for implementing idempotent, interactive parameter collection in `azd` preprovision hooks. Queries Azure APIs to discover resource availability and quota (or other metadata), then prompts users to select options or accepts auto-discovered values. Fully idempotent — safe to run multiple times, only prompts once per parameter.
+
+Originally implemented for quota-aware region selection (OpenAI models), then generalized for ALL deployment parameters (subscription, tenant, custom domain, etc.).
 
 ## When to Use
 
 Use this pattern when:
-- Your `azd` template deploys Azure resources with regional quota limits (e.g., OpenAI models, GPU VMs, high-SKU services)
-- You want to avoid deployment failures due to hardcoded regions without quota
-- You need an interactive first-run experience that guides users to regions that will work
+- Your `azd` template requires parameters that can be auto-discovered from Azure CLI or other sources
+- You want to avoid manual `azd env set` cheatsheets in your README
+- You need an interactive first-run experience that guides users to valid options
 - You want to support both interactive (local) and non-interactive (CI/CD) deployment modes
+- You want idempotency — subsequent runs reuse saved values without re-prompting
 
 ## Pattern Overview
 
 1. **Preprovision Hook**: Create a bash script in `infra/scripts/` and wire it into `azure.yaml` preprovision hooks
-2. **Query Availability**: Use Azure CLI to query which regions have the required resources available
-3. **Check Quota**: Parse Azure usage APIs to determine remaining quota in each candidate region
-4. **Interactive Selection**: Present a numbered list of viable regions, prompt user to pick
-5. **Store Selection**: Save the user's choice via `azd env set` so Bicep can consume it
-6. **Idempotency**: Skip prompts if the env var is already set (re-entrant `azd up`)
-7. **Non-interactive Guard**: Fail fast with clear error if running in CI without pre-set env vars
+2. **Check Existing Value**: Use `azd env get-value <PARAM_NAME>` to check if value is already set (idempotent)
+3. **Auto-Discover**: Try to auto-discover the value from Azure CLI or other sources
+4. **Interactive Prompt**: If not set and not discoverable, prompt user (only if interactive TTY)
+5. **Store Value**: Save via `azd env set <PARAM_NAME> <value>` so Bicep can consume it
+6. **Non-interactive Guard**: Fail fast with clear error if running in CI without pre-set values
+
+## Implementation Example
+
+### 1. Create the Parameter Collection Script
+
+**File:** `infra/scripts/collect-<resource>-params.sh`
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ──────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────
+is_noninteractive() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || [ ! -t 0 ]
+}
+
+check_az_login() {
+    if ! az account show &>/dev/null; then
+        echo "❌ Error: not logged in to Azure CLI"
+        exit 1
+    fi
+}
+
+# ──────────────────────────────────────────────────────────────────
+# Example: Collect Azure Subscription ID
+# ──────────────────────────────────────────────────────────────────
+collect_subscription() {
+    local sub_id
+    
+    # 1. Check if already set (idempotent)
+    sub_id=$(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || echo "")
+    if [ -n "$sub_id" ]; then
+        echo "✅ Subscription: $sub_id (from azd env)"
+        return 0
+    fi
+    
+    # 2. Auto-discover from Azure CLI
+    sub_id=$(az account show --query id -o tsv 2>/dev/null || echo "")
+    if [ -n "$sub_id" ]; then
+        azd env set AZURE_SUBSCRIPTION_ID "$sub_id"
+        echo "✅ Subscription: $sub_id (auto-discovered)"
+        return 0
+    fi
+    
+    # 3. Interactive prompt (only if TTY)
+    if is_noninteractive; then
+        echo "❌ Error: running in non-interactive mode but AZURE_SUBSCRIPTION_ID not set"
+        exit 1
+    fi
+    
+    # List subscriptions and prompt
+    local subs
+    subs=$(az account list --query "[].{name:name, id:id}" -o tsv)
+    echo "Available subscriptions:"
+    local idx=1
+    while IFS=$'\t' read -r name id; do
+        echo "  $idx. $name ($id)"
+        ((idx++))
+    done <<< "$subs"
+    
+    read -rp "Select subscription [1]: " choice
+    choice=${choice:-1}
+    sub_id=$(echo "$subs" | sed -n "${choice}p" | awk '{print $NF}')
+    
+    # 4. Persist
+    azd env set AZURE_SUBSCRIPTION_ID "$sub_id"
+    echo "✅ Subscription: $sub_id"
+}
+
+# ──────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────
+main() {
+    check_az_login
+    collect_subscription
+    # ... collect other params
+}
+
+main "$@"
+```
+
+### 2. Wire into azure.yaml
+
+```yaml
+hooks:
+  preprovision:
+    shell: sh
+    run: |
+      bash infra/scripts/collect-<resource>-params.sh
+      # Other preprovision tasks...
+
+pipeline:
+  variables:
+    - AZURE_SUBSCRIPTION_ID
+```
+
+### 3. Parameterize Bicep
+
+**`infra/main.bicep`:**
+```bicep
+@description('Azure subscription ID')
+param subscriptionId string
+
+module myResource 'modules/my-resource.bicep' = {
+  name: 'my-resource'
+  params: {
+    subscriptionId: subscriptionId
+  }
+}
+```
+
+**`infra/main.parameters.json`:**
+```json
+{
+  "parameters": {
+    "subscriptionId": { "value": "${AZURE_SUBSCRIPTION_ID}" }
+  }
+}
+```
+
+### 4. Update README
+
+Document the automatic behavior:
+
+```markdown
+## Deployment
+
+Run `azd up`. On first run, the preprovision hooks will auto-discover your Azure subscription, tenant, and other parameters. Any missing values will be prompted once. All parameters are saved to the azd environment and reused on subsequent runs.
+
+To override a parameter:
+```bash
+azd env set <PARAM_NAME> <value>
+azd up
+```
+
+For CI/CD, pre-set required parameters:
+```bash
+azd env set AZURE_SUBSCRIPTION_ID <subscription-id>
+```
+```
+
+## Key Techniques
+
+### Idempotency Pattern
+
+**ALWAYS check if the value is already set first:**
+```bash
+VALUE=$(azd env get-value PARAM_NAME 2>/dev/null || echo "")
+if [ -n "$VALUE" ]; then
+    echo "✅ Already configured: $VALUE"
+    return 0
+fi
+```
+
+### Auto-Discovery Sources
+
+**Azure subscription:**
+```bash
+az account show --query id -o tsv
+```
+
+**Azure tenant:**
+```bash
+az account show --query tenantId -o tsv
+```
+
+**Signed-in user object ID:**
+```bash
+az ad signed-in-user show --query id -o tsv
+```
+
+**Resource availability (e.g., AI models):**
+```bash
+az cognitiveservices model list --location <region> \
+    --query "[?name=='<model>'].name" -o tsv
+```
+
+**Quota checking:**
+```bash
+az cognitiveservices usage list --location <region> \
+    --query "[?contains(name.value, 'OpenAI.Standard')].{current: currentValue, limit: limit}" -o json
+```
+
+Parse JSON in bash using Python:
+```bash
+python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for item in data:
+    if item.get('limit', 0) > item.get('current', 0):
+        print('true')
+        sys.exit(0)
+print('false')
+"
+```
+
+### Non-interactive Detection
+
+```bash
+is_noninteractive() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || [ ! -t 0 ]
+}
+```
+
+### Secure Secret Handling
+
+Use `azd env set --secret` for sensitive values (if supported):
+```bash
+if azd env set --help 2>&1 | grep -q -- '--secret'; then
+    azd env set --secret ENTRA_CLIENT_SECRET "$secret"
+else
+    azd env set ENTRA_CLIENT_SECRET "$secret"
+fi
+```
+
+## Best Practices
+
+1. **Check azd env FIRST** — always use `azd env get-value` before prompting or discovering
+2. **Auto-discover when possible** — prefer `az account show` over prompts
+3. **Prompt only if interactive** — guard all prompts with `is_noninteractive()` check
+4. **Fail fast in CI** — if required var is missing in non-interactive mode, exit 1 with clear error listing what's needed
+5. **Persist immediately** — call `azd env set` as soon as you have a value
+6. **Actionable errors** — if no valid options, tell user how to fix (e.g., request quota, override manually)
+7. **Summary output** — print a summary at the end showing resolved values (mask secrets)
+8. **Validate syntax** — always run `bash -n <script>` before committing
+
+## Gotchas
+
+- **Subscription context**: Some `az` commands require `--subscription` flag if you haven't run `az account set`
+- **Service principal auth**: `az ad signed-in-user show` fails if running as service principal (CI) — handle gracefully with fallback to empty
+- **Empty strings are valid**: For optional params, persisting an empty string (`azd env set PARAM ""`) is valid and prevents re-prompting
+- **azd env get-value exit codes**: Non-existent vars return exit code 1, so use `|| echo ""` to handle
+
+## Testing
+
+1. **Syntax check**: `bash -n infra/scripts/<script>.sh`
+2. **Bicep compilation**: `az bicep build --file infra/main.bicep`
+3. **JSON/YAML validation**: `python3 -m json.tool <file>.json`
+4. **Non-interactive mode**: `echo "" | bash infra/scripts/<script>.sh` (should fail with clear error)
+5. **Idempotency**: Run twice — second run should skip all prompts
+
+## Example Use Cases
+
+### Deployment Parameters (General)
+- Subscription, tenant, location selection
+- Custom domain configuration
+- RBAC principal assignment
+- Feature flags (e.g., enable/disable components)
+
+### Resource-Specific Parameters
+- **OpenAI model deployments** (varying quota by region)
+- **GPU VM families** (limited regional availability)
+- **High-SKU databases** (quota-constrained)
+- **Preview features** (only available in specific regions)
+
+## Real-World Implementation: Turbo Voice Agent
+
+This pattern is used in two preprovision scripts:
+
+1. **`collect-deployment-params.sh`** — collects 8 deployment parameters:
+   - `AZURE_SUBSCRIPTION_ID` (auto-discover or prompt if multiple)
+   - `AZURE_LOCATION` (usually set by azd, fallback prompt)
+   - `ENTRA_TENANT_ID` (auto-discover, never prompt)
+   - `CUSTOM_DOMAIN_NAME` (prompt once, optional)
+   - `EXISTING_CERT_NAME` (prompt if custom domain set, optional)
+   - `ENTRA_CLIENT_SECRET` (prompt once with explanation, optional)
+   - `DEPLOYER_PRINCIPAL_ID` (auto-discover, fallback to empty if service principal)
+   - `DEPLOY_RBAC` (default to `true`, never prompt)
+
+2. **`select-model-regions.sh`** — collects 3 region parameters:
+   - Queries Azure for AI model availability and quota
+   - Presents numbered list of viable regions
+   - Stores user selections as `AZURE_OPENAI_LOCATION_PRIMARY/VOICE/RESEARCH`
+
+Both scripts follow the same pattern: check azd env → auto-discover → prompt → persist.
+
+## Related Patterns
+
+- **azd preprovision hooks**: https://learn.microsoft.com/azure/developer/azure-developer-cli/azd-extensibility
+- **Azure CLI scripting**: https://learn.microsoft.com/cli/azure/script-az-cli-bash
+- **Bicep parameter substitution**: https://learn.microsoft.com/azure/azure-resource-manager/bicep/parameters
+
+## Maintainability
+
+This pattern scales well:
+- **Multiple resource types**: create one script per logical group
+- **Multiple params per script**: one script can collect multiple related params
+- **Shared helper functions**: extract `is_noninteractive()`, `check_az_login()`, etc. into a sourced library if you have many scripts
+- **Preprovision hook order**: run general param collection FIRST, then resource-specific scripts (e.g., `collect-deployment-params.sh` → `select-model-regions.sh` → `setup-entra-app.sh`)
+
 
 ## Implementation Example
 

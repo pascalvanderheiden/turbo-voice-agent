@@ -65,6 +65,7 @@ hooks:
   preprovision:
     shell: sh
     run: |
+      bash infra/scripts/collect-deployment-params.sh
       bash infra/scripts/select-model-regions.sh
       bash infra/scripts/setup-entra-app.sh
 

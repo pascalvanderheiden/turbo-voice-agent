@@ -2,6 +2,134 @@
 
 ## Active Decisions
 
+### Deployment Parameter Orchestrator
+
+**Author:** Verbal  
+**Date:** 2026-05-19  
+**Status:** Implemented
+
+## Context
+
+The README instructed users to manually run `azd env new`, then `azd env set` six parameters by hand before running `azd up`. This created a poor first-run experience and was error-prone.
+
+Example of the old manual flow:
+```bash
+azd env new <env-name>
+azd env set ENTRA_TENANT_ID <tenant-id>
+azd env set ENTRA_CLIENT_ID <client-id>
+azd env set CUSTOM_DOMAIN_NAME <domain>
+azd env set EXISTING_CERT_NAME <cert>
+azd env set ENTRA_CLIENT_SECRET <secret>
+azd env set DEPLOYER_PRINCIPAL_ID <principal-id>
+azd up
+```
+
+## Decision
+
+Create a single preprovision orchestrator script (`infra/scripts/collect-deployment-params.sh`) that:
+- Runs FIRST in the preprovision phase (before region selection, before Entra setup)
+- Collects ALL required and optional deployment parameters
+- Uses a consistent pattern: (1) check azd env, (2) auto-discover from Azure CLI, (3) prompt if interactive, (4) persist
+- Is fully idempotent — safe to run multiple times, only prompts once per param
+- Has a CI guard — no prompts in GitHub Actions, only auto-discovery, fails fast with clear error messages
+
+## Implementation
+
+### New Script
+
+Created `infra/scripts/collect-deployment-params.sh` with these param collection functions (in order):
+
+1. **AZURE_SUBSCRIPTION_ID**
+   - Auto-discover: `az account show --query id -o tsv`
+   - If multiple subs: list via `az account list` and prompt to pick
+   - Persist + run `az account set --subscription <id>`
+
+2. **AZURE_LOCATION**
+   - Check `azd env get-value AZURE_LOCATION` first (azd normally sets during `env new`)
+   - Only prompt if truly empty (rare — azd usually handles this)
+   - Interactive: present curated list of common regions
+
+3. **ENTRA_TENANT_ID**
+   - Auto-discover: `az account show --query tenantId -o tsv`
+   - Never prompt (user is already logged in to a tenant)
+
+4. **CUSTOM_DOMAIN_NAME**
+   - Optional — prompt once: "Custom domain (leave empty to use Container Apps default):"
+   - Empty string is valid and persisted
+
+5. **EXISTING_CERT_NAME**
+   - Optional — only prompt if CUSTOM_DOMAIN_NAME is non-empty
+
+6. **ENTRA_CLIENT_SECRET**
+   - Optional — prompt once with explanation ("Only needed for Microsoft To Do OAuth — press Enter to skip")
+   - Use `azd env set --secret` if available, else regular `azd env set`
+
+7. **DEPLOYER_PRINCIPAL_ID**
+   - Auto-discover: `az ad signed-in-user show --query id -o tsv`
+   - Falls back to empty if service principal (CI)
+   - Never prompt
+
+8. **DEPLOY_RBAC**
+   - Default to `true`
+   - Never prompt
+
+### Integration Changes
+
+**azure.yaml** — preprovision hook order:
+```yaml
+preprovision:
+  shell: sh
+  run: |
+    bash infra/scripts/collect-deployment-params.sh
+    bash infra/scripts/select-model-regions.sh
+    bash infra/scripts/setup-entra-app.sh
+```
+
+**setup-entra-app.sh** — now persists `ENTRA_CLIENT_ID` and `ENTRA_TENANT_ID` back to azd env after creating/finding the app (idempotent).
+
+**README.md** — Manual Deployment section rewritten from 7 steps to 3 steps:
+1. Clone and authenticate (`az login` + `azd auth login`)
+2. Run `azd up` (all param collection happens automatically)
+3. Verify
+
+All manual `azd env set` cheatsheets removed. The parameter table removed. The "azd env new" step removed (azd up creates env automatically if needed).
+
+## Benefits
+
+- **First-run experience:** `azd up` just works — no manual parameter collection required
+- **Idempotent:** Subsequent runs reuse saved params, no re-prompting
+- **Auto-discovery:** 5 of 8 params are auto-discovered from Azure CLI, only 3 prompt
+- **CI-friendly:** GitHub Actions can skip prompts, only auto-discover what's possible, fail fast on truly missing required vars
+- **Consistent pattern:** Same `azd env get-value` + auto-discovery + persist pattern used across all preprovision scripts (region picker, param orchestrator)
+
+## Auto-Discovery Sources
+
+| Parameter | Auto-Discovery Source |
+| --- | --- |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` (or list via `az account list` if multiple) |
+| `AZURE_LOCATION` | `azd env get-value AZURE_LOCATION` (azd sets during `env new`) |
+| `ENTRA_TENANT_ID` | `az account show --query tenantId -o tsv` |
+| `DEPLOYER_PRINCIPAL_ID` | `az ad signed-in-user show --query id -o tsv` |
+| `DEPLOY_RBAC` | Default: `true` |
+
+Optional params (`CUSTOM_DOMAIN_NAME`, `EXISTING_CERT_NAME`, `ENTRA_CLIENT_SECRET`) are prompted once in interactive mode, or default to empty in CI.
+
+## Validation
+
+- `bash -n infra/scripts/collect-deployment-params.sh` ✅
+- `bash -n infra/scripts/setup-entra-app.sh` ✅
+- `bash -n infra/scripts/select-model-regions.sh` ✅
+- `python3 -c "import yaml; yaml.safe_load(open('azure.yaml'))"` ✅
+
+## Future Use
+
+This pattern applies to ANY azd preprovision parameter. For new parameters:
+1. Add a `collect_<param>()` function in `collect-deployment-params.sh`
+2. Check `azd env get-value <PARAM_NAME>` first (idempotent)
+3. Try to auto-discover from Azure CLI if possible
+4. Prompt only if interactive TTY (`! is_noninteractive`)
+5. Persist via `azd env set <PARAM_NAME> <value>`
+
 ### Open-source project decisions
 
 **Author:** Project Maintainer (via Copilot)  

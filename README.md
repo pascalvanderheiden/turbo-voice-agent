@@ -71,82 +71,34 @@ Before you deploy or contribute, make sure you have:
 
 ## Manual Deployment (azd)
 
-1. **Clone your fork**
+1. **Clone and authenticate**
 
    ```bash
    git clone <fork-url>
    cd turbo-voice-agent
-   ```
-
-2. **Authenticate to Azure**
-
-   ```bash
    az login
    azd auth login
    ```
 
-3. **Create an azd environment**
-
-   ```bash
-   azd env new <env-name>
-   ```
-
-   `azd env new` will prompt for subscription and location if needed. If you prefer a fully scripted flow, add `--subscription <subscription-id> --location <azure-region>`.
-
-4. **Set deployment parameters**
-
-   The Entra setup hook can populate `ENTRA_TENANT_ID` and `ENTRA_CLIENT_ID` automatically when you are signed in locally, but you can also set everything explicitly:
-
-   ```bash
-   azd env set ENTRA_TENANT_ID <entra-tenant-id>
-   azd env set ENTRA_CLIENT_ID <entra-client-id>
-   azd env set CUSTOM_DOMAIN_NAME <custom-domain-or-empty>
-   azd env set EXISTING_CERT_NAME <managed-certificate-name-or-empty>
-   azd env set ENTRA_CLIENT_SECRET <entra-client-secret-or-empty>
-   azd env set DEPLOYER_PRINCIPAL_ID <principal-id-or-empty>
-   ```
-
-   | Parameter | Required | Purpose |
-   | --- | --- | --- |
-   | `ENTRA_TENANT_ID` | Usually auto-populated | Azure Entra tenant used by the web app and backend |
-   | `ENTRA_CLIENT_ID` | Usually auto-populated | App registration (client) ID for the SPA + API |
-   | `CUSTOM_DOMAIN_NAME` | Optional | Custom frontend hostname; leave empty to use the generated Container Apps domain |
-   | `EXISTING_CERT_NAME` | Optional | Existing managed certificate name to reuse with a custom domain |
-   | `ENTRA_CLIENT_SECRET` | Optional | Needed only if you enable Microsoft To Do OAuth flows |
-   | `DEPLOYER_PRINCIPAL_ID` | Optional | Grants the deploying identity direct Cosmos/Storage data access during provisioning |
-
-5. **Provision and deploy**
+2. **Deploy**
 
    ```bash
    azd up
    ```
 
-   On first run, the preprovision hook will interactively prompt you to select Azure regions for the three AI Foundry deployments:
-   - **Primary** (gpt-5.2, gpt-4.1, gpt-4o-transcribe)
-   - **Voice** (gpt-realtime)
-   - **Research** (o3-deep-research)
-   
-   The script queries Azure for model availability and remaining quota in each region, then presents a numbered list of suitable regions. Your selections are stored as azd environment variables and reused on subsequent deployments.
-   
-   To manually set regions (e.g., for CI/CD or to skip the interactive prompt):
-   
-   ```bash
-   azd env set AZURE_OPENAI_LOCATION_PRIMARY <region>
-   azd env set AZURE_OPENAI_LOCATION_VOICE <region>
-   azd env set AZURE_OPENAI_LOCATION_RESEARCH <region>
-   ```
+   On first run, the preprovision hooks will:
+   - Detect your Azure subscription, tenant, and signed-in identity
+   - Prompt once for custom domain settings (optional — press Enter to skip)
+   - Query Azure for AI Foundry model availability + quota across regions and let you pick a region per model group (Primary, Voice, Research)
+   - Create the Entra ID app registration for the web app
 
-6. **Post-deploy: confirm Entra redirect URIs**
+   All parameters are saved to the azd environment. Subsequent `azd up` runs reuse them without prompting.
 
-   The project runs `infra/scripts/setup-entra-app.sh` during provisioning, but after deployment you can re-run it with the deployed frontend URL to ensure SPA redirect URIs are correct:
+   To override anything later (region, custom domain, etc.) use `azd env set <NAME> <VALUE>` and re-run `azd up`.
 
-   ```bash
-   FRONTEND_URL=<frontend-url> bash infra/scripts/setup-entra-app.sh
-   ```
+3. **Verify**
 
-7. **Verify the deployment**
-
-   `azd up` prints the deployed frontend and backend URLs. Open the frontend URL in a browser, sign in, and verify that the voice interface loads.
+   `azd up` prints the deployed frontend and backend URLs. Open the frontend URL, sign in, and verify the voice interface loads.
 
 ## Automated Deployment (GitHub Actions)
 
