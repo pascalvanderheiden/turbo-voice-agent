@@ -7,6 +7,15 @@ set -euo pipefail
 trap 'echo "❌ select-model-regions.sh failed at line $LINENO (exit $?)" >&2' ERR
 
 # ──────────────────────────────────────────────────────────────────
+# Helper: safely read an azd env variable (never prints errors to stdout)
+# Usage: get_azd_env VAR_NAME  -> echoes value or empty string
+# ──────────────────────────────────────────────────────────────────
+get_azd_env() {
+    azd env get-values 2>/dev/null | grep "^${1}=" | cut -d'=' -f2- | tr -d '"'
+}
+
+
+# ──────────────────────────────────────────────────────────────────
 # Model Groups — each Foundry account hosts a group of models
 # Models and their required capacity (parallel arrays)
 # ──────────────────────────────────────────────────────────────────
@@ -321,9 +330,9 @@ main() {
     # Check if running in non-interactive mode
     if is_noninteractive; then
         # Non-interactive mode requires all env vars to be pre-set
-        PRIMARY_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_PRIMARY 2>/dev/null || echo "")
-        VOICE_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_VOICE 2>/dev/null || echo "")
-        RESEARCH_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
+        PRIMARY_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_PRIMARY)
+        VOICE_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_VOICE)
+        RESEARCH_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_RESEARCH)
         
         if [ -z "$PRIMARY_LOC" ] || [ -z "$VOICE_LOC" ] || [ -z "$RESEARCH_LOC" ]; then
             echo "❌ Error: running in non-interactive mode (CI) but required env vars not set" >&2
@@ -350,9 +359,9 @@ main() {
     fi
     
     # Interactive mode — check if env vars are already set and validate them
-    PRIMARY_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_PRIMARY 2>/dev/null || echo "")
-    VOICE_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_VOICE 2>/dev/null || echo "")
-    RESEARCH_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
+    PRIMARY_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_PRIMARY)
+    VOICE_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_VOICE)
+    RESEARCH_LOC=$(get_azd_env AZURE_OPENAI_LOCATION_RESEARCH)
     
     # Validate existing env vars against quota
     # If any region no longer has quota for its models, clear it and re-prompt
@@ -418,7 +427,10 @@ main() {
     # ────────────────────────────────────────────────────────────
     if [ -z "$PRIMARY_LOC" ]; then
         echo "Scanning for Primary Foundry regions (gpt-5.2, gpt-4.1, gpt-4o-transcribe)..." >&2
-        readarray -t primary_regions < <(find_available_regions PRIMARY_MODELS PRIMARY_CAPACITY)
+        primary_regions=()
+        while IFS= read -r _region; do
+            [ -n "$_region" ] && primary_regions+=("$_region")
+        done < <(find_available_regions PRIMARY_MODELS PRIMARY_CAPACITY)
         PRIMARY_LOC=$(pick_region "PRIMARY" primary_regions "$DEFAULT_PRIMARY")
         if ! azd env set AZURE_OPENAI_LOCATION_PRIMARY "$PRIMARY_LOC"; then
             echo "❌ Failed to persist AZURE_OPENAI_LOCATION_PRIMARY" >&2
@@ -434,7 +446,10 @@ main() {
     if [ -z "$VOICE_LOC" ]; then
         echo "" >&2
         echo "Scanning for Voice Foundry regions (gpt-realtime)..." >&2
-        readarray -t voice_regions < <(find_available_regions VOICE_MODELS VOICE_CAPACITY)
+        voice_regions=()
+        while IFS= read -r _region; do
+            [ -n "$_region" ] && voice_regions+=("$_region")
+        done < <(find_available_regions VOICE_MODELS VOICE_CAPACITY)
         VOICE_LOC=$(pick_region "VOICE" voice_regions "$DEFAULT_VOICE")
         if ! azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"; then
             echo "❌ Failed to persist AZURE_OPENAI_LOCATION_VOICE" >&2
@@ -450,7 +465,10 @@ main() {
     if [ -z "$RESEARCH_LOC" ]; then
         echo "" >&2
         echo "Scanning for Research Foundry regions (o3-deep-research)..." >&2
-        readarray -t research_regions < <(find_available_regions RESEARCH_MODELS RESEARCH_CAPACITY)
+        research_regions=()
+        while IFS= read -r _region; do
+            [ -n "$_region" ] && research_regions+=("$_region")
+        done < <(find_available_regions RESEARCH_MODELS RESEARCH_CAPACITY)
         RESEARCH_LOC=$(pick_region "RESEARCH" research_regions "$DEFAULT_RESEARCH")
         if ! azd env set AZURE_OPENAI_LOCATION_RESEARCH "$RESEARCH_LOC"; then
             echo "❌ Failed to persist AZURE_OPENAI_LOCATION_RESEARCH" >&2
@@ -471,9 +489,9 @@ main() {
     echo "" >&2
     
     # Verify persistence by reading back the values
-    VERIFY_PRIMARY=$(azd env get-value AZURE_OPENAI_LOCATION_PRIMARY 2>/dev/null || echo "")
-    VERIFY_VOICE=$(azd env get-value AZURE_OPENAI_LOCATION_VOICE 2>/dev/null || echo "")
-    VERIFY_RESEARCH=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
+    VERIFY_PRIMARY=$(get_azd_env AZURE_OPENAI_LOCATION_PRIMARY)
+    VERIFY_VOICE=$(get_azd_env AZURE_OPENAI_LOCATION_VOICE)
+    VERIFY_RESEARCH=$(get_azd_env AZURE_OPENAI_LOCATION_RESEARCH)
     
     if [ "$VERIFY_PRIMARY" != "$PRIMARY_LOC" ] || [ "$VERIFY_VOICE" != "$VOICE_LOC" ] || [ "$VERIFY_RESEARCH" != "$RESEARCH_LOC" ]; then
         echo "❌ Persistence verification failed!" >&2

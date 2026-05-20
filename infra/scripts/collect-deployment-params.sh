@@ -6,6 +6,15 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────
+# Helper: safely read an azd env variable (never prints errors to stdout)
+# Usage: get_azd_env VAR_NAME  -> echoes value or empty string
+# ──────────────────────────────────────────────────────────────────
+get_azd_env() {
+    azd env get-values 2>/dev/null | grep "^${1}=" | cut -d'=' -f2- | tr -d '"'
+}
+
+
+# ──────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────
 is_noninteractive() {
@@ -26,7 +35,7 @@ check_az_login() {
 # ──────────────────────────────────────────────────────────────────
 collect_subscription() {
     local sub_id
-    sub_id=$(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || echo "")
+    sub_id=$(get_azd_env AZURE_SUBSCRIPTION_ID)
     
     if [ -n "$sub_id" ]; then
         echo "✅ Subscription: $sub_id (from azd env)"
@@ -96,7 +105,7 @@ collect_subscription() {
 # ──────────────────────────────────────────────────────────────────
 collect_location() {
     local location
-    location=$(azd env get-value AZURE_LOCATION 2>/dev/null || echo "")
+    location=$(get_azd_env AZURE_LOCATION)
     
     if [ -n "$location" ]; then
         echo "✅ Location: $location (from azd env)"
@@ -142,7 +151,7 @@ collect_location() {
 # ──────────────────────────────────────────────────────────────────
 collect_tenant() {
     local tenant_id
-    tenant_id=$(azd env get-value ENTRA_TENANT_ID 2>/dev/null || echo "")
+    tenant_id=$(get_azd_env ENTRA_TENANT_ID)
     
     if [ -n "$tenant_id" ]; then
         echo "✅ Tenant ID: $tenant_id (from azd env)"
@@ -166,10 +175,10 @@ collect_tenant() {
 # ──────────────────────────────────────────────────────────────────
 collect_custom_domain() {
     local domain
-    domain=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || echo "")
+    domain=$(get_azd_env CUSTOM_DOMAIN_NAME)
     
     # If already set (even to empty), skip
-    if azd env get-value CUSTOM_DOMAIN_NAME &>/dev/null; then
+    if [ -n "$(get_azd_env CUSTOM_DOMAIN_NAME)" ]; then
         if [ -n "$domain" ]; then
             echo "✅ Custom domain: $domain (from azd env)"
         else
@@ -203,10 +212,10 @@ collect_custom_domain() {
 # ──────────────────────────────────────────────────────────────────
 collect_cert_name() {
     local cert
-    cert=$(azd env get-value EXISTING_CERT_NAME 2>/dev/null || echo "")
+    cert=$(get_azd_env EXISTING_CERT_NAME)
     
     # If already set (even to empty), skip
-    if azd env get-value EXISTING_CERT_NAME &>/dev/null; then
+    if [ -n "$(get_azd_env EXISTING_CERT_NAME)" ]; then
         if [ -n "$cert" ]; then
             echo "✅ Managed certificate: $cert (from azd env)"
         fi
@@ -215,7 +224,7 @@ collect_cert_name() {
     
     # Only prompt if custom domain is set
     local domain
-    domain=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || echo "")
+    domain=$(get_azd_env CUSTOM_DOMAIN_NAME)
     
     if [ -z "$domain" ]; then
         azd env set EXISTING_CERT_NAME ""
@@ -245,7 +254,7 @@ collect_client_secret() {
     local secret
     
     # If already set (even to empty), skip
-    if azd env get-value ENTRA_CLIENT_SECRET &>/dev/null; then
+    if [ -n "$(get_azd_env ENTRA_CLIENT_SECRET)" ]; then
         echo "✅ Entra client secret: (from azd env)"
         return 0
     fi
@@ -281,7 +290,7 @@ collect_client_secret() {
 # ──────────────────────────────────────────────────────────────────
 collect_deployer_principal() {
     local principal_id
-    principal_id=$(azd env get-value DEPLOYER_PRINCIPAL_ID 2>/dev/null || echo "")
+    principal_id=$(get_azd_env DEPLOYER_PRINCIPAL_ID)
     
     if [ -n "$principal_id" ]; then
         echo "✅ Deployer principal ID: $principal_id (from azd env)"
@@ -308,7 +317,7 @@ collect_deployer_principal() {
 # ──────────────────────────────────────────────────────────────────
 collect_deploy_rbac() {
     local deploy_rbac
-    deploy_rbac=$(azd env get-value DEPLOY_RBAC 2>/dev/null || echo "")
+    deploy_rbac=$(get_azd_env DEPLOY_RBAC)
     
     if [ -n "$deploy_rbac" ]; then
         echo "✅ Deploy RBAC: $deploy_rbac (from azd env)"
@@ -342,14 +351,14 @@ main() {
     # Summary
     echo ""
     echo "=== Resolved Deployment Parameters ==="
-    echo "  Subscription:    $(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || echo 'N/A')"
-    echo "  Location:        $(azd env get-value AZURE_LOCATION 2>/dev/null || echo 'N/A')"
-    echo "  Tenant ID:       $(azd env get-value ENTRA_TENANT_ID 2>/dev/null || echo 'N/A')"
-    echo "  Custom domain:   $(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || echo 'none')"
-    echo "  Certificate:     $(azd env get-value EXISTING_CERT_NAME 2>/dev/null || echo 'none')"
-    echo "  Client secret:   $([ -n "$(azd env get-value ENTRA_CLIENT_SECRET 2>/dev/null || echo '')" ] && echo '***' || echo 'none')"
-    echo "  Deployer ID:     $(azd env get-value DEPLOYER_PRINCIPAL_ID 2>/dev/null || echo 'none')"
-    echo "  Deploy RBAC:     $(azd env get-value DEPLOY_RBAC 2>/dev/null || echo 'true')"
+    echo "  Subscription:    $(v=$(get_azd_env AZURE_SUBSCRIPTION_ID); echo "${v:-N/A}")"
+    echo "  Location:        $(v=$(get_azd_env AZURE_LOCATION); echo "${v:-N/A}")"
+    echo "  Tenant ID:       $(v=$(get_azd_env ENTRA_TENANT_ID); echo "${v:-N/A}")"
+    echo "  Custom domain:   $(v=$(get_azd_env CUSTOM_DOMAIN_NAME); echo "${v:-none}")"
+    echo "  Certificate:     $(v=$(get_azd_env EXISTING_CERT_NAME); echo "${v:-none}")"
+    echo "  Client secret:   $([ -n "$(v=$(get_azd_env ENTRA_CLIENT_SECRET); echo "${v:-}")" ] && echo '***' || echo 'none')"
+    echo "  Deployer ID:     $(v=$(get_azd_env DEPLOYER_PRINCIPAL_ID); echo "${v:-none}")"
+    echo "  Deploy RBAC:     $(v=$(get_azd_env DEPLOY_RBAC); echo "${v:-true}")"
     echo ""
 }
 
