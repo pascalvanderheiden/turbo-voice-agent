@@ -1,5 +1,164 @@
 # Squad Decisions
 
+# Decision: Stdout/Stderr Discipline for azd Preprovision Functions
+
+**Agent:** Verbal  
+**Date:** 2026-05-20  
+**Status:** Implemented  
+**Category:** Infrastructure · DevOps · Shell Scripting
+
+## Context
+
+The `infra/scripts/select-model-regions.sh` preprovision hook was designed to query Azure for model availability and quota, then interactively prompt users to select regions. The selected regions should be persisted via `azd env set` for Bicep consumption.
+
+**Problem:** The script ran successfully but never persisted the region selections. `.azure/turbo-voice/.env` showed other parameters (from `collect-deployment-params.sh`) were saved correctly, but `AZURE_OPENAI_LOCATION_PRIMARY/VOICE/RESEARCH` were missing. Bicep fell back to hardcoded `centralus` for voice, causing quota errors.
+
+## Root Causes
+
+### Bug A: Stdout Pollution in Command Substitution
+
+Functions used for command substitution (`$(...)` or `readarray -t arr < <(...)`) wrote diagnostic output to stdout along with return values:
+
+**`find_available_regions()`:**
+- Wrote region scanning progress like `echo "Checking availability for: gpt-realtime gpt-4.1 ..."`
+- Wrote per-region results like `echo "  Region eastus2:"`
+- Final line `echo "${available_regions[@]}"` was the ONLY line intended for capture
+- Result: `primary_regions[0]` became multiline garbage starting with "Checking availability..."
+
+**`pick_region()`:**
+- Wrote menu headers like `echo "Available regions for VOICE (with quota):"`
+- Wrote numbered list like `echo "  1. eastus2"`
+- Wrote confirmation like `echo "✅ Selected: eastus2"`
+- Final line `echo "$selected"` was intended output
+- Result: `VOICE_LOC=$(pick_region ...)` captured multiline garbage
+- User never saw the menu because it was eaten by command substitution instead of displayed
+
+**Impact:** `azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"` with multiline garbage likely failed silently. Even with `set -euo pipefail`, azd proceeded to provision with no env var set, falling back to hardcoded defaults.
+
+### Bug B: Nameref (`local -n`) Portability
+
+`local -n models=$1` requires bash 4.3+. macOS system bash is 3.2; even with Homebrew bash 5, namerefs are fragile when passing arrays across function boundaries. Silent failures possible.
+
+### Bug C: No Persistence Verification
+
+Script assumed `azd env set` succeeded but never verified by reading back the value. Silent failures went undetected.
+
+## Decision
+
+**Enforce strict stdout/stderr discipline for all functions used in command substitution:**
+
+1. **All diagnostic output → stderr (`>&2`):**
+   - Progress messages: `echo "Checking availability..." >&2`
+   - Menus and prompts: `echo "Select region:" >&2`
+   - Confirmations: `echo "✅ Selected: eastus2" >&2`
+   - Errors: `echo "❌ Failed..." >&2`
+
+2. **Only return values → stdout:**
+   - `echo "${available_regions[@]}"` (space-separated list)
+   - `printf '%s\n' "$selected"` (single region)
+
+3. **Interactive input from `/dev/tty`:**
+   - `read -rp "Select region: " choice </dev/tty`
+   - Ensures prompts work when stdin is piped under azd hook execution
+
+4. **Replace namerefs with indirect expansion:**
+   - `eval "local regions=(\"\${${regions_var}[@]}\"))"` for bash 3.2+ compatibility
+
+5. **Explicit error handling:**
+   - `trap 'echo "❌ ... failed at line $LINENO" >&2' ERR` after `set -euo pipefail`
+   - Wrap each `azd env set` with `if ! azd env set ... ; then echo "❌ Failed..." >&2; exit 1; fi`
+   - Final round-trip verification: `azd env get-value` after setting, exit 1 if mismatch
+
+6. **Remove stale empty-string sets:**
+   - Deleted `azd env set AZURE_OPENAI_LOCATION_* ""` calls (lines 352, 367, 382)
+   - Setting empty doesn't unset — just clear local var and let prompt code handle it
+
+## Implementation
+
+**Files modified:**
+- `infra/scripts/select-model-regions.sh` — applied all 6 fixes above
+
+**Changes:**
+- `find_available_regions()`: all echoes except final return use `>&2`
+- `pick_region()`: all echoes except final return use `>&2`, `read </dev/tty`
+- `check_az_login()`: all echoes use `>&2`
+- `main()`: banner and subscription output use `>&2`
+- Removed all `local -n` namerefs, replaced with `eval "local arr=(..."`
+- Added ERR trap on line 7
+- Wrapped all 3 `azd env set` calls with error checking
+- Added final verification block in `main()` that reads back all 3 vars and exits 1 if mismatch
+
+**Validation:**
+- `bash -n` syntax check: ✅
+- Manual code review: all diagnostic output confirmed using `>&2`
+- Portability: no bash 4.x features remain
+
+## Consequences
+
+**Benefits:**
+- **Persistent regions:** `azd env set` now receives clean single-line values → persistence works
+- **User sees prompts:** Menu output goes to stderr → displayed to user instead of captured
+- **Silent failures eliminated:** ERR trap + explicit `azd env set` checks + round-trip verification
+- **Portable:** bash 3.2+ compatible (macOS system bash)
+
+**Tradeoffs:**
+- Slightly more verbose code (explicit `>&2` on many lines)
+- Indirect expansion syntax less intuitive than namerefs
+
+**Migration:**
+- **No state to clear** — env vars were never written. Just re-run `azd up`.
+- Picker will display menus correctly and persist selections
+
+## Lessons Learned
+
+1. **Command substitution capture discipline:**
+   - Functions used in `$(...)` or `< <(...)` must treat stdout as a return channel ONLY
+   - All human-facing output must go to stderr
+
+2. **Interactive input under hooks:**
+   - `read </dev/tty` is mandatory when script may run with piped stdin
+
+3. **Nameref portability:**
+   - Avoid `local -n` in portable shell scripts
+   - Use indirect expansion via `eval` for bash 3.2+ compatibility
+
+4. **Persistence verification:**
+   - Never assume `azd env set` succeeded
+   - Always read back with `azd env get-value` and verify match
+
+5. **Error visibility:**
+   - ERR trap + explicit checks + actionable error messages prevent silent failures
+
+## Related
+
+- `.squad/skills/azd-quota-aware-region-selection/SKILL.md` — added "Pitfalls" section documenting these three issues
+- `.squad/agents/verbal/history.md` — added "Region Picker Stdout Pollution Fix" learning entry
+- Quota dimension fix (2026-05-20) — prior fix that made region selection accurate
+- Deployment parameter orchestrator (2026-05-19) — same stdout discipline pattern
+
+## Alternatives Considered
+
+**Alternative A: Use temporary files instead of command substitution**
+- Write regions to `/tmp/regions.txt`, then `readarray -t regions < /tmp/regions.txt`
+- Rejected: violates project security constraint (no /tmp usage), adds cleanup burden
+
+**Alternative B: Keep stdout pollution, parse multiline output**
+- Parse captured output with `grep`, `sed`, `awk` to extract clean value
+- Rejected: fragile, error-prone, doesn't fix user visibility issue
+
+**Alternative C: Suppress all output in non-interactive mode**
+- Only show verbose output when TTY, silence when captured
+- Rejected: complicates code, users want feedback during 30-60s region scan
+
+## References
+
+- Bash manual: https://www.gnu.org/software/bash/manual/bash.html#Redirections
+- azd preprovision hooks: https://learn.microsoft.com/azure/developer/azure-developer-cli/azd-extensibility
+- Bash portability guide: https://mywiki.wooledge.org/BashGuide/Practices
+
+---
+
+
 # Decision: Per-Model Quota Dimension Checking in Region Picker
 
 **Date:** 2026-05-20  
