@@ -63,20 +63,36 @@ services:
 
 hooks:
   preprovision:
-    shell: sh
-    run: |
-      bash infra/scripts/collect-deployment-params.sh
-      bash infra/scripts/select-model-regions.sh
-      bash infra/scripts/setup-entra-app.sh
+    posix:
+      shell: sh
+      interactive: true
+      run: |
+        bash infra/scripts/collect-deployment-params.sh
+        bash infra/scripts/select-model-regions.sh
+        bash infra/scripts/setup-entra-app.sh
+    windows:
+      shell: pwsh
+      interactive: true
+      run: |
+        bash infra/scripts/collect-deployment-params.sh
+        bash infra/scripts/select-model-regions.sh
+        bash infra/scripts/setup-entra-app.sh
 
   postprovision:
-    shell: sh
-    run: |
-      echo "Provisioning complete."
-      echo "Backend URL: ${BACKEND_URL}"
-      echo "Frontend URL: ${FRONTEND_URL}"
-      # Re-run Entra setup to add the Frontend URL as a redirect URI
-      FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh
+    posix:
+      shell: sh
+      run: |
+        echo "Provisioning complete."
+        echo "Backend URL: ${BACKEND_URL}"
+        echo "Frontend URL: ${FRONTEND_URL}"
+        FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh
+    windows:
+      shell: pwsh
+      run: |
+        Write-Host "Provisioning complete."
+        Write-Host "Backend URL: $env:BACKEND_URL"
+        Write-Host "Frontend URL: $env:FRONTEND_URL"
+        bash infra/scripts/setup-entra-app.sh
 
   postdeploy:
     shell: sh
