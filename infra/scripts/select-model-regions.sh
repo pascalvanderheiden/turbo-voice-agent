@@ -82,26 +82,28 @@ is_model_available() {
     local region=$1
     local model_name=$2
     
-    # Query model list for the region — if model exists, it's available
-    # Output is JSON array of model objects with { name, version, ... }
-    local models=$(az cognitiveservices model list \
+    # The model list API returns names like "OpenAI.gpt-5.2.2025-12-11" (not bare model name).
+    # Use contains() match. If any entry matches the model name substring, it's listed.
+    local models
+    models=$(az cognitiveservices model list \
         --location "$region" \
-        --query "[?name=='$model_name'].name" \
+        --query "[?contains(name,'$model_name')].name" \
         -o tsv 2>/dev/null || echo "")
-    
+
     if [ -z "$models" ]; then
         return 1
     fi
-    
-    # Also check that the quota dimension exists for this model
+
+    # Also verify the quota dimension exists for this model.
     # Dimension format: OpenAI.<SKU>.<model-name>
     local quota_dimension="OpenAI.${QUOTA_SKU}.${model_name}"
-    local usage=$(az cognitiveservices usage list \
+    local usage
+    usage=$(az cognitiveservices usage list \
         --location "$region" \
         --query "[?name.value=='$quota_dimension'].limit" \
         -o tsv 2>/dev/null || echo "")
-    
-    # If quota dimension exists (even with limit 0), model is deployable
+
+    # If quota dimension exists (even with limit 0), model is deployable in region
     [ -n "$usage" ]
 }
 
