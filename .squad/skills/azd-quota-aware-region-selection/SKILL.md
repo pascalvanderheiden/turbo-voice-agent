@@ -602,3 +602,76 @@ This pattern scales well:
 - Multiple resource types: create one script per logical group (e.g., `select-openai-regions.sh`, `select-gpu-regions.sh`)
 - Multiple env vars: one script can prompt for multiple related regions (see `select-model-regions.sh` for an example with 3 Foundry accounts)
 - Shared helper functions: extract `is_noninteractive()`, `check_az_login()`, etc. into a sourced library if you have many scripts
+
+## Pitfalls
+
+### 1. Stdout Pollution in Command Substitution
+
+**Problem:** When capturing function output via `$(...)` or `readarray -t arr < <(fn)`, ALL stdout from that function gets captured — including diagnostic messages meant for the user.
+
+**Example (WRONG):**
+```bash
+find_regions() {
+    echo "Checking availability..."  # ❌ Goes to stdout, gets captured
+    echo "region1 region2"             # ✅ Intended output
+}
+
+readarray -t regions < <(find_regions)
+# regions[0] = "Checking availability..."  ← GARBAGE
+# regions[1] = "region1 region2"
+```
+
+**Fix:** Send ALL diagnostic output to stderr (`>&2`), keep stdout ONLY for return values:
+```bash
+find_regions() {
+    echo "Checking availability..." >&2  # ✅ User sees this, not captured
+    echo "region1 region2"               # ✅ Only this gets captured
+}
+
+readarray -t regions < <(find_regions)
+# regions[0] = "region1"
+# regions[1] = "region2"
+```
+
+**Pattern for all functions in preprovision hooks:**
+- User-facing messages: `>&2`
+- Progress indicators: `>&2`
+- Error messages: `>&2`
+- Return values (regions, IDs, etc.): stdout (no redirect)
+
+### 2. Interactive Input Under azd Hook Execution
+
+**Problem:** When `azd` runs a preprovision hook, stdin may be piped or non-TTY. Standard `read -rp` prompts may fail or not display.
+
+**Fix:** Always read from `/dev/tty` explicitly for interactive prompts:
+```bash
+# WRONG:
+read -rp "Select region: " choice
+
+# RIGHT:
+read -rp "Select region: " choice </dev/tty
+```
+
+This ensures prompts work even when the script is called in a non-standard input context.
+
+### 3. Nameref (`local -n`) Portability
+
+**Problem:** bash 4.3+ namerefs (`local -n arr=$1`) fail on macOS with system bash 3.2. Even with Homebrew bash 5, namerefs can be fragile in arrays passed across function boundaries.
+
+**Fix:** Use indirect expansion for bash 3.2+ compatibility:
+```bash
+# WRONG (requires bash 4.3+):
+pick_region() {
+    local -n regions=$2
+    echo "${regions[0]}"
+}
+
+# RIGHT (bash 3.2+ compatible):
+pick_region() {
+    local regions_var=$2
+    eval "local regions=(\"\${${regions_var}[@]}\")"
+    echo "${regions[0]}"
+}
+```
+
+Use this pattern whenever you need to pass array variable names as function arguments.

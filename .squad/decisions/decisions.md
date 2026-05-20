@@ -135,3 +135,74 @@ I updated the slides-stage regression coverage in tests only.
 - `frontend/e2e/dev-task-e2e.spec.ts` now expects the visible slides labels `Init`, `Slides`, and `Run`.
 
 Follow-up for implementers: if stage order matters contractually, production code still needs a separate fix to emit `init → slides → run` consistently.
+
+---
+
+## Verbal — Region Picker Stdout/Stderr Discipline
+
+**Author:** Verbal  
+**Date:** 2026-05-20  
+**Status:** Implemented
+
+### Problem
+
+The `select-model-regions.sh` preprovision hook ran successfully but never persisted the selected regions to azd environment variables. `.azure/turbo-voice/.env` showed other parameters (from `collect-deployment-params.sh`) were saved correctly, but `AZURE_OPENAI_LOCATION_PRIMARY/VOICE/RESEARCH` were completely missing. Bicep fell back to hardcoded `centralus` for voice, causing quota errors.
+
+### Root Causes
+
+**Bug A: Stdout Pollution in Command Substitution**
+
+Functions used for command substitution (`$(...)` or `readarray -t arr < <(...)`) wrote diagnostic output to stdout along with return values. For example:
+
+- `find_available_regions()` wrote region scanning progress like `echo "Checking availability for: gpt-realtime..."` to stdout
+- `pick_region()` wrote menu headers, numbered lists, and confirmations to stdout
+- The final `echo "${available_regions[@]}"` or `echo "$selected"` was the ONLY line intended for capture
+
+Result: `primary_regions[0]` became multiline garbage starting with "Checking availability...". `VOICE_LOC=$(pick_region ...)` captured the entire menu instead of just the selected region. `azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"` with multiline garbage likely failed silently. Even with `set -euo pipefail`, azd proceeded to provision with no env var set.
+
+**Bug B: Nameref Portability**
+
+`local -n models=$1` requires bash 4.3+. macOS system bash is 3.2; even with Homebrew bash 5, namerefs are fragile when passing arrays across function boundaries. Silent failures possible.
+
+**Bug C: No Persistence Verification**
+
+Script assumed `azd env set` succeeded but never verified by reading back the value. Silent failures went undetected.
+
+### Solution
+
+**Enforce strict stdout/stderr discipline for all functions used in command substitution:**
+
+1. **All diagnostic output → stderr (`>&2`):** Progress messages, menus, prompts, confirmations, errors
+2. **Only return values → stdout:** Region lists or single region names
+3. **Interactive input from `/dev/tty`:** `read -rp "Select region: " choice </dev/tty` ensures prompts work when stdin is piped under azd hook execution
+4. **Replace namerefs with indirect expansion:** `eval "local regions=(\"\${${regions_var}[@]}\"))"` for bash 3.2+ compatibility
+5. **Explicit error handling:**
+   - `trap 'echo "❌ ... failed at line $LINENO" >&2' ERR` after `set -euo pipefail`
+   - Wrap each `azd env set` with `if ! azd env set ... ; then echo "❌ Failed..." >&2; exit 1; fi`
+   - Final round-trip verification: `azd env get-value` after setting, exit 1 if mismatch
+6. **Remove stale empty-string sets:** Deleted `azd env set AZURE_OPENAI_LOCATION_* ""` calls — setting empty doesn't unset
+
+### Impact
+
+- **Persistent regions:** `azd env set` now receives clean single-line values → persistence works
+- **User sees prompts:** Menu output goes to stderr → displayed to user instead of captured
+- **Silent failures eliminated:** ERR trap + explicit checks + round-trip verification
+- **Portable:** bash 3.2+ compatible (macOS system bash)
+
+### Migration
+
+**No state to clear** — env vars were never written. Just re-run `azd up`. The picker will now display menus correctly and persist selections.
+
+### Lessons Learned
+
+1. **Command substitution capture discipline:** Functions used in `$(...)` or `< <(...)` must treat stdout as a return channel ONLY. All human-facing output must go to stderr.
+2. **Interactive input under hooks:** `read </dev/tty` is mandatory when script may run with piped stdin.
+3. **Nameref portability:** Avoid `local -n` in portable shell scripts. Use indirect expansion via `eval` for bash 3.2+ compatibility.
+4. **Persistence verification:** Never assume `azd env set` succeeded. Always read back with `azd env get-value` and verify match.
+5. **Error visibility:** ERR trap + explicit checks + actionable error messages prevent silent failures.
+
+### Related
+
+- `.squad/skills/azd-quota-aware-region-selection/SKILL.md` — added "Pitfalls" section documenting these issues
+- Quota dimension fix (2026-05-20) — prior fix that made region selection accurate
+- Deployment parameter orchestrator (2026-05-19) — same stdout discipline pattern applies

@@ -201,3 +201,27 @@ Cosmos DB private networking deployment session completed. All critical componen
 - `bash -n` syntax check: ✅
 - Dry-run query (eastus2 for gpt-realtime): ✅ confirmed schema matches parser
 - Per-model quota arrays match bicep capacity values: ✅ (eastus2: 500/500/200, centralus: 10, westus: 1500)
+
+### Region Picker Stdout Pollution Fix (2026-05-20)
+**Problem:** `select-model-regions.sh` never persisted the selected regions to azd env vars. `.azure/turbo-voice/.env` showed `collect-deployment-params.sh` worked fine, but `AZURE_OPENAI_LOCATION_PRIMARY/VOICE/RESEARCH` were missing. Bicep fell back to hardcoded centralus for voice → quota warning.
+
+**Root cause — TWO bugs:**
+1. **Stdout pollution in command substitution:** `find_available_regions()` and `pick_region()` both write diagnostic output (region scan progress, numbered menus, selection confirmations) to stdout. These get captured by `$(...)` substitution, making the captured value multiline garbage instead of clean region name. `azd env set` with garbage likely failed silently, and azd proceeded to provision with no env var set.
+2. **Nameref (`local -n`) compatibility:** bash 3.2 (macOS default) doesn't support namerefs; even bash 5 via Homebrew had fragility here.
+
+**Fixes applied:**
+- **All diagnostic output → stderr:** Every `echo` in `find_available_regions()` and `pick_region()` now uses `>&2` except the final region output (space-separated list / single region). Only the return value goes to stdout for clean `$(...)` capture.
+- **Interactive read from `/dev/tty`:** `read -rp ... </dev/tty` ensures prompts work even when stdin is piped under azd hook execution.
+- **Replaced all `local -n` namerefs with indirect expansion:** `eval "local regions=(\"\${${regions_var}[@]}\"))"` for bash 3.2+ compatibility.
+- **Removed empty-string `azd env set` calls:** Lines 352, 367, 382 deleted — setting empty doesn't unset and trips re-prompt path anyway. Just clear the local var.
+- **Added ERR trap:** `trap 'echo "❌ select-model-regions.sh failed at line $LINENO (exit $?)" >&2' ERR` right after `set -euo pipefail` for debuggability.
+- **Explicit `azd env set` verification:** Each `azd env set` call wrapped with `if ! azd env set ... ; then echo "❌ Failed..." >&2; exit 1; fi` for three critical vars.
+- **Final round-trip verification:** After setting all 3 vars, `main()` now does `azd env get-value` for each and exits 1 if any mismatch. Proves persistence worked.
+- **All stdout in `main()` → stderr:** Even the banner and subscription check output now use `>&2` to avoid polluting any future command substitution uses.
+
+**Pascal action:** No state to clear — the env vars were never written. Just re-run `azd up`. The picker will now run correctly, show you the region menus, and persist the values.
+
+**Validation:**
+- `bash -n` syntax check: ✅
+- Stdout/stderr discipline: manual code inspection confirms all diagnostic output now uses `>&2`
+- Portability: no bash 4.x-only features remain

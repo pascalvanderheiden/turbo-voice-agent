@@ -4,6 +4,7 @@
 # Stores user selections as azd env vars for Bicep consumption.
 # Idempotent — skips prompts if env vars are already set.
 set -euo pipefail
+trap 'echo "❌ select-model-regions.sh failed at line $LINENO (exit $?)" >&2' ERR
 
 # ──────────────────────────────────────────────────────────────────
 # Model Groups — each Foundry account hosts a group of models
@@ -47,19 +48,19 @@ is_noninteractive() {
 # ──────────────────────────────────────────────────────────────────
 check_az_login() {
     if ! az account show &>/dev/null; then
-        echo "❌ Error: not logged in to Azure CLI"
-        echo "   Run: az login"
+        echo "❌ Error: not logged in to Azure CLI" >&2
+        echo "   Run: az login" >&2
         exit 1
     fi
 
     SUBSCRIPTION_ID=$(az account show --query id -o tsv 2>/dev/null || true)
     if [ -z "$SUBSCRIPTION_ID" ]; then
-        echo "❌ Error: no Azure subscription set"
-        echo "   Run: az account set --subscription <subscription-id>"
+        echo "❌ Error: no Azure subscription set" >&2
+        echo "   Run: az account set --subscription <subscription-id>" >&2
         exit 1
     fi
 
-    echo "Using subscription: $(az account show --query name -o tsv) ($SUBSCRIPTION_ID)"
+    echo "Using subscription: $(az account show --query name -o tsv) ($SUBSCRIPTION_ID)" >&2
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -184,15 +185,21 @@ except:
 # Find regions where ALL models in a group are available with quota
 # Checks exact quota dimensions per model: OpenAI.<SKU>.<model-name>
 # Verbose output shows per-region per-model availability + quota
+# ALL diagnostic output goes to stderr; stdout contains ONLY the space-separated region list
 # ──────────────────────────────────────────────────────────────────
 find_available_regions() {
-    local -n models=$1       # nameref to model array
-    local -n capacities=$2   # nameref to capacity array
+    local models_var=$1
+    local capacities_var=$2
+    
+    # Use indirect expansion instead of nameref for bash 3.2 compatibility
+    eval "local models=(\"\${${models_var}[@]}\")"
+    eval "local capacities=(\"\${${capacities_var}[@]}\")"
+    
     local available_regions=()
     
-    echo ""
-    echo "Checking availability for: ${models[*]}"
-    echo ""
+    echo "" >&2
+    echo "Checking availability for: ${models[*]}" >&2
+    echo "" >&2
     
     for region in "${CANDIDATE_REGIONS[@]}"; do
         local all_ok=true
@@ -228,42 +235,47 @@ find_available_regions() {
             fi
         done
         
-        # Print region summary
+        # Print region summary to stderr
         if [ "$all_ok" = true ]; then
-            echo -e "  Region $region:"
-            echo -e "$region_output"
+            echo -e "  Region $region:" >&2
+            echo -e "$region_output" >&2
             available_regions+=("$region")
         else
-            echo -e "  Region $region: SKIP"
-            echo -e "$region_output"
+            echo -e "  Region $region: SKIP" >&2
+            echo -e "$region_output" >&2
         fi
     done
     
+    # ONLY stdout: the space-separated region list for command substitution
     echo "${available_regions[@]}"
 }
 
 # ──────────────────────────────────────────────────────────────────
 # Interactive region picker
+# ALL UI output goes to stderr; stdout contains ONLY the selected region for command substitution
 # ──────────────────────────────────────────────────────────────────
 pick_region() {
     local group_name=$1
-    local -n regions=$2  # nameref to available regions array
+    local regions_var=$2
     local default_region=$3
     
+    # Use indirect expansion instead of nameref for bash 3.2 compatibility
+    eval "local regions=(\"\${${regions_var}[@]}\")"
+    
     if [ ${#regions[@]} -eq 0 ]; then
-        echo ""
-        echo "❌ No regions found with availability and quota for $group_name models"
-        echo "   Possible actions:"
-        echo "   1. Request quota increase in Azure Portal for OpenAI Standard deployments"
-        echo "   2. Manually set the env var and provision in a region you know has quota:"
-        echo "      azd env set AZURE_OPENAI_LOCATION_${group_name^^} <region>"
-        echo ""
+        echo "" >&2
+        echo "❌ No regions found with availability and quota for $group_name models" >&2
+        echo "   Possible actions:" >&2
+        echo "   1. Request quota increase in Azure Portal for OpenAI Standard deployments" >&2
+        echo "   2. Manually set the env var and provision in a region you know has quota:" >&2
+        echo "      azd env set AZURE_OPENAI_LOCATION_${group_name^^} <region>" >&2
+        echo "" >&2
         exit 1
     fi
     
-    echo ""
-    echo "Available regions for $group_name (with quota):"
-    echo ""
+    echo "" >&2
+    echo "Available regions for $group_name (with quota):" >&2
+    echo "" >&2
     
     local default_idx=""
     for i in "${!regions[@]}"; do
@@ -272,34 +284,36 @@ pick_region() {
             marker=" (current default)"
             default_idx=$((i + 1))
         fi
-        echo "  $((i + 1)). ${regions[$i]}$marker"
+        echo "  $((i + 1)). ${regions[$i]}$marker" >&2
     done
     
-    echo ""
+    echo "" >&2
     if [ -n "$default_idx" ]; then
-        read -rp "Select region for $group_name [$default_idx]: " choice
+        read -rp "Select region for $group_name [$default_idx]: " choice </dev/tty
         choice=${choice:-$default_idx}
     else
-        read -rp "Select region for $group_name: " choice
+        read -rp "Select region for $group_name: " choice </dev/tty
     fi
     
     # Validate choice
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#regions[@]}" ]; then
-        echo "❌ Invalid selection"
+        echo "❌ Invalid selection" >&2
         exit 1
     fi
     
     local selected="${regions[$((choice - 1))]}"
-    echo "✅ Selected: $selected"
-    echo "$selected"
+    echo "✅ Selected: $selected" >&2
+    
+    # ONLY stdout: the selected region for command substitution
+    printf '%s\n' "$selected"
 }
 
 # ──────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────
 main() {
-    echo "=== Azure OpenAI Model Region Selection ==="
-    echo ""
+    echo "=== Azure OpenAI Model Region Selection ===" >&2
+    echo "" >&2
     
     # Check Azure CLI login
     check_az_login
@@ -312,26 +326,26 @@ main() {
         RESEARCH_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
         
         if [ -z "$PRIMARY_LOC" ] || [ -z "$VOICE_LOC" ] || [ -z "$RESEARCH_LOC" ]; then
-            echo "❌ Error: running in non-interactive mode (CI) but required env vars not set"
-            echo ""
-            echo "   Set these environment variables before running azd up:"
-            echo "   - AZURE_OPENAI_LOCATION_PRIMARY"
-            echo "   - AZURE_OPENAI_LOCATION_VOICE"
-            echo "   - AZURE_OPENAI_LOCATION_RESEARCH"
-            echo ""
-            echo "   Example:"
-            echo "     azd env set AZURE_OPENAI_LOCATION_PRIMARY eastus2"
-            echo "     azd env set AZURE_OPENAI_LOCATION_VOICE centralus"
-            echo "     azd env set AZURE_OPENAI_LOCATION_RESEARCH westus"
-            echo ""
+            echo "❌ Error: running in non-interactive mode (CI) but required env vars not set" >&2
+            echo "" >&2
+            echo "   Set these environment variables before running azd up:" >&2
+            echo "   - AZURE_OPENAI_LOCATION_PRIMARY" >&2
+            echo "   - AZURE_OPENAI_LOCATION_VOICE" >&2
+            echo "   - AZURE_OPENAI_LOCATION_RESEARCH" >&2
+            echo "" >&2
+            echo "   Example:" >&2
+            echo "     azd env set AZURE_OPENAI_LOCATION_PRIMARY eastus2" >&2
+            echo "     azd env set AZURE_OPENAI_LOCATION_VOICE centralus" >&2
+            echo "     azd env set AZURE_OPENAI_LOCATION_RESEARCH westus" >&2
+            echo "" >&2
             exit 1
         fi
         
-        echo "Non-interactive mode: using pre-set regions"
-        echo "  Primary:  $PRIMARY_LOC"
-        echo "  Voice:    $VOICE_LOC"
-        echo "  Research: $RESEARCH_LOC"
-        echo ""
+        echo "Non-interactive mode: using pre-set regions" >&2
+        echo "  Primary:  $PRIMARY_LOC" >&2
+        echo "  Voice:    $VOICE_LOC" >&2
+        echo "  Research: $RESEARCH_LOC" >&2
+        echo "" >&2
         exit 0
     fi
     
@@ -346,10 +360,9 @@ main() {
         local primary_valid=true
         for i in "${!PRIMARY_MODELS[@]}"; do
             if ! has_quota_for_model "$PRIMARY_LOC" "${PRIMARY_MODELS[$i]}" "${PRIMARY_CAPACITY[$i]}"; then
-                echo "⚠️  Warning: Previously selected PRIMARY region ($PRIMARY_LOC) no longer has quota for ${PRIMARY_MODELS[$i]}"
-                echo "   Clearing AZURE_OPENAI_LOCATION_PRIMARY — you will be re-prompted"
-                echo ""
-                azd env set AZURE_OPENAI_LOCATION_PRIMARY ""
+                echo "⚠️  Warning: Previously selected PRIMARY region ($PRIMARY_LOC) no longer has quota for ${PRIMARY_MODELS[$i]}" >&2
+                echo "   Clearing AZURE_OPENAI_LOCATION_PRIMARY — you will be re-prompted" >&2
+                echo "" >&2
                 PRIMARY_LOC=""
                 primary_valid=false
                 break
@@ -361,10 +374,9 @@ main() {
         local voice_valid=true
         for i in "${!VOICE_MODELS[@]}"; do
             if ! has_quota_for_model "$VOICE_LOC" "${VOICE_MODELS[$i]}" "${VOICE_CAPACITY[$i]}"; then
-                echo "⚠️  Warning: Previously selected VOICE region ($VOICE_LOC) no longer has quota for ${VOICE_MODELS[$i]}"
-                echo "   Clearing AZURE_OPENAI_LOCATION_VOICE — you will be re-prompted"
-                echo ""
-                azd env set AZURE_OPENAI_LOCATION_VOICE ""
+                echo "⚠️  Warning: Previously selected VOICE region ($VOICE_LOC) no longer has quota for ${VOICE_MODELS[$i]}" >&2
+                echo "   Clearing AZURE_OPENAI_LOCATION_VOICE — you will be re-prompted" >&2
+                echo "" >&2
                 VOICE_LOC=""
                 voice_valid=false
                 break
@@ -376,10 +388,9 @@ main() {
         local research_valid=true
         for i in "${!RESEARCH_MODELS[@]}"; do
             if ! has_quota_for_model "$RESEARCH_LOC" "${RESEARCH_MODELS[$i]}" "${RESEARCH_CAPACITY[$i]}"; then
-                echo "⚠️  Warning: Previously selected RESEARCH region ($RESEARCH_LOC) no longer has quota for ${RESEARCH_MODELS[$i]}"
-                echo "   Clearing AZURE_OPENAI_LOCATION_RESEARCH — you will be re-prompted"
-                echo ""
-                azd env set AZURE_OPENAI_LOCATION_RESEARCH ""
+                echo "⚠️  Warning: Previously selected RESEARCH region ($RESEARCH_LOC) no longer has quota for ${RESEARCH_MODELS[$i]}" >&2
+                echo "   Clearing AZURE_OPENAI_LOCATION_RESEARCH — you will be re-prompted" >&2
+                echo "" >&2
                 RESEARCH_LOC=""
                 research_valid=false
                 break
@@ -389,16 +400,16 @@ main() {
     
     # Skip prompt if all env vars are set and still valid
     if [ -n "$PRIMARY_LOC" ] && [ -n "$VOICE_LOC" ] && [ -n "$RESEARCH_LOC" ]; then
-        echo "✅ Model regions already configured:"
-        echo "   Primary:  $PRIMARY_LOC"
-        echo "   Voice:    $VOICE_LOC"
-        echo "   Research: $RESEARCH_LOC"
-        echo ""
-        echo "To re-select regions, unset the env vars first:"
-        echo "  azd env set AZURE_OPENAI_LOCATION_PRIMARY ''"
-        echo "  azd env set AZURE_OPENAI_LOCATION_VOICE ''"
-        echo "  azd env set AZURE_OPENAI_LOCATION_RESEARCH ''"
-        echo ""
+        echo "✅ Model regions already configured:" >&2
+        echo "   Primary:  $PRIMARY_LOC" >&2
+        echo "   Voice:    $VOICE_LOC" >&2
+        echo "   Research: $RESEARCH_LOC" >&2
+        echo "" >&2
+        echo "To re-select regions, unset the env vars first:" >&2
+        echo "  azd env set AZURE_OPENAI_LOCATION_PRIMARY ''" >&2
+        echo "  azd env set AZURE_OPENAI_LOCATION_VOICE ''" >&2
+        echo "  azd env set AZURE_OPENAI_LOCATION_RESEARCH ''" >&2
+        echo "" >&2
         exit 0
     fi
     
@@ -406,51 +417,74 @@ main() {
     # Primary Foundry (gpt-5.2, gpt-4.1, gpt-4o-transcribe)
     # ────────────────────────────────────────────────────────────
     if [ -z "$PRIMARY_LOC" ]; then
-        echo "Scanning for Primary Foundry regions (gpt-5.2, gpt-4.1, gpt-4o-transcribe)..."
+        echo "Scanning for Primary Foundry regions (gpt-5.2, gpt-4.1, gpt-4o-transcribe)..." >&2
         readarray -t primary_regions < <(find_available_regions PRIMARY_MODELS PRIMARY_CAPACITY)
         PRIMARY_LOC=$(pick_region "PRIMARY" primary_regions "$DEFAULT_PRIMARY")
-        azd env set AZURE_OPENAI_LOCATION_PRIMARY "$PRIMARY_LOC"
+        if ! azd env set AZURE_OPENAI_LOCATION_PRIMARY "$PRIMARY_LOC"; then
+            echo "❌ Failed to persist AZURE_OPENAI_LOCATION_PRIMARY" >&2
+            exit 1
+        fi
     else
-        echo "✅ Primary region already set: $PRIMARY_LOC"
+        echo "✅ Primary region already set: $PRIMARY_LOC" >&2
     fi
     
     # ────────────────────────────────────────────────────────────
     # Voice Foundry (gpt-realtime)
     # ────────────────────────────────────────────────────────────
     if [ -z "$VOICE_LOC" ]; then
-        echo ""
-        echo "Scanning for Voice Foundry regions (gpt-realtime)..."
+        echo "" >&2
+        echo "Scanning for Voice Foundry regions (gpt-realtime)..." >&2
         readarray -t voice_regions < <(find_available_regions VOICE_MODELS VOICE_CAPACITY)
         VOICE_LOC=$(pick_region "VOICE" voice_regions "$DEFAULT_VOICE")
-        azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"
+        if ! azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"; then
+            echo "❌ Failed to persist AZURE_OPENAI_LOCATION_VOICE" >&2
+            exit 1
+        fi
     else
-        echo "✅ Voice region already set: $VOICE_LOC"
+        echo "✅ Voice region already set: $VOICE_LOC" >&2
     fi
     
     # ────────────────────────────────────────────────────────────
     # Research Foundry (o3-deep-research)
     # ────────────────────────────────────────────────────────────
     if [ -z "$RESEARCH_LOC" ]; then
-        echo ""
-        echo "Scanning for Research Foundry regions (o3-deep-research)..."
+        echo "" >&2
+        echo "Scanning for Research Foundry regions (o3-deep-research)..." >&2
         readarray -t research_regions < <(find_available_regions RESEARCH_MODELS RESEARCH_CAPACITY)
         RESEARCH_LOC=$(pick_region "RESEARCH" research_regions "$DEFAULT_RESEARCH")
-        azd env set AZURE_OPENAI_LOCATION_RESEARCH "$RESEARCH_LOC"
+        if ! azd env set AZURE_OPENAI_LOCATION_RESEARCH "$RESEARCH_LOC"; then
+            echo "❌ Failed to persist AZURE_OPENAI_LOCATION_RESEARCH" >&2
+            exit 1
+        fi
     else
-        echo "✅ Research region already set: $RESEARCH_LOC"
+        echo "✅ Research region already set: $RESEARCH_LOC" >&2
     fi
     
     # ────────────────────────────────────────────────────────────
-    # Summary
+    # Summary & Verification
     # ────────────────────────────────────────────────────────────
-    echo ""
-    echo "=== Region Selection Complete ==="
-    echo "  Primary:  $PRIMARY_LOC (gpt-5.2, gpt-4.1, gpt-4o-transcribe)"
-    echo "  Voice:    $VOICE_LOC (gpt-realtime)"
-    echo "  Research: $RESEARCH_LOC (o3-deep-research)"
-    echo ""
-    echo "Stored in azd environment. Proceeding with deployment..."
-    echo ""
+    echo "" >&2
+    echo "=== Region Selection Complete ===" >&2
+    echo "  Primary:  $PRIMARY_LOC (gpt-5.2, gpt-4.1, gpt-4o-transcribe)" >&2
+    echo "  Voice:    $VOICE_LOC (gpt-realtime)" >&2
+    echo "  Research: $RESEARCH_LOC (o3-deep-research)" >&2
+    echo "" >&2
+    
+    # Verify persistence by reading back the values
+    VERIFY_PRIMARY=$(azd env get-value AZURE_OPENAI_LOCATION_PRIMARY 2>/dev/null || echo "")
+    VERIFY_VOICE=$(azd env get-value AZURE_OPENAI_LOCATION_VOICE 2>/dev/null || echo "")
+    VERIFY_RESEARCH=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
+    
+    if [ "$VERIFY_PRIMARY" != "$PRIMARY_LOC" ] || [ "$VERIFY_VOICE" != "$VOICE_LOC" ] || [ "$VERIFY_RESEARCH" != "$RESEARCH_LOC" ]; then
+        echo "❌ Persistence verification failed!" >&2
+        echo "   Expected: PRIMARY=$PRIMARY_LOC VOICE=$VOICE_LOC RESEARCH=$RESEARCH_LOC" >&2
+        echo "   Got:      PRIMARY=$VERIFY_PRIMARY VOICE=$VERIFY_VOICE RESEARCH=$VERIFY_RESEARCH" >&2
+        exit 1
+    fi
+    
+    echo "✅ Verified: all regions persisted successfully" >&2
+    echo "Stored in azd environment. Proceeding with deployment..." >&2
+    echo "" >&2
 }
 
 main "$@"
