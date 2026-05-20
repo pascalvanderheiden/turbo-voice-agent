@@ -121,6 +121,21 @@ Before you deploy or contribute, make sure you have:
    azd up
    ```
 
+   On first run, the preprovision hook will interactively prompt you to select Azure regions for the three AI Foundry deployments:
+   - **Primary** (gpt-5.2, gpt-4.1, gpt-4o-transcribe)
+   - **Voice** (gpt-realtime)
+   - **Research** (o3-deep-research)
+   
+   The script queries Azure for model availability and remaining quota in each region, then presents a numbered list of suitable regions. Your selections are stored as azd environment variables and reused on subsequent deployments.
+   
+   To manually set regions (e.g., for CI/CD or to skip the interactive prompt):
+   
+   ```bash
+   azd env set AZURE_OPENAI_LOCATION_PRIMARY <region>
+   azd env set AZURE_OPENAI_LOCATION_VOICE <region>
+   azd env set AZURE_OPENAI_LOCATION_RESEARCH <region>
+   ```
+
 6. **Post-deploy: confirm Entra redirect URIs**
 
    The project runs `infra/scripts/setup-entra-app.sh` during provisioning, but after deployment you can re-run it with the deployed frontend URL to ensure SPA redirect URIs are correct:
@@ -162,6 +177,9 @@ Use the GitHub Actions + Azure workload identity flow documented by Microsoft fo
 | `AZURE_RESOURCE_GROUP` | Yes | Resource group name the workflow refreshes and deploys into |
 | `ENTRA_TENANT_ID` | Yes | Tenant ID consumed by the app at deploy time |
 | `ENTRA_CLIENT_ID` | Yes | Frontend/backend app registration client ID |
+| `AZURE_OPENAI_LOCATION_PRIMARY` | Yes | Region for Primary AI Foundry (gpt-5.2, gpt-4.1, gpt-4o-transcribe) |
+| `AZURE_OPENAI_LOCATION_VOICE` | Yes | Region for Voice AI Foundry (gpt-realtime) |
+| `AZURE_OPENAI_LOCATION_RESEARCH` | Yes | Region for Research AI Foundry (o3-deep-research) |
 | `CUSTOM_DOMAIN_NAME` | No | Custom frontend hostname; can be empty |
 | `EXISTING_CERT_NAME` | No | Existing managed certificate name; can be empty |
 

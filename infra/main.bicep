@@ -12,6 +12,15 @@ param resourceToken string = uniqueString(subscription().id, resourceGroupName)
 @description('Cosmos DB provisioned throughput per container (RU/s)')
 param cosmosDbThroughput int = 400
 
+@description('Azure region for Primary AI Foundry (gpt-5.2, gpt-4.1, gpt-4o-transcribe)')
+param primaryAiLocation string = 'eastus2'
+
+@description('Azure region for Voice AI Foundry (gpt-realtime)')
+param voiceAiLocation string = 'centralus'
+
+@description('Azure region for Research AI Foundry (o3-deep-research)')
+param researchAiLocation string = 'westus'
+
 @description('Entra ID tenant ID for authentication')
 param entraTenantId string = ''
 
@@ -90,7 +99,7 @@ module aiEastUs2 'modules/ai-foundry-eastus2.bicep' = {
   scope: rg
   params: {
     name: 'ai-eastus2-${resourceToken}'
-    location: 'eastus2'
+    location: primaryAiLocation
   }
 }
 
@@ -102,7 +111,7 @@ module aiWestUs 'modules/ai-foundry-westus.bicep' = {
   scope: rg
   params: {
     name: 'ai-westus-${resourceToken}'
-    location: 'westus'
+    location: researchAiLocation
   }
 }
 
@@ -114,7 +123,7 @@ module aiCentralUs 'modules/ai-foundry-centralus.bicep' = {
   scope: rg
   params: {
     name: 'ai-centralus-${resourceToken}'
-    location: 'centralus'
+    location: voiceAiLocation
   }
 }
 

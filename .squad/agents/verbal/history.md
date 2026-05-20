@@ -104,3 +104,43 @@ Cosmos DB private networking deployment session completed. All critical componen
 - `az bicep build --file infra/main.bicep` compiles successfully after the OSS parameterization changes (existing Bicep warnings remain in unrelated modules).
 - Git history audit found one critical tracked key file (`backend/key.pem`, first committed in `4fdbe03`) and one suspicious tracked local env artifact (`frontend/.!38121!.env.local`, also `4fdbe03`).
 - GUIDs still present in `infra/` are Azure built-in role definition IDs, not personal subscription, tenant, or principal identifiers.
+
+### Quota-Aware Region Selection (2026-05-19)
+**Problem:** `azd up` was failing for new users because hardcoded regions (eastus2/westus/centralus) lacked quota for OpenAI models on their subscriptions.
+
+**Solution:** Added `infra/scripts/select-model-regions.sh` preprovision hook that:
+- Queries Azure for model availability using `az cognitiveservices model list --location <region>`
+- Checks quota using `az cognitiveservices usage list --location <region>` (parses JSON for OpenAI.Standard quota dimensions)
+- For each of 3 Foundry accounts, finds regions where ALL models in that group are available AND have quota
+- Interactively prompts user to pick a region (numbered list, with current default marked)
+- Stores selections via `azd env set AZURE_OPENAI_LOCATION_PRIMARY/VOICE/RESEARCH`
+- Idempotent: skips prompt if env vars already set
+- Non-interactive guard: fails fast with clear error message if running in CI without pre-set env vars
+
+**Model groups:**
+- **Primary Foundry** (eastus2 default): gpt-5.2, gpt-4.1, gpt-4o-transcribe
+- **Voice Foundry** (centralus default): gpt-realtime
+- **Research Foundry** (westus default): o3-deep-research
+
+**Infrastructure changes:**
+- `infra/main.bicep`: added 3 new params (`primaryAiLocation`, `voiceAiLocation`, `researchAiLocation`), replaced hardcoded `location: 'eastus2'` / `'westus'` / `'centralus'` with param values
+- `infra/main.parameters.json`: added 3 params with azd env var substitution (e.g., `${AZURE_OPENAI_LOCATION_PRIMARY=eastus2}`)
+- `azure.yaml`: preprovision hook now runs `select-model-regions.sh` BEFORE `setup-entra-app.sh` (fail-fast on quota issues); added 3 new pipeline variables for GitHub Actions
+- `README.md`: documented interactive region selection on first `azd up`, manual override for CI/non-interactive
+
+**Validation:**
+- `bash -n` script syntax check: ✅
+- `az bicep build`: ✅ (pre-existing warnings unaffected)
+- JSON validation: ✅
+- YAML validation: ✅
+
+**Detection approach:**
+- Candidate regions: eastus, eastus2, westus, westus2, westus3, northcentralus, southcentralus, centralus, swedencentral, westeurope, francecentral, uksouth, japaneast, australiaeast
+- Model availability: `az cognitiveservices model list` returns JSON array; if model name found, it's available
+- Quota check: parse OpenAI.Standard usage (`currentValue` < `limit` = quota remaining)
+- For multi-model groups (e.g., Primary = 3 models), only offer regions where ALL models are available
+
+**Gotchas:**
+- Some models (o3-deep-research, mistral-document-ai) only available in 2-3 regions worldwide — candidate list is intentionally broad
+- Quota API returns OpenAI.Standard aggregate, not per-model granularity — conservative check (if ANY OpenAI.Standard has remaining quota, region is considered viable)
+- If NO regions with quota, script prints manual override instructions and exits 1

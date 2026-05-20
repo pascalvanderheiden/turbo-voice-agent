@@ -7,6 +7,10 @@ User: the project maintainer.
 
 Backend has 12 specialist agents: notes, brainstorm, research, spec, dev, marketing, slides, skills, todo, work + supervisor. Service layer pattern with dual Cosmos DB + InMemory implementations.
 
+## Team Updates
+
+- **2026-05-20:** Verbal deployed quota-aware region selector (`infra/scripts/select-model-regions.sh`) as `azd` preprovision hook. Three new env vars in CI/CD pipelines: `AZURE_OPENAI_LOCATION_PRIMARY`, `AZURE_OPENAI_LOCATION_VOICE`, `AZURE_OPENAI_LOCATION_RESEARCH`. This resolves fresh `azd up` quota failures on new subscriptions and enables interactive region selection for multi-region deployments.
+
 ## Learnings
 - Slides pipeline restructured from `init→skills→slides` to `init→slides→run`. Skills sync merged into init stage (it's infrastructure, not user-visible). Slides stage now uses `copilot --autopilot --yolo` via shell command instead of `_sandbox_exec(prompt=...)`. Run stage handles npm install + dev server + health check, auto-registering the preview URL in `_live_previews`.
 - The `_sandbox_exec()` helper supports both `prompt` (Copilot CLI) and `command` (shell) modes. For the new slides stage, piping the prompt into `copilot --autopilot --yolo` via command mode avoids the model parameter dependency.

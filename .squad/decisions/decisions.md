@@ -1,5 +1,99 @@
 # Team Decisions
 
+## Verbal — Quota-Aware OpenAI Region Selection
+
+**Author:** Verbal  
+**Date:** 2026-05-19  
+**Status:** Implemented
+
+### Problem
+
+`azd up` was failing for new users because we hardcoded OpenAI model deployment regions (eastus2, westus, centralus) in `infra/main.bicep`. When users attempted to deploy on subscriptions without quota in those specific regions, the deployment would fail with cryptic ARM template errors.
+
+This created a poor first-run experience for the OSS project — users hit quota limits before ever seeing the app run.
+
+### Solution
+
+Implemented a quota-aware, interactive region selection as an `azd` preprovision hook.
+
+**New script:** `infra/scripts/select-model-regions.sh`
+
+The script:
+1. Queries Azure's Cognitive Services API to determine which regions have each required model available
+2. Checks quota availability in each candidate region using the usage API
+3. For each of the 3 Foundry accounts, presents regions where ALL models in that group are available AND have quota
+4. Prompts the user to select a region (numbered list, defaults marked)
+5. Stores selections as azd environment variables (`AZURE_OPENAI_LOCATION_PRIMARY`, `AZURE_OPENAI_LOCATION_VOICE`, `AZURE_OPENAI_LOCATION_RESEARCH`)
+
+**Idempotency:** If the env vars are already set, the script skips all prompts and exits immediately. This makes `azd up` re-entrant — you can re-run provisioning without being re-prompted.
+
+**Non-interactive mode:** For CI/CD pipelines (e.g., GitHub Actions), the script detects non-TTY stdin and requires all three env vars to be pre-set. It fails fast with a clear error message listing the required variables.
+
+**Candidate regions:** eastus, eastus2, westus, westus2, westus3, northcentralus, southcentralus, centralus, swedencentral, westeurope, francecentral, uksouth, japaneast, australiaeast. This list is intentionally broad because some models (e.g., o3-deep-research) are only available in 2-3 regions globally.
+
+### Infrastructure Changes
+
+- **`infra/main.bicep`**: Added 3 new parameters (`primaryAiLocation`, `voiceAiLocation`, `researchAiLocation`) with defaults matching the old hardcoded values. Replaced hardcoded `location: 'eastus2'`, `'westus'`, `'centralus'` with these params.
+- **`infra/main.parameters.json`**: Added the 3 new params with azd env var substitution (e.g., `${AZURE_OPENAI_LOCATION_PRIMARY=eastus2}`).
+- **`azure.yaml`**: Preprovision hook now runs `select-model-regions.sh` BEFORE `setup-entra-app.sh` (fail-fast on quota). Added the 3 env vars to pipeline variables for GitHub Actions.
+- **`README.md`**: Documented the interactive region selection behavior, manual override via `azd env set`, and CI requirements.
+
+### Model Groups
+
+We deploy 3 separate AI Foundry accounts, each hosting a logical group of models:
+
+1. **Primary Foundry** (default: eastus2)
+   - gpt-5.2
+   - gpt-4.1
+   - gpt-4o-transcribe
+
+2. **Voice Foundry** (default: centralus)
+   - gpt-realtime
+
+3. **Research Foundry** (default: westus)
+   - o3-deep-research
+
+The script ensures that for multi-model groups (e.g., Primary), a region is only offered if ALL models in that group are available with quota.
+
+### Detection Approach
+
+**Model availability:**
+```bash
+az cognitiveservices model list --location <region>
+```
+Returns JSON array of available models. If the model name is present, it's available in that region.
+
+**Quota check:**
+```bash
+az cognitiveservices usage list --location <region>
+```
+Returns quota dimensions (e.g., `OpenAI.Standard.*`). The script parses the JSON and checks if `currentValue < limit` for any OpenAI.Standard dimension. This is a conservative heuristic — quota is reported at the account level, not per-model, so we assume if ANY OpenAI.Standard quota exists, deployment is viable.
+
+**Edge case:** If no regions have quota, the script prints an actionable error message with instructions to request a quota increase in Azure Portal or manually override via `azd env set`.
+
+### Benefits
+
+- **First-run reliability:** Users no longer hit quota errors on `azd up` — they're guided to regions that work
+- **Transparency:** The script shows which regions have quota, so users understand resource availability in their subscription
+- **CI-friendly:** Non-interactive mode fails fast with clear instructions
+- **Idempotent:** Re-running `azd up` doesn't re-prompt
+- **Backwards-compatible:** Defaults match the old hardcoded values, so existing deployments aren't forced to migrate
+
+### Alternatives Considered
+
+1. **Document manual override only** — rejected because it's poor UX (every new user would hit the error and have to debug)
+2. **Auto-select first available region** — rejected because users should be aware of region choice (latency, compliance, cost)
+3. **Per-model quota check** — not feasible; Azure quota API doesn't expose per-model granularity for OpenAI deployments
+
+### Validation
+
+- ✅ Script syntax: `bash -n` passes
+- ✅ Bicep compilation: `az bicep build` succeeds (pre-existing warnings unaffected)
+- ✅ JSON/YAML syntax: valid
+- ✅ Non-interactive guard: tested with `[ ! -t 0 ]` condition
+
+---
+
 ## Redfoot — OSS Release: Open-Source Preparation Strategy
 
 **Author:** Redfoot  

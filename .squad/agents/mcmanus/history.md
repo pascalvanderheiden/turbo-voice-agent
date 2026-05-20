@@ -7,6 +7,10 @@ User: the project maintainer.
 
 Frontend features: voice mode UI, notes, dashboard, dev-task pipeline viewer, slides preview, SSE streaming for real-time updates. Auth via MSAL (Azure Entra ID).
 
+## Team Updates
+
+- **2026-05-20:** Verbal deployed quota-aware region selector as `azd` preprovision hook. Three new env vars now passed in CI/CD: `AZURE_OPENAI_LOCATION_PRIMARY`, `AZURE_OPENAI_LOCATION_VOICE`, `AZURE_OPENAI_LOCATION_RESEARCH`. These resolve quota failures on fresh deployments and enable per-Foundry-account region selection.
+
 ## Learnings
 - Slides pipeline stages changed: `init → skills → slides` is now `init → slides → run`. The `run` stage represents the Slidev dev server startup + health check.
 - Auto-preview pattern: When `run` stage completes, `liveUrl` is auto-set to `/api/dev/{task_id}/preview/` — no user click needed. Uses a `useEffect` watching `task` state changes during polling.

@@ -24,6 +24,9 @@ pipeline:
     - DEPLOY_RBAC
     - DEPLOYER_PRINCIPAL_ID
     - GITHUB_ENVIRONMENT_NAME
+    - AZURE_OPENAI_LOCATION_PRIMARY
+    - AZURE_OPENAI_LOCATION_VOICE
+    - AZURE_OPENAI_LOCATION_RESEARCH
   secrets:
     - ENTRA_CLIENT_SECRET
 
@@ -61,7 +64,9 @@ services:
 hooks:
   preprovision:
     shell: sh
-    run: bash infra/scripts/setup-entra-app.sh
+    run: |
+      bash infra/scripts/select-model-regions.sh
+      bash infra/scripts/setup-entra-app.sh
 
   postprovision:
     shell: sh
