@@ -207,24 +207,46 @@ az cognitiveservices model list --location <region> \
     --query "[?name=='<model>'].name" -o tsv
 ```
 
-**Quota checking:**
+**Quota checking (EXACT per-model dimension):**
+
+⚠️ **CRITICAL:** Azure quota is per-model, not per-SKU. Always check the exact dimension `OpenAI.<SKU>.<model-name>`.
+
 ```bash
+# Quota dimension format: OpenAI.<SKU>.<model-name>
+# Example: OpenAI.GlobalStandard.gpt-realtime
+QUOTA_DIMENSION="OpenAI.GlobalStandard.${model_name}"
+
 az cognitiveservices usage list --location <region> \
-    --query "[?contains(name.value, 'OpenAI.Standard')].{current: currentValue, limit: limit}" -o json
+    --query "[?name.value=='$QUOTA_DIMENSION'].{current: currentValue, limit: limit}" -o json
 ```
 
-Parse JSON in bash using Python:
+Parse JSON in bash using Python (check if available >= required):
 ```bash
 python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-for item in data:
-    if item.get('limit', 0) > item.get('current', 0):
-        print('true')
-        sys.exit(0)
-print('false')
+required = int('$required_capacity')
+try:
+    data = json.load(sys.stdin)
+    if len(data) > 0:
+        item = data[0]
+        limit = item.get('limit', 0)
+        current = item.get('current', 0)
+        available = limit - current
+        if available >= required:
+            print('true')
+            sys.exit(0)
+    print('false')
+except:
+    print('false')
 "
 ```
+
+**Key learnings:**
+- Each model (gpt-5.2, gpt-realtime, o3-deep-research, etc.) has its own quota dimension
+- A region may have quota for gpt-5.2 but NOT gpt-realtime — check EVERY model in a group
+- Quota dimension must exist (even with limit=0) for model to be deployable in that region
+- Required capacity varies by model: gpt-5.2=500, gpt-realtime=10, o3-deep-research=1500 (from Bicep)
+- Use parallel arrays for models + capacities to maintain alignment
 
 ### Non-interactive Detection
 

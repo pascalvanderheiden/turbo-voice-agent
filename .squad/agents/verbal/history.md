@@ -176,3 +176,28 @@ Cosmos DB private networking deployment session completed. All critical componen
 - `README.md`: Manual Deployment section rewritten from 7 steps (with explicit `azd env new` + 6 manual `azd env set` commands) to 3 steps: clone+auth, `azd up`, verify. All param collection happens automatically.
 
 **Pattern:** Same `azd env get-value` + auto-discovery + persist pattern as the region picker. Reusable for ANY azd preprovision param.
+
+### Quota Dimension Bug Fix (2026-05-20)
+**Problem:** Region picker was passing `centralus` as having quota for `gpt-realtime`, but `azd up` preflight correctly failed with "Insufficient quota: Requested 10, Available 0". Root cause: `has_quota()` checked ANY `OpenAI.Standard.*` dimension (too coarse), but Azure uses exact per-model quota dimensions like `OpenAI.GlobalStandard.gpt-realtime`.
+
+**Fix:** Completely rewrote quota checking in `select-model-regions.sh`:
+- Replaced `has_quota()` with `has_quota_for_model(region, model, required_capacity)` — checks EXACT quota dimension `OpenAI.GlobalStandard.<model-name>`
+- Added parallel capacity arrays: `PRIMARY_CAPACITY=(500 500 200)`, `VOICE_CAPACITY=(10)`, `RESEARCH_CAPACITY=(1500)` to match model arrays
+- `find_available_regions()` now checks EVERY model in a group against its required capacity — region passes iff ALL models have sufficient quota
+- Added `get_quota_info()` for verbose output — prints per-region per-model availability + quota like "✓ gpt-realtime — quota 10/10 available (need 10)"
+- Tightened `is_model_available()` to also check quota dimension exists (even if exhausted), catching model-actually-not-in-region
+- Added env var validation on each run: if `AZURE_OPENAI_LOCATION_VOICE` (or other) no longer has quota for its models, auto-clear and re-prompt with warning
+- Verbose output by default (interactive users want feedback during 30-60s region scan)
+
+**Quota dimension naming discovered:**
+- Format: `OpenAI.<SKU>.<model-name>` exactly
+- SKU is `GlobalStandard` for all current models (gpt-5.2, gpt-4.1, gpt-4o-transcribe, gpt-realtime, o3-deep-research)
+- Each model has its own independent quota pool
+- Query: `az cognitiveservices usage list --location <r> --query "[?name.value=='OpenAI.GlobalStandard.<model>']"`
+
+**Pascal action required:** Your azd env's `AZURE_OPENAI_LOCATION_VOICE=centralus` will be auto-detected as invalid on next `azd up` and you'll be re-prompted to select a region with quota.
+
+**Validation:**
+- `bash -n` syntax check: ✅
+- Dry-run query (eastus2 for gpt-realtime): ✅ confirmed schema matches parser
+- Per-model quota arrays match bicep capacity values: ✅ (eastus2: 500/500/200, centralus: 10, westus: 1500)

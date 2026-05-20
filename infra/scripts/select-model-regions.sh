@@ -7,10 +7,20 @@ set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────
 # Model Groups — each Foundry account hosts a group of models
+# Models and their required capacity (parallel arrays)
 # ──────────────────────────────────────────────────────────────────
 PRIMARY_MODELS=("gpt-5.2" "gpt-4.1" "gpt-4o-transcribe")
+PRIMARY_CAPACITY=(500 500 200)
+
 VOICE_MODELS=("gpt-realtime")
+VOICE_CAPACITY=(10)
+
 RESEARCH_MODELS=("o3-deep-research")
+RESEARCH_CAPACITY=(1500)
+
+# SKU name used for quota dimension lookups
+# Quota dimension format: OpenAI.<SKU>.<model-name>
+QUOTA_SKU="GlobalStandard"
 
 # Candidate regions to query (well-known OpenAI regions)
 CANDIDATE_REGIONS=(
@@ -55,6 +65,8 @@ check_az_login() {
 # ──────────────────────────────────────────────────────────────────
 # Helper: check if a model is available in a region
 # Uses az cognitiveservices model list to detect model availability
+# Also verifies the quota dimension exists (even if exhausted) to confirm
+# the model is actually deployable in the region
 # ──────────────────────────────────────────────────────────────────
 is_model_available() {
     local region=$1
@@ -67,39 +79,59 @@ is_model_available() {
         --query "[?name=='$model_name'].name" \
         -o tsv 2>/dev/null || echo "")
     
-    [ -n "$models" ]
+    if [ -z "$models" ]; then
+        return 1
+    fi
+    
+    # Also check that the quota dimension exists for this model
+    # Dimension format: OpenAI.<SKU>.<model-name>
+    local quota_dimension="OpenAI.${QUOTA_SKU}.${model_name}"
+    local usage=$(az cognitiveservices usage list \
+        --location "$region" \
+        --query "[?name.value=='$quota_dimension'].limit" \
+        -o tsv 2>/dev/null || echo "")
+    
+    # If quota dimension exists (even with limit 0), model is deployable
+    [ -n "$usage" ]
 }
 
 # ──────────────────────────────────────────────────────────────────
-# Helper: check if a region has remaining quota for a model deployment
-# Uses az cognitiveservices usage list to fetch quota limits and current usage
-# Returns 0 if quota available, 1 otherwise
+# Helper: check if a region has sufficient quota for a specific model
+# Uses exact quota dimension: OpenAI.<SKU>.<model-name>
+# Returns 0 if (limit - current) >= required_capacity, 1 otherwise
 # ──────────────────────────────────────────────────────────────────
-has_quota() {
+has_quota_for_model() {
     local region=$1
     local model_name=$2
+    local required_capacity=$3
     
-    # Query usage for OpenAI deployments in the region
-    # Schema: { name: { value: "OpenAI.Standard.<model>" }, currentValue: X, limit: Y }
-    # For GlobalStandard SKU, check OpenAI.Standard.* quota
+    # Quota dimension format: OpenAI.<SKU>.<model-name>
+    local quota_dimension="OpenAI.${QUOTA_SKU}.${model_name}"
+    
+    # Query usage for the exact quota dimension
+    # Schema: { name: { value: "..." }, currentValue: X, limit: Y }
     local usage=$(az cognitiveservices usage list \
         --location "$region" \
-        --query "[?contains(name.value, 'OpenAI.Standard')].{current: currentValue, limit: limit}" \
+        --query "[?name.value=='$quota_dimension'].{current: currentValue, limit: limit}" \
         -o json 2>/dev/null || echo "[]")
     
-    # If usage query failed or returned empty, assume no quota available
+    # If usage query failed or returned empty, no quota available
     if [ "$usage" = "[]" ] || [ -z "$usage" ]; then
         return 1
     fi
     
-    # Parse quota — we consider quota available if ANY OpenAI.Standard resource has remaining quota
-    # This is a conservative check; in practice, each model has its own quota dimension
-    local has_remaining=$(echo "$usage" | python3 -c "
+    # Parse quota — check if (limit - current) >= required_capacity
+    local has_sufficient=$(echo "$usage" | python3 -c "
 import sys, json
+required = int('$required_capacity')
 try:
     data = json.load(sys.stdin)
-    for item in data:
-        if item.get('limit', 0) > item.get('current', 0):
+    if len(data) > 0:
+        item = data[0]
+        limit = item.get('limit', 0)
+        current = item.get('current', 0)
+        available = limit - current
+        if available >= required:
             print('true')
             sys.exit(0)
     print('false')
@@ -107,35 +139,103 @@ except:
     print('false')
 " 2>/dev/null || echo "false")
     
-    [ "$has_remaining" = "true" ]
+    [ "$has_sufficient" = "true" ]
+}
+
+# ──────────────────────────────────────────────────────────────────
+# Helper: get quota info for a model in a region (for verbose output)
+# Returns JSON with {available, limit, current} or empty if quota dimension not found
+# ──────────────────────────────────────────────────────────────────
+get_quota_info() {
+    local region=$1
+    local model_name=$2
+    
+    local quota_dimension="OpenAI.${QUOTA_SKU}.${model_name}"
+    
+    local usage=$(az cognitiveservices usage list \
+        --location "$region" \
+        --query "[?name.value=='$quota_dimension'].{current: currentValue, limit: limit}" \
+        -o json 2>/dev/null || echo "[]")
+    
+    if [ "$usage" = "[]" ] || [ -z "$usage" ]; then
+        echo ""
+        return
+    fi
+    
+    # Extract quota values
+    echo "$usage" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if len(data) > 0:
+        item = data[0]
+        limit = item.get('limit', 0)
+        current = item.get('current', 0)
+        available = limit - current
+        print(json.dumps({'available': available, 'limit': limit, 'current': current}))
+    else:
+        print('')
+except:
+    print('')
+" 2>/dev/null || echo ""
 }
 
 # ──────────────────────────────────────────────────────────────────
 # Find regions where ALL models in a group are available with quota
+# Checks exact quota dimensions per model: OpenAI.<SKU>.<model-name>
+# Verbose output shows per-region per-model availability + quota
 # ──────────────────────────────────────────────────────────────────
 find_available_regions() {
-    local -n models=$1  # nameref to model array
+    local -n models=$1       # nameref to model array
+    local -n capacities=$2   # nameref to capacity array
     local available_regions=()
     
+    echo ""
     echo "Checking availability for: ${models[*]}"
+    echo ""
     
     for region in "${CANDIDATE_REGIONS[@]}"; do
-        local all_available=true
+        local all_ok=true
+        local region_output=""
         
-        for model in "${models[@]}"; do
+        # Check each model in the group
+        for i in "${!models[@]}"; do
+            local model="${models[$i]}"
+            local required="${capacities[$i]}"
+            
+            # Check model availability (model list + quota dimension exists)
             if ! is_model_available "$region" "$model"; then
-                all_available=false
-                break
+                region_output+="    ✗ ${model} — not available in region\n"
+                all_ok=false
+                continue
+            fi
+            
+            # Check quota
+            local quota_info=$(get_quota_info "$region" "$model")
+            if [ -n "$quota_info" ]; then
+                local available=$(echo "$quota_info" | python3 -c "import sys, json; print(json.load(sys.stdin).get('available', 0))" 2>/dev/null || echo "0")
+                local limit=$(echo "$quota_info" | python3 -c "import sys, json; print(json.load(sys.stdin).get('limit', 0))" 2>/dev/null || echo "0")
+                
+                if has_quota_for_model "$region" "$model" "$required"; then
+                    region_output+="    ✓ ${model} — quota ${available}/${limit} available (need ${required})\n"
+                else
+                    region_output+="    ✗ ${model} — quota ${available}/${limit} available (need ${required})\n"
+                    all_ok=false
+                fi
+            else
+                region_output+="    ✗ ${model} — no quota dimension found\n"
+                all_ok=false
             fi
         done
         
-        # Only check quota if all models are available
-        if [ "$all_available" = true ]; then
-            # For quota check, we use the first model as a proxy
-            # (quota is typically per-account, not per-model)
-            if has_quota "$region" "${models[0]}"; then
-                available_regions+=("$region")
-            fi
+        # Print region summary
+        if [ "$all_ok" = true ]; then
+            echo -e "  Region $region:"
+            echo -e "$region_output"
+            available_regions+=("$region")
+        else
+            echo -e "  Region $region: SKIP"
+            echo -e "$region_output"
         fi
     done
     
@@ -235,12 +335,59 @@ main() {
         exit 0
     fi
     
-    # Interactive mode — check if env vars are already set
+    # Interactive mode — check if env vars are already set and validate them
     PRIMARY_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_PRIMARY 2>/dev/null || echo "")
     VOICE_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_VOICE 2>/dev/null || echo "")
     RESEARCH_LOC=$(azd env get-value AZURE_OPENAI_LOCATION_RESEARCH 2>/dev/null || echo "")
     
-    # Skip prompt if all env vars are already set
+    # Validate existing env vars against quota
+    # If any region no longer has quota for its models, clear it and re-prompt
+    if [ -n "$PRIMARY_LOC" ]; then
+        local primary_valid=true
+        for i in "${!PRIMARY_MODELS[@]}"; do
+            if ! has_quota_for_model "$PRIMARY_LOC" "${PRIMARY_MODELS[$i]}" "${PRIMARY_CAPACITY[$i]}"; then
+                echo "⚠️  Warning: Previously selected PRIMARY region ($PRIMARY_LOC) no longer has quota for ${PRIMARY_MODELS[$i]}"
+                echo "   Clearing AZURE_OPENAI_LOCATION_PRIMARY — you will be re-prompted"
+                echo ""
+                azd env set AZURE_OPENAI_LOCATION_PRIMARY ""
+                PRIMARY_LOC=""
+                primary_valid=false
+                break
+            fi
+        done
+    fi
+    
+    if [ -n "$VOICE_LOC" ]; then
+        local voice_valid=true
+        for i in "${!VOICE_MODELS[@]}"; do
+            if ! has_quota_for_model "$VOICE_LOC" "${VOICE_MODELS[$i]}" "${VOICE_CAPACITY[$i]}"; then
+                echo "⚠️  Warning: Previously selected VOICE region ($VOICE_LOC) no longer has quota for ${VOICE_MODELS[$i]}"
+                echo "   Clearing AZURE_OPENAI_LOCATION_VOICE — you will be re-prompted"
+                echo ""
+                azd env set AZURE_OPENAI_LOCATION_VOICE ""
+                VOICE_LOC=""
+                voice_valid=false
+                break
+            fi
+        done
+    fi
+    
+    if [ -n "$RESEARCH_LOC" ]; then
+        local research_valid=true
+        for i in "${!RESEARCH_MODELS[@]}"; do
+            if ! has_quota_for_model "$RESEARCH_LOC" "${RESEARCH_MODELS[$i]}" "${RESEARCH_CAPACITY[$i]}"; then
+                echo "⚠️  Warning: Previously selected RESEARCH region ($RESEARCH_LOC) no longer has quota for ${RESEARCH_MODELS[$i]}"
+                echo "   Clearing AZURE_OPENAI_LOCATION_RESEARCH — you will be re-prompted"
+                echo ""
+                azd env set AZURE_OPENAI_LOCATION_RESEARCH ""
+                RESEARCH_LOC=""
+                research_valid=false
+                break
+            fi
+        done
+    fi
+    
+    # Skip prompt if all env vars are set and still valid
     if [ -n "$PRIMARY_LOC" ] && [ -n "$VOICE_LOC" ] && [ -n "$RESEARCH_LOC" ]; then
         echo "✅ Model regions already configured:"
         echo "   Primary:  $PRIMARY_LOC"
@@ -260,7 +407,7 @@ main() {
     # ────────────────────────────────────────────────────────────
     if [ -z "$PRIMARY_LOC" ]; then
         echo "Scanning for Primary Foundry regions (gpt-5.2, gpt-4.1, gpt-4o-transcribe)..."
-        readarray -t primary_regions < <(find_available_regions PRIMARY_MODELS)
+        readarray -t primary_regions < <(find_available_regions PRIMARY_MODELS PRIMARY_CAPACITY)
         PRIMARY_LOC=$(pick_region "PRIMARY" primary_regions "$DEFAULT_PRIMARY")
         azd env set AZURE_OPENAI_LOCATION_PRIMARY "$PRIMARY_LOC"
     else
@@ -273,7 +420,7 @@ main() {
     if [ -z "$VOICE_LOC" ]; then
         echo ""
         echo "Scanning for Voice Foundry regions (gpt-realtime)..."
-        readarray -t voice_regions < <(find_available_regions VOICE_MODELS)
+        readarray -t voice_regions < <(find_available_regions VOICE_MODELS VOICE_CAPACITY)
         VOICE_LOC=$(pick_region "VOICE" voice_regions "$DEFAULT_VOICE")
         azd env set AZURE_OPENAI_LOCATION_VOICE "$VOICE_LOC"
     else
@@ -286,7 +433,7 @@ main() {
     if [ -z "$RESEARCH_LOC" ]; then
         echo ""
         echo "Scanning for Research Foundry regions (o3-deep-research)..."
-        readarray -t research_regions < <(find_available_regions RESEARCH_MODELS)
+        readarray -t research_regions < <(find_available_regions RESEARCH_MODELS RESEARCH_CAPACITY)
         RESEARCH_LOC=$(pick_region "RESEARCH" research_regions "$DEFAULT_RESEARCH")
         azd env set AZURE_OPENAI_LOCATION_RESEARCH "$RESEARCH_LOC"
     else
