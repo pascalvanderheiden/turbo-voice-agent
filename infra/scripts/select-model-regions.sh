@@ -11,9 +11,22 @@ trap 'echo "❌ select-model-regions.sh failed at line $LINENO (exit $?)" >&2' E
 # Usage: get_azd_env VAR_NAME  -> echoes value or empty string
 # ──────────────────────────────────────────────────────────────────
 get_azd_env() {
-    azd env get-values 2>/dev/null | grep "^${1}=" | cut -d'=' -f2- | tr -d '"'
+    (azd env get-values 2>/dev/null || true) | awk -F= -v key="$1" '
+        $1 == key {
+            value = substr($0, index($0, "=") + 1)
+            gsub(/^"|"$/, "", value)
+            print value
+        }
+        END { exit 0 }
+    '
 }
 
+has_azd_env() {
+    (azd env get-values 2>/dev/null || true) | awk -F= -v key="$1" '
+        $1 == key { found = 1 }
+        END { exit found ? 0 : 1 }
+    '
+}
 
 # ──────────────────────────────────────────────────────────────────
 # Model Groups — each Foundry account hosts a group of models
@@ -94,17 +107,9 @@ is_model_available() {
         return 1
     fi
 
-    # Also verify the quota dimension exists for this model.
-    # Dimension format: OpenAI.<SKU>.<model-name>
-    local quota_dimension="OpenAI.${QUOTA_SKU}.${model_name}"
-    local usage
-    usage=$(az cognitiveservices usage list \
-        --location "$region" \
-        --query "[?name.value=='$quota_dimension'].limit" \
-        -o tsv 2>/dev/null || echo "")
-
-    # If quota dimension exists (even with limit 0), model is deployable in region
-    [ -n "$usage" ]
+    # Model list is the deployability signal. Some models do not expose a matching
+    # GlobalStandard quota dimension even though deployment preflight accepts them.
+    return 0
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -133,7 +138,8 @@ has_quota_for_model() {
     fi
     
     # Parse quota — check if (limit - current) >= required_capacity
-    local has_sufficient=$(echo "$usage" | python3 -c "
+    local has_sufficient
+    has_sufficient=$(echo "$usage" | python3 -c "
 import sys, json
 required = int('$required_capacity')
 try:
@@ -143,11 +149,10 @@ try:
         limit = item.get('limit', 0)
         current = item.get('current', 0)
         available = limit - current
-        if available >= required:
-            print('true')
-            sys.exit(0)
-    print('false')
-except:
+        print('true' if available >= required else 'false')
+    else:
+        print('false')
+except Exception:
     print('false')
 " 2>/dev/null || echo "false")
     
@@ -207,15 +212,9 @@ find_available_regions() {
     eval "local capacities=(\"\${${capacities_var}[@]}\")"
     
     local available_regions=()
-    
-    echo "" >&2
-    echo "Checking availability for: ${models[*]}" >&2
-    echo "" >&2
-    
+
     for region in "${CANDIDATE_REGIONS[@]}"; do
         local all_ok=true
-        local region_output=""
-        
         # Check each model in the group
         for i in "${!models[@]}"; do
             local model="${models[$i]}"
@@ -223,42 +222,28 @@ find_available_regions() {
             
             # Check model availability (model list + quota dimension exists)
             if ! is_model_available "$region" "$model"; then
-                region_output+="    ✗ ${model} — not available in region\n"
                 all_ok=false
                 continue
             fi
             
-            # Check quota
-            local quota_info=$(get_quota_info "$region" "$model")
+            # If Azure exposes a quota dimension for this model, enforce it.
+            # If not, rely on model-list availability; azd preflight also omits warnings for those models.
+            local quota_info
+            quota_info=$(get_quota_info "$region" "$model")
             if [ -n "$quota_info" ]; then
-                local available=$(echo "$quota_info" | python3 -c "import sys, json; print(json.load(sys.stdin).get('available', 0))" 2>/dev/null || echo "0")
-                local limit=$(echo "$quota_info" | python3 -c "import sys, json; print(json.load(sys.stdin).get('limit', 0))" 2>/dev/null || echo "0")
-                
-                if has_quota_for_model "$region" "$model" "$required"; then
-                    region_output+="    ✓ ${model} — quota ${available}/${limit} available (need ${required})\n"
-                else
-                    region_output+="    ✗ ${model} — quota ${available}/${limit} available (need ${required})\n"
+                if ! has_quota_for_model "$region" "$model" "$required"; then
                     all_ok=false
                 fi
-            else
-                region_output+="    ✗ ${model} — no quota dimension found\n"
-                all_ok=false
             fi
         done
         
-        # Print region summary to stderr
         if [ "$all_ok" = true ]; then
-            echo -e "  Region $region:" >&2
-            echo -e "$region_output" >&2
             available_regions+=("$region")
-        else
-            echo -e "  Region $region: SKIP" >&2
-            echo -e "$region_output" >&2
         fi
     done
     
-    # ONLY stdout: the space-separated region list for command substitution
-    echo "${available_regions[@]}"
+    # ONLY stdout: one qualifying region per line for the caller to collect.
+    printf '%s\n' "${available_regions[@]+"${available_regions[@]}"}"
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -428,7 +413,7 @@ main() {
     # Primary Foundry (gpt-5.2, gpt-4.1, gpt-4o-transcribe)
     # ────────────────────────────────────────────────────────────
     if [ -z "$PRIMARY_LOC" ]; then
-        echo "Scanning for Primary Foundry regions (gpt-5.2, gpt-4.1, gpt-4o-transcribe)..." >&2
+        echo "Finding Primary Foundry regions with available quota..." >&2
         primary_regions=()
         while IFS= read -r _region; do
             [ -n "$_region" ] && primary_regions+=("$_region")
@@ -447,7 +432,7 @@ main() {
     # ────────────────────────────────────────────────────────────
     if [ -z "$VOICE_LOC" ]; then
         echo "" >&2
-        echo "Scanning for Voice Foundry regions (gpt-realtime)..." >&2
+        echo "Finding Voice Foundry regions with available quota..." >&2
         voice_regions=()
         while IFS= read -r _region; do
             [ -n "$_region" ] && voice_regions+=("$_region")
@@ -466,7 +451,7 @@ main() {
     # ────────────────────────────────────────────────────────────
     if [ -z "$RESEARCH_LOC" ]; then
         echo "" >&2
-        echo "Scanning for Research Foundry regions (o3-deep-research)..." >&2
+        echo "Finding Research Foundry regions with available quota..." >&2
         research_regions=()
         while IFS= read -r _region; do
             [ -n "$_region" ] && research_regions+=("$_region")

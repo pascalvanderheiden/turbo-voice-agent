@@ -10,9 +10,22 @@ set -euo pipefail
 # Usage: get_azd_env VAR_NAME  -> echoes value or empty string
 # ──────────────────────────────────────────────────────────────────
 get_azd_env() {
-    azd env get-values 2>/dev/null | grep "^${1}=" | cut -d'=' -f2- | tr -d '"'
+    (azd env get-values 2>/dev/null || true) | awk -F= -v key="$1" '
+        $1 == key {
+            value = substr($0, index($0, "=") + 1)
+            gsub(/^"|"$/, "", value)
+            print value
+        }
+        END { exit 0 }
+    '
 }
 
+has_azd_env() {
+    (azd env get-values 2>/dev/null || true) | awk -F= -v key="$1" '
+        $1 == key { found = 1 }
+        END { exit found ? 0 : 1 }
+    '
+}
 
 # ──────────────────────────────────────────────────────────────────
 # Helpers
@@ -177,8 +190,7 @@ collect_custom_domain() {
     local domain
     domain=$(get_azd_env CUSTOM_DOMAIN_NAME)
     
-    # If already set (even to empty), skip
-    if [ -n "$(get_azd_env CUSTOM_DOMAIN_NAME)" ]; then
+    if [ -n "$(get_azd_env CUSTOM_DOMAIN_CONFIGURED)" ]; then
         if [ -n "$domain" ]; then
             echo "✅ Custom domain: $domain (from azd env)"
         else
@@ -188,16 +200,16 @@ collect_custom_domain() {
     fi
     
     if is_noninteractive; then
-        # CI mode — default to empty
         azd env set CUSTOM_DOMAIN_NAME ""
+        azd env set CUSTOM_DOMAIN_CONFIGURED "true"
         echo "✅ Custom domain: none (using Container Apps default)"
         return 0
     fi
     
-    # Interactive — prompt once
     echo ""
-    read -rp "Custom domain name (leave empty to use Container Apps default): " domain
+    read -rp "Custom domain name (leave empty to use Container Apps default): " domain </dev/tty
     azd env set CUSTOM_DOMAIN_NAME "$domain"
+    azd env set CUSTOM_DOMAIN_CONFIGURED "true"
     
     if [ -n "$domain" ]; then
         echo "✅ Custom domain: $domain"
@@ -214,8 +226,7 @@ collect_cert_name() {
     local cert
     cert=$(get_azd_env EXISTING_CERT_NAME)
     
-    # If already set (even to empty), skip
-    if [ -n "$(get_azd_env EXISTING_CERT_NAME)" ]; then
+    if [ -n "$(get_azd_env EXISTING_CERT_CONFIGURED)" ]; then
         if [ -n "$cert" ]; then
             echo "✅ Managed certificate: $cert (from azd env)"
         fi
@@ -228,18 +239,20 @@ collect_cert_name() {
     
     if [ -z "$domain" ]; then
         azd env set EXISTING_CERT_NAME ""
+        azd env set EXISTING_CERT_CONFIGURED "true"
         return 0
     fi
     
     if is_noninteractive; then
         azd env set EXISTING_CERT_NAME ""
+        azd env set EXISTING_CERT_CONFIGURED "true"
         return 0
     fi
     
-    # Interactive — prompt for cert name
     echo ""
-    read -rp "Existing managed certificate name (leave empty to skip): " cert
+    read -rp "Existing managed certificate name (leave empty to skip): " cert </dev/tty
     azd env set EXISTING_CERT_NAME "$cert"
+    azd env set EXISTING_CERT_CONFIGURED "true"
     
     if [ -n "$cert" ]; then
         echo "✅ Managed certificate: $cert"
