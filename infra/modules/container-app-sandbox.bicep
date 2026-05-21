@@ -62,7 +62,7 @@ resource sandbox 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
+        minReplicas: 0
         maxReplicas: 1  // Tasks stored in-memory — multiple replicas break task routing
       }
     }
