@@ -294,42 +294,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.debug("Dev-task recovery skipped (non-fatal)")
 
-    # Start ACI orphan cleanup background task if ACI sandbox mode is enabled
-    aci_cleanup_task = None
+    # Auto-start local Docker sandbox when running outside Azure
+    # (Azure deployments use the dynamic session pool via SessionSandboxClient.)
     docker_sandbox_svc = None
-    if os.getenv("USE_ACI_SANDBOX", "").lower() == "true":
-        try:
-            from app.services.aci_sandbox_service import AciSandboxService, ORPHAN_CLEANUP_INTERVAL
-            from app.agents.dev_agent import _active_sandbox_tasks
-
-            aci_svc = AciSandboxService()
-            # Store on dev_agent for pipeline use
-            dev_agent._aci_sandbox_service = aci_svc
-
-            async def _aci_cleanup_loop():
-                while True:
-                    await asyncio.sleep(ORPHAN_CLEANUP_INTERVAL)
-                    try:
-                        active = set(_active_sandbox_tasks.keys())
-                        deleted = await aci_svc.cleanup_orphans(active)
-                        if deleted:
-                            logger.info(
-                                "ACI orphan cleanup: deleted %d container group(s)", deleted
-                            )
-                    except Exception as exc:
-                        logger.warning("ACI orphan cleanup error: %s", exc)
-
-            aci_cleanup_task = asyncio.create_task(_aci_cleanup_loop())
-            logger.info("ACI sandbox mode enabled — orphan cleanup started")
-        except Exception as exc:
-            logger.warning(
-                "USE_ACI_SANDBOX=true but ACI init failed — "
-                "falling back to static sandbox URL: %s", exc,
-            )
-
-    # Auto-start local Docker sandbox when ACI is not in use
     if (
-        os.getenv("USE_ACI_SANDBOX", "").lower() != "true"
+        not os.getenv("SESSION_POOL_MANAGEMENT_ENDPOINT")
         and os.getenv("AUTO_START_SANDBOX", "true").lower() != "false"
     ):
         try:
@@ -356,8 +325,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    if aci_cleanup_task:
-        aci_cleanup_task.cancel()
     if docker_sandbox_svc:
         await docker_sandbox_svc.stop()
     await todo_mcp_client.stop()

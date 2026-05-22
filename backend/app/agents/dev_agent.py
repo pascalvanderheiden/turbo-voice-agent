@@ -26,12 +26,6 @@ from app.services.session_sandbox_client import SandboxClient, get_sandbox_clien
 logger = logging.getLogger(__name__)
 
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
-# Phase 3 of sandbox-dynamic-sessions: sandbox HTTP goes through the
-# ``SandboxClient`` abstraction (session pool in Azure, local container in dev).
-# ``USE_ACI_SANDBOX`` is still read here so the legacy orphan-cleanup task in
-# ``main.py`` keeps functioning until Phase 4 deletes it; the new code paths
-# below MUST NOT branch on it.
-USE_ACI_SANDBOX = os.getenv("USE_ACI_SANDBOX", "").lower() == "true"
 
 _DEFAULT_SQUAD_THEME = "Star Wars"
 
@@ -83,10 +77,9 @@ def _buf_append(task_id: str, entry: dict) -> None:
 async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = None) -> bool:
     """Kill any active sandbox task associated with a dev task. Returns True if killed.
 
-    Phase 3 (sandbox-dynamic-sessions): we go through the unified ``SandboxClient``
-    abstraction and ALWAYS call ``stop_session(task_id)`` regardless of runtime.
-    The legacy ACI deletion is no longer required because the new code path
-    no longer provisions ACI groups.
+    All sandbox HTTP goes through the unified ``SandboxClient`` abstraction and we
+    ALWAYS call ``stop_session(task_id)`` to release the per-task seat in the pool
+    (no-op in local-dev).
     """
     sandbox_task_id = _active_sandbox_tasks.pop(task_id, None)
     client = get_sandbox_client()
@@ -115,15 +108,6 @@ async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = N
     except Exception as exc:
         logger.debug("stop_session(%s) raised (tolerated): %s", task_id, exc)
 
-    # Phase-4 cleanup: this still drives the legacy ACI teardown so in-flight
-    # tasks at deploy-time don't strand container groups. Removed in Phase 4
-    # alongside the rest of the ACI module.
-    if dev_agent is not None and getattr(dev_agent, "_aci_sandbox_service", None):
-        try:
-            await dev_agent._aci_sandbox_service.delete_container_group(task_id)
-        except Exception:
-            pass
-
     return sandbox_task_id is not None
 
 
@@ -148,45 +132,22 @@ class DevAgent:
         self._slides_service = slides_service
         self._profile_service = profile_service
         self._squad_enabled_tasks: dict[str, bool] = {}  # Task-scoped squad flag
-        # Phase-4-only: kept for the legacy orphan-cleanup background task. The
-        # new code path uses ``_sandbox_client()`` and never touches this.
-        self._aci_sandbox_service = None
 
     def _sandbox_client(self) -> SandboxClient:
         """Return the singleton sandbox HTTP client (session pool or local).
 
-        Phase 3 of sandbox-dynamic-sessions: every per-task HTTP call goes
-        through this. The client transparently routes via the Azure session
-        pool (when ``SESSION_POOL_MANAGEMENT_ENDPOINT`` is set) or via the
-        local docker-compose container in dev.
+        Every per-task HTTP call goes through this. The client transparently
+        routes via the Azure session pool (when ``SESSION_POOL_MANAGEMENT_ENDPOINT``
+        is set) or via the local docker-compose container in dev.
         """
         return get_sandbox_client()
 
-    async def _provision_aci_sandbox(self, task_id: str, gh_token: str = "") -> None:
-        """No-op shim retained for call-site compatibility.
-
-        Sessions allocate implicitly on the first HTTP request (see Decision §5
-        of the sandbox-dynamic-sessions design doc), so explicit provisioning is
-        no longer required. The method body is preserved as a no-op to avoid a
-        large edit ripple — call sites are inlined out in Phase 4.
-        """
-        return None
-
-    async def _start_aci_provisioning(self, task_id: str, gh_token: str = "") -> None:
-        """No-op shim — see ``_provision_aci_sandbox``."""
-        return None
-
-    async def _finish_aci_provisioning(self, task_id: str) -> None:
-        """No-op shim — see ``_provision_aci_sandbox``."""
-        return None
-
-    async def _teardown_aci_sandbox(self, task_id: str) -> None:
+    async def _teardown_sandbox_session(self, task_id: str) -> None:
         """Release the dynamic-session pool entry for a dev-task.
 
-        Replaces the legacy ACI container-group delete: under dynamic sessions
-        the pool cools down automatically, but we still call ``stop_session``
-        on user-driven cancellation/teardown to release the seat eagerly.
-        Tolerant of 404 / local-dev no-op.
+        Under dynamic sessions the pool cools down automatically, but we still
+        call ``stop_session`` on user-driven cancellation/teardown to release
+        the seat eagerly. Tolerant of 404 / local-dev no-op.
         """
         try:
             await self._sandbox_client().stop_session(task_id)
@@ -476,8 +437,8 @@ class DevAgent:
         finally:
             # Clean up task-scoped squad flag
             self._squad_enabled_tasks.pop(task_id, None)
-            # Teardown ACI sandbox if in ACI mode
-            await self._teardown_aci_sandbox(task_id)
+            # Release dynamic-session pool seat (no-op for local-dev).
+            await self._teardown_sandbox_session(task_id)
             # Always emit exit marker — this is the ONLY way SSE consumers know
             # the pipeline is done. Without this, the frontend stream hangs forever.
             if task_id in _pipeline_outputs:
@@ -499,9 +460,6 @@ class DevAgent:
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         mockup_desc = self._extract_mockup_description(spec_content)
         model = await self._get_user_model(user_id)
-
-        # Provision ACI sandbox if in ACI mode
-        await self._provision_aci_sandbox(task_id)
 
         # Each dev task gets its own dedicated workspace directory
         work_dir = f"/workspace/{task_id}"
@@ -614,9 +572,6 @@ class DevAgent:
         spec_content = await self._get_spec_content(task.spec_id, user_id)
         foundation_prompt, feature_prompts = self._extract_openspec_config(spec_content)
         model = await self._get_user_model(user_id)
-
-        # Provision ACI sandbox if in ACI mode
-        await self._provision_aci_sandbox(task_id)
 
         # Each dev task gets its own dedicated workspace directory
         work_dir = f"/workspace/{task_id}"
@@ -759,10 +714,6 @@ class DevAgent:
             r"-+", "-", re.sub(r"[^a-z0-9-]", "", task.title.lower().replace(" ", "-"))
         ).strip("-")[:30]
 
-        # Start ACI provisioning and gather slides content concurrently.
-        # The ARM deploy + image pull takes 30-60s; content gathering is pure DB reads.
-        await self._start_aci_provisioning(task_id)
-
         # Gather slides content and deck config from refined draft
         slides_prompt = f"Create a slide deck for: {task.title}"
         deck_config: dict = {}
@@ -823,9 +774,6 @@ class DevAgent:
         deck_config.setdefault("theme", "default")
         deck_config.setdefault("appearance", "dark")
         deck_config.setdefault("palette", "blue")
-
-        # Wait for ACI sandbox to be healthy before executing commands
-        await self._finish_aci_provisioning(task_id)
 
         await svc.set_status(task_id, "running")
 

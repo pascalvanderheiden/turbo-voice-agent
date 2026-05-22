@@ -30,11 +30,11 @@
 
 ## 4. Backend: remove ACI implementation
 
-- [ ] 4.1 Delete `backend/app/services/aci_sandbox_service.py`
-- [ ] 4.2 Delete the orphan-ACI cleanup background task in `backend/app/main.py` and its registration
-- [ ] 4.3 Remove `USE_ACI_SANDBOX` from backend settings/env, code branches, docs
-- [ ] 4.4 Remove split-provisioning API (`start_provisioning`/`wait_until_ready`) since allocation is now implicit on first request
-- [ ] 4.5 Remove ACI-related tests; update or rewrite affected sandbox tests to target `SessionSandboxClient`
+- [x] 4.1 Delete `backend/app/services/aci_sandbox_service.py`
+- [x] 4.2 Delete the orphan-ACI cleanup background task in `backend/app/main.py` and its registration
+- [x] 4.3 Remove `USE_ACI_SANDBOX` from backend settings/env, code branches, docs
+- [x] 4.4 Remove split-provisioning API (`start_provisioning`/`wait_until_ready`) since allocation is now implicit on first request
+- [x] 4.5 Remove ACI-related tests; update or rewrite affected sandbox tests to target `SessionSandboxClient`
 
 ## 5. Sandbox image: warm-up readiness
 
