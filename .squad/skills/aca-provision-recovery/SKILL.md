@@ -392,6 +392,87 @@ The implicit `dependsOn` from the parameter reference is sufficient — ARM depl
 
 Any ACA resource that **synchronously pulls during create** in a single ARM operation. Session pools today; likely future resource types with the same shape (prewarmed pools, replicas, etc.). If a resource has the "create + pull" combined, pre-grant a UAMI. Don't rely on a sibling role assignment to its system-assigned identity.
 
+## Session Pool Variant: Stale Image Probe Mismatch (Postprovision Chicken-and-Egg)
+
+**Confidence:** HIGH (validated 2026-05-22 — Pascal hit it immediately after the UAMI fix landed)
+
+### Symptoms
+
+- Outer error from `azd`:
+  ```
+  SessionPoolOperationError: Failed to provision session pool 'sp-sandbox-<token>'.
+  Error details: pool group create/update failed with error: pool is in bad status
+  because pods are crashing, crashing pods count: 0.
+  ```
+- The "crashing pods count: 0" wording is misleading — it does **not** mean zero failures. It means the pool currently has zero healthy pods and the RP has given up trying to start more. (Internally: pods are killed by the Liveness probe before they ever count as "running", so they never reach the "crashing" bucket.)
+- `az resource show` on the pool: `provisioningState: Failed`, `nodeCount: 0`, UAMI is correctly attached and has AcrPull (so the previous variant is genuinely fixed).
+- Image **does** exist in ACR — but its `createdTime` predates the commit that added the probe endpoints the pool is configured to hit.
+
+### Root Cause
+
+`build-sandbox-image.sh` is wired to azd `postprovision` and `postdeploy` hooks. When the pool fails during provision:
+1. The pool resource fails.
+2. `azd provision` aborts → `postprovision` hook never runs → image not rebuilt.
+3. Next `azd provision` reuses the same stale `:latest` image.
+4. Probes (`/health` Liveness 10s, `/ready` Startup 5s × 30) hit endpoints that don't exist in the stale image → 404 → pod killed by Liveness within ~30s → pool reports "pods crashing".
+5. Loop repeats forever; nothing about the failure surfaces "stale image" — the user blames the pool config, the UAMI, the probes, anything but the image.
+
+### Diagnosis Steps
+
+```bash
+# 1. Image creation timestamp
+az acr repository show -n <acr-name> --image turbo-voice-agent/sandbox:latest \
+  --query "{created:createdTime,digest:digest}" -o json
+
+# 2. Last commit timestamp for sandbox/ files
+git log -1 --pretty=format:"%ad" --date=iso-strict -- sandbox/
+
+# 3. If git timestamp > image createdTime → image is stale → this is your failure mode.
+```
+
+### Recovery
+
+1. **Rebuild the image directly** (do NOT wait for postprovision):
+   ```bash
+   bash infra/scripts/build-sandbox-image.sh
+   ```
+   `az acr build` runs server-side in ACR (~3 minutes). Overwrites `:latest`.
+
+2. **Delete the failed pool** (so name collision doesn't block recreate):
+   ```bash
+   az resource delete --ids /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/sessionPools/<pool-name>
+   ```
+
+3. **Re-run** `azd provision`. The pool now pulls the fresh image, probes return 200, `nodeCount` climbs to `readySessionInstances`, deployment succeeds, postprovision finally runs (and rebuilds the image again — harmless idempotent no-op for that cycle).
+
+### Prevention
+
+Move the image build to **`preprovision`** in `azure.yaml`:
+
+```yaml
+hooks:
+  preprovision:
+    posix:
+      run: |
+        # ... existing param/region/entra scripts ...
+        # Rebuild sandbox image BEFORE the pool tries to start.
+        # No-op on first run (script exits 0 when AZURE_CONTAINER_REGISTRY is unset).
+        bash infra/scripts/build-sandbox-image.sh
+```
+
+The script already exits 0 cleanly when ACR doesn't exist yet (first-ever run), so this is safe to add unconditionally. On every subsequent run, the image is rebuilt against the current `sandbox/` source before the pool is reconciled — eliminating the staleness window.
+
+Keep `postprovision`/`postdeploy` invocations too: postprovision rebuilds with full env (in case preprovision was skipped), postdeploy refreshes on code-only changes.
+
+### When to apply this pattern
+
+Any ACA resource (or future resource type) that:
+- Has health probes configured against application endpoints, AND
+- Pulls a custom image at create time, AND
+- Has the image build step wired to a hook that only runs on successful provision.
+
+If you have a "image build → resource create → image rebuild" cycle where the rebuild only runs after success, you have this bug latent. Move at least one build invocation to a pre-resource-creation hook.
+
 ## References
 - [Azure Container Apps Managed Identity](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)
 - [ACR authentication with Managed Identity](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-authentication-managed-identity)

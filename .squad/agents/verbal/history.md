@@ -372,3 +372,32 @@ Cross-references: `.squad/skills/aca-provision-recovery/SKILL.md`, decisions.md 
 - The session pool is in the CAE's region (East US 2 in this deployment), even though `AZURE_LOCATION=westeurope`. That's because `cae.outputs.id` is the source of truth — pool MUST match CAE region. Don't try to "fix" this.
 - Pool delete via `az resource delete --ids <pool-id>` works (takes ~1 minute). No special `az containerapp sessionpool` CLI needed.
 - Apply the same pattern (pre-granted UAMI for image pull) to **any future** ACA resource that creates+pulls in a single ARM operation. Container Apps themselves get away with system-assigned because their revision provisioning is async and ARM marks them Succeeded before the first pull completes — session pools do NOT have that grace.
+
+## 2026-05-22T15:30Z — Session pool "pods crashing, count: 0" → stale ACR image
+
+**Symptom after UAMI fix (`efd6565`) landed:** `azd provision` still failed at the pool with `SessionPoolOperationError: pool group create/update failed with error: pool is in bad status because pods are crashing, crashing pods count: 0`. Pool ended in `provisioningState: Failed`, `nodeCount: 0`, but UAMI was correctly attached and had AcrPull (so the previous variant was genuinely resolved).
+
+**Smoking gun:**
+- `az acr repository show -n acr2mta7feoalzyq --image turbo-voice-agent/sandbox:latest --query createdTime` → `2026-05-22T11:17:08Z`.
+- `git log -1 --pretty=format:"%ad" --date=iso-strict ceae508 -- sandbox/` (Phase 5 `/health` + `/ready` + marker) → `2026-05-22T11:43:04Z`.
+- Image is **26 minutes older than the Phase 5 commit**. The pool's Liveness probe (`/health`, 10s) and Startup probe (`/ready`, 5s × 30) were hitting endpoints that don't exist in the running container. Pods get 404, Liveness kills them within ~30s, pool reports "crashing" with `nodeCount: 0`.
+
+**Why the image was stale:** `build-sandbox-image.sh` was wired only to `postprovision` + `postdeploy`. Each `azd provision` died at the pool step → post-hooks never ran → `:latest` stayed at the pre-Phase-5 digest forever. Chicken-and-egg: pool fails because image is stale, image won't rebuild because pool fails.
+
+**"crashing pods count: 0" semantics:** this RP message does NOT mean "zero failures". It means "currently zero healthy pods and the RP has given up". Pods are getting killed by Liveness before they ever reach the "running, then crashed" state the counter increments on.
+
+**Fix shape (no code/Bicep change):**
+1. `bash infra/scripts/build-sandbox-image.sh` — rebuilt directly in ACR (5m 18s via `az acr build`). New digest `sha256:7ec04eaa664a0f91a478071680dad4df1ef5462401ae94319c00807b9460aa92`.
+2. `az resource delete --ids .../sessionPools/sp-sandbox-2mta7feoalzyq` — clears the Failed resource so retry isn't blocked by name collision (~3m).
+3. `azure.yaml` — added `bash infra/scripts/build-sandbox-image.sh` to the `preprovision` hook (Posix + Windows branches). The script already exits 0 cleanly when `AZURE_CONTAINER_REGISTRY` is unset (first-ever run), so it is safe to add unconditionally. Eliminates the staleness window for every future run.
+
+**Validation:** `python3 -c "import yaml; yaml.safe_load(open('azure.yaml'))"` OK. `az bicep build` clean (only pre-existing warnings). Pool is deleted, fresh image is in ACR.
+
+**Pascal's next step:** `azd provision`. Preprovision will rebuild the image again (no-op-equivalent since source is unchanged from the manual rebuild), pool will be created, will pull `:latest`, probes will return 200, `nodeCount` will climb to `readySessionInstances=1`, deployment will succeed, postprovision/postdeploy fire and refresh outputs.
+
+**Patterns reinforced:**
+- Any deployment where the image-build hook only runs *after* successful resource create is latently vulnerable to this loop if the resource pulls the image and probes app-level endpoints. Mitigation: ensure at least one image-build invocation runs *before* the resource is reconciled.
+- "Pool in bad status, crashing pods count: 0" is a structural message — read it as "no healthy pods, RP gave up". Treat as application-side failure (probe / startup / image), not pool-config failure.
+- Image freshness diagnostic: `az acr repository show ... --query createdTime` vs `git log -1 --pretty=format:"%ad" --date=iso-strict -- <source-dir>`. If image is older than the source dir, you have a postprovision-hook chicken-and-egg.
+
+**Skill updated:** `.squad/skills/aca-provision-recovery/SKILL.md` gained section "Session Pool Variant: Stale Image Probe Mismatch (Postprovision Chicken-and-Egg)".

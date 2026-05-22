@@ -68,6 +68,13 @@ hooks:
         bash infra/scripts/collect-deployment-params.sh
         bash infra/scripts/select-model-regions.sh
         bash infra/scripts/setup-entra-app.sh
+        # Rebuild sandbox image BEFORE the session pool is (re)deployed so the
+        # pool always pulls a current image whose /health + /ready endpoints
+        # match the probes in session-pool.bicep. No-op on first ever run
+        # (script exits 0 when AZURE_CONTAINER_REGISTRY is unset). Prevents
+        # the chicken-and-egg where a failed pool blocks postprovision (which
+        # builds the image), leaving :latest stale forever.
+        bash infra/scripts/build-sandbox-image.sh
     windows:
       shell: pwsh
       interactive: true
@@ -75,6 +82,7 @@ hooks:
         bash infra/scripts/collect-deployment-params.sh
         bash infra/scripts/select-model-regions.sh
         bash infra/scripts/setup-entra-app.sh
+        bash infra/scripts/build-sandbox-image.sh
 
   postprovision:
     posix:
