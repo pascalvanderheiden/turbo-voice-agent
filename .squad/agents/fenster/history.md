@@ -40,3 +40,11 @@ Backend has 12 specialist agents: notes, brainstorm, research, spec, dev, market
 - Use `respx` (httpx-native) for mocking outbound HTTP in tests instead of `requests-mock` or hand-rolled stubs.
 - The session pool management endpoint contract is `{SESSION_POOL_MANAGEMENT_ENDPOINT}` + `{SESSION_POOL_NAME}` — both injected as env vars by infra (Verbal). Don't hardcode.
 - Commits can sweep in unrelated pre-staged work from disk — always `git status` before commit and call out anything unexpected in the message. `bcdb0bf` swept in Phase 1 Bicep changes that had three latent schema bugs; Verbal had to clean up afterwards in `b70212d`.
+
+## 2026-05-22: Phase 3 — SandboxClient abstraction
+Refactored ~25 httpx call sites in `dev_agent.py`, `routes/dev.py`, `routes/sandbox.py` to route through unified `SandboxClient` protocol (`SessionSandboxClient` for ACA dynamic sessions, `LocalSandboxClient` for docker-compose). Factory `get_sandbox_client()` lazy-selects via `SESSION_POOL_MANAGEMENT_ENDPOINT` env var. Schema: `containerAppUrl` → `sessionIdentifier` with lazy upgrade (read tolerates legacy field, write never emits it). ACI helpers became no-op shims to preserve call sites; Phase 4 removes them.
+
+**Learnings:**
+- Drop a shared `httpx.AsyncClient(...)` context manager when refactoring to a client method — the indentation collapse breaks the body indent by 4 spaces. Always re-check ruff/AST after such edits.
+- For admin endpoints with no dev-task identifier (e.g., `/health`, `/tasks` listing in `routes/sandbox.py`), use a synthetic `"admin"` identifier. In local-dev `LocalSandboxClient` ignores it; in session-pool mode it allocates a dedicated admin session.
+- `SandboxClient.stream_response` is an `@asynccontextmanager` yielding `httpx.Response` so consumers can call `aiter_lines()` — critical for SSE proxies and `_sandbox_exec` streaming.

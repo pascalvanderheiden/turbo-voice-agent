@@ -24,7 +24,11 @@ class InMemorySandboxService(JsonPersistenceMixin):
         self._load_from_disk()
 
     def _doc_to_model(self, doc: dict) -> SandboxState:
-        """Convert a stored dict to a SandboxState model."""
+        """Convert a stored dict to a SandboxState model.
+
+        Tolerates legacy ``containerAppUrl`` field (ignored). See
+        ``SandboxService._doc_to_model`` for the lazy-upgrade rationale.
+        """
         return SandboxState(
             id=doc["id"],
             userId=doc["userId"],
@@ -32,7 +36,7 @@ class InMemorySandboxService(JsonPersistenceMixin):
             skillsHash=doc.get("skillsHash"),
             githubConnected=doc.get("githubConnected", False),
             config=SandboxConfig(**doc["config"]) if doc.get("config") else SandboxConfig(),
-            containerAppUrl=doc.get("containerAppUrl"),
+            sessionIdentifier=doc.get("sessionIdentifier"),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
         )
@@ -58,7 +62,7 @@ class InMemorySandboxService(JsonPersistenceMixin):
             "skillsHash": state.skills_hash,
             "githubConnected": state.github_connected,
             "config": state.config.model_dump(),
-            "containerAppUrl": state.container_app_url,
+            "sessionIdentifier": state.session_identifier,
             "docType": "sandbox_state",
             "createdAt": state.created_at.isoformat()
             if isinstance(state.created_at, datetime)
@@ -83,7 +87,7 @@ class InMemorySandboxService(JsonPersistenceMixin):
                 "skillsHash": None,
                 "githubConnected": False,
                 "config": config.model_dump(),
-                "containerAppUrl": None,
+                "sessionIdentifier": None,
                 "docType": "sandbox_state",
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
@@ -111,7 +115,7 @@ class InMemorySandboxService(JsonPersistenceMixin):
                 "skillsHash": None,
                 "githubConnected": False,
                 "config": SandboxConfig().model_dump(),
-                "containerAppUrl": None,
+                "sessionIdentifier": None,
                 "docType": "sandbox_state",
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
@@ -139,7 +143,7 @@ class InMemorySandboxService(JsonPersistenceMixin):
                 "skillsHash": None,
                 "githubConnected": connected,
                 "config": SandboxConfig().model_dump(),
-                "containerAppUrl": None,
+                "sessionIdentifier": None,
                 "docType": "sandbox_state",
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),

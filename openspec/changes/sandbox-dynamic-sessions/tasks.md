@@ -20,13 +20,13 @@
 
 ## 3. Backend: wire client into sandbox callers
 
-- [ ] 3.1 Update `backend/app/services/sandbox_service.py`: drop `containerAppUrl`, add `sessionIdentifier` to `SandboxState`; remove per-task IP cache
-- [ ] 3.2 Replace all `_sandbox_exec` and shared `SANDBOX_URL` HTTP usage with `SessionSandboxClient.request(...)` keyed by dev-task UUID
-- [ ] 3.3 Replace SSE streaming code with `SessionSandboxClient.stream(...)`
-- [ ] 3.4 Replace file/skill endpoint calls with the client (paths unchanged)
-- [ ] 3.5 On user-initiated cancellation or task deletion, call `client.stop_session(task_id)`
-- [ ] 3.6 Local-dev fallback: when `SESSION_POOL_MANAGEMENT_ENDPOINT` is unset, route to `http://sandbox:3000` (existing docker-compose behavior)
-- [ ] 3.7 Add Cosmos schema migration / lazy upgrade so old `containerAppUrl` documents are ignored
+- [x] 3.1 Update `backend/app/services/sandbox_service.py`: drop `containerAppUrl`, add `sessionIdentifier` to `SandboxState`; remove per-task IP cache
+- [x] 3.2 Replace all `_sandbox_exec` and shared `SANDBOX_URL` HTTP usage with `SessionSandboxClient.request(...)` keyed by dev-task UUID
+- [x] 3.3 Replace SSE streaming code with `SessionSandboxClient.stream(...)`
+- [x] 3.4 Replace file/skill endpoint calls with the client (paths unchanged)
+- [x] 3.5 On user-initiated cancellation or task deletion, call `client.stop_session(task_id)`
+- [x] 3.6 Local-dev fallback: when `SESSION_POOL_MANAGEMENT_ENDPOINT` is unset, route to `http://sandbox:3000` (existing docker-compose behavior)
+- [x] 3.7 Add Cosmos schema migration / lazy upgrade so old `containerAppUrl` documents are ignored
 
 ## 4. Backend: remove ACI implementation
 

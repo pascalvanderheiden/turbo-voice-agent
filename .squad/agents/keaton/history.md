@@ -15,3 +15,9 @@ Architecture: SupervisorAgent routes to 12 specialist agents. ACI sandbox runs C
 ## Learnings
 - 2026-05-19: OSS anonymization pass pattern — seeded maintainer references at the top of `.squad/agents/*/history.md` can be revised for OSS readiness even when the files are otherwise append-only. Preserve later learning entries unless they contain direct personal identifiers.
 - 2026-05-19: Cross-repo personal-reference audit pattern — pair automated grep sweeps for maintainer identifiers and GUIDs with manual review of high-risk config/docs files, then record both actionable findings and intentional false positives (for example Azure built-in role IDs) in a central audit document before re-running verification greps.
+
+- 2026-05-22: Refreshed `.github/copilot-instructions.md` for OSS readiness + dynamic sessions architecture. Surgical edits only (130 → 140 lines): added dynamic session pool to stack + Backend patterns, documented `SessionSandboxClient` with docker-compose fallback (`http://sandbox:3000`), fixed `function_handler.py` path, clarified `CUSTOM_DOMAIN_NAME`/`EXISTING_CERT_NAME` are optional with ACA default FQDN supporting auth, added Squad + OpenSpec mentions under Git workflow. Verified zero stale ACI/SANDBOX_URL/USE_ACI_SANDBOX references remain.
+
+## Learnings
+- 2026-05-22: Doc-refresh pattern for `.github/copilot-instructions.md` — file is AI-agent guidance, not full docs. Keep ~120–180 lines, preserve existing structure, surgical edits where reality drifted. Validate with grep sweep for stale terms (`ACI`, `SANDBOX_URL`, etc.) before commit. Always verify file paths actually exist (`grep -n`, `ls`) before referencing them.
+- 2026-05-22: OSS readiness for instruction files — call out OPTIONAL deployment knobs explicitly (custom domain, cert) and mention the fallback path (ACA default FQDN with dynamic redirect URI). OSS readers don't share the original deployer's setup; explicit defaults beat implicit ones.

@@ -22,7 +22,11 @@ class SandboxState(BaseModel):
     skills_hash: str | None = Field(None, alias="skillsHash")
     github_connected: bool = Field(False, alias="githubConnected")
     config: SandboxConfig = Field(default_factory=SandboxConfig)
-    container_app_url: str | None = Field(None, alias="containerAppUrl")
+    # Per-task dynamic-session identifier (replaces ``containerAppUrl``). Carries
+    # the dev-task UUID we pass to the Container Apps session pool as the
+    # ``identifier`` query parameter. Optional because state may exist before a
+    # session has been allocated for a task.
+    session_identifier: str | None = Field(None, alias="sessionIdentifier")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 

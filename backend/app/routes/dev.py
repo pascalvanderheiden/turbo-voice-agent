@@ -13,22 +13,9 @@ from pydantic import BaseModel
 from app.agents.dev_agent import cancel_sandbox_task_for
 from app.models.dev_task import DevTask, DevTaskCreate
 from app.services.dev_service import InMemoryDevService
+from app.services.session_sandbox_client import get_sandbox_client
 
 logger = logging.getLogger(__name__)
-
-SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
-USE_ACI_SANDBOX = os.getenv("USE_ACI_SANDBOX", "").lower() == "true"
-
-
-def _resolve_sandbox_url(task_id: str = "") -> str:
-    """Resolve sandbox URL — per-task ACI or static Container App."""
-    if USE_ACI_SANDBOX and _dev_agent and hasattr(_dev_agent, "_aci_sandbox_service"):
-        svc = _dev_agent._aci_sandbox_service
-        if svc:
-            url = svc.get_sandbox_url(task_id)
-            if url:
-                return url
-    return SANDBOX_URL
 
 router = APIRouter(prefix="/api/dev", tags=["development"])
 
@@ -53,32 +40,36 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
     subdirectory (slides use a deckio subfolder), starts the right dev
     server command, polls for health, and registers in _live_previews.
     """
-    sandbox_url = _resolve_sandbox_url(task_id)
+    client = get_sandbox_client()
     base_dir = f"/workspace/{task_id}"
 
     # 1. Verify workspace exists and discover project directory
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            probe = await client.post(
-                f"{sandbox_url}/tasks",
-                json={"command": "ls -1", "args": [], "workDir": base_dir},
+        probe = await client.request(
+            "POST",
+            "/tasks",
+            identifier=task_id,
+            json={"command": "ls -1", "args": [], "workDir": base_dir},
+            timeout=15.0,
+        )
+        if probe.status_code >= 400:
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    f"Workspace for task {task_id} not found in sandbox. "
+                    "The container may have been restarted."
+                ),
             )
-            if probe.status_code >= 400:
-                raise HTTPException(
-                    status_code=410,
-                    detail=(
-                        f"Workspace for task {task_id} not found in sandbox. "
-                        "The container may have been restarted."
-                    ),
-                )
-            probe_id = probe.json().get("id")
-            # Give ls a moment to complete, then read output
-            await asyncio.sleep(2)
-            status_resp = await client.get(f"{sandbox_url}/tasks/{probe_id}/status")
-            ls_output = ""
-            if status_resp.status_code == 200:
-                for entry in status_resp.json().get("recentOutput", []):
-                    ls_output += entry.get("data", "")
+        probe_id = probe.json().get("id")
+        # Give ls a moment to complete, then read output
+        await asyncio.sleep(2)
+        status_resp = await client.request(
+            "GET", f"/tasks/{probe_id}/status", identifier=task_id, timeout=15.0,
+        )
+        ls_output = ""
+        if status_resp.status_code == 200:
+            for entry in status_resp.json().get("recentOutput", []):
+                ls_output += entry.get("data", "")
     except httpx.ConnectError:
         raise HTTPException(
             status_code=502,
@@ -97,36 +88,41 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
         work_dir = base_dir
         # Check if package.json is in a subdirectory
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                find_resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={
-                        "command": (
-                            "find . -maxdepth 2 -name package.json"
-                            " -not -path '*/node_modules/*' | head -1"
-                        ),
-                        "args": [],
-                        "workDir": base_dir,
-                    },
+            find_resp = await client.request(
+                "POST",
+                "/tasks",
+                identifier=task_id,
+                json={
+                    "command": (
+                        "find . -maxdepth 2 -name package.json"
+                        " -not -path '*/node_modules/*' | head -1"
+                    ),
+                    "args": [],
+                    "workDir": base_dir,
+                },
+                timeout=15.0,
+            )
+            if find_resp.status_code < 300:
+                find_id = find_resp.json().get("id")
+                await asyncio.sleep(2)
+                find_status = await client.request(
+                    "GET",
+                    f"/tasks/{find_id}/status",
+                    identifier=task_id,
+                    timeout=15.0,
                 )
-                if find_resp.status_code < 300:
-                    find_id = find_resp.json().get("id")
-                    await asyncio.sleep(2)
-                    find_status = await client.get(
-                        f"{sandbox_url}/tasks/{find_id}/status"
-                    )
-                    if find_status.status_code == 200:
-                        find_out = ""
-                        for entry in find_status.json().get("recentOutput", []):
-                            find_out += entry.get("data", "")
-                        pkg_path = find_out.strip()
-                        if pkg_path and pkg_path != "./package.json":
-                            # e.g. "./slidedeck-xxx/package.json" → use that dir
-                            subdir = pkg_path.rsplit("/", 1)[0]
-                            work_dir = f"{base_dir}/{subdir.lstrip('./')}"
-                            logger.info(
-                                "Slides project found in subdir: %s", work_dir
-                            )
+                if find_status.status_code == 200:
+                    find_out = ""
+                    for entry in find_status.json().get("recentOutput", []):
+                        find_out += entry.get("data", "")
+                    pkg_path = find_out.strip()
+                    if pkg_path and pkg_path != "./package.json":
+                        # e.g. "./slidedeck-xxx/package.json" → use that dir
+                        subdir = pkg_path.rsplit("/", 1)[0]
+                        work_dir = f"{base_dir}/{subdir.lstrip('./')}"
+                        logger.info(
+                            "Slides project found in subdir: %s", work_dir
+                        )
         except Exception:
             pass  # Fall back to base_dir
     else:
@@ -151,28 +147,32 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
 
     # 3. Kill stale processes on the target port
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"{sandbox_url}/tasks",
-                json={
-                    "command": f"pkill -f 'port {port}' || true",
-                    "args": [],
-                    "workDir": work_dir,
-                },
-            )
-            await asyncio.sleep(1)
+        await client.request(
+            "POST",
+            "/tasks",
+            identifier=task_id,
+            json={
+                "command": f"pkill -f 'port {port}' || true",
+                "args": [],
+                "workDir": work_dir,
+            },
+            timeout=10.0,
+        )
+        await asyncio.sleep(1)
     except Exception:
         pass
 
     # 4. Try each strategy, poll for health
     for cmd, cmd_port in strategies:
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={"command": cmd, "args": [], "workDir": work_dir},
-                )
-                resp.raise_for_status()
+            resp = await client.request(
+                "POST",
+                "/tasks",
+                identifier=task_id,
+                json={"command": cmd, "args": [], "workDir": work_dir},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
         except Exception as e:
             logger.warning(
                 "Failed to start dev server for task %s: %s", task_id, e
@@ -183,23 +183,25 @@ async def _restart_dev_server(task_id: str, mode: str) -> dict:
         for _ in range(15):
             await asyncio.sleep(2)
             try:
-                async with httpx.AsyncClient(timeout=5) as client:
-                    health = await client.get(
-                        f"{sandbox_url}/proxy/{cmd_port}/"
+                health = await client.request(
+                    "GET",
+                    f"/proxy/{cmd_port}/",
+                    identifier=task_id,
+                    timeout=5.0,
+                )
+                if health.status_code < 500:
+                    preview = {
+                        "url": f"/api/dev/{task_id}/preview/",
+                        "taskId": task_id,
+                        "port": cmd_port,
+                    }
+                    _live_previews[task_id] = preview
+                    logger.info(
+                        "Restarted dev server for task %s (mode=%s, "
+                        "dir=%s) on port %d",
+                        task_id, mode, work_dir, cmd_port,
                     )
-                    if health.status_code < 500:
-                        preview = {
-                            "url": f"/api/dev/{task_id}/preview/",
-                            "taskId": task_id,
-                            "port": cmd_port,
-                        }
-                        _live_previews[task_id] = preview
-                        logger.info(
-                            "Restarted dev server for task %s (mode=%s, "
-                            "dir=%s) on port %d",
-                            task_id, mode, work_dir, cmd_port,
-                        )
-                        return preview
+                    return preview
             except Exception:
                 pass
 
@@ -618,22 +620,25 @@ async def download_archive(task_id: str, request: Request):
     # Each task has its own workspace directory
     work_dir = f"/workspace/{task_id}"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(
-                f"{_resolve_sandbox_url(task_id)}/workspace/archive",
-                params={"dir": work_dir},
-            )
-            resp.raise_for_status()
+        client = get_sandbox_client()
+        resp = await client.request(
+            "GET",
+            "/workspace/archive",
+            identifier=task_id,
+            params={"dir": work_dir},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
 
-            async def stream_content():
-                yield resp.content
+        async def stream_content():
+            yield resp.content
 
-            filename = f"{task.title.replace(' ', '-').lower()[:40]}.tar.gz"
-            return StreamingResponse(
-                stream_content(),
-                media_type="application/gzip",
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-            )
+        filename = f"{task.title.replace(' ', '-').lower()[:40]}.tar.gz"
+        return StreamingResponse(
+            stream_content(),
+            media_type="application/gzip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     except httpx.HTTPError as exc:
         logger.error("Failed to download archive from sandbox: %s", exc)
         raise HTTPException(
@@ -808,11 +813,12 @@ async def start_live_preview(task_id: str, request: Request):
         preview = _live_previews[task_id]
         port = preview.get("port", 3333)
         try:
-            sandbox_url = _resolve_sandbox_url(task_id)
-            async with httpx.AsyncClient(timeout=5) as client:
-                probe = await client.get(f"{sandbox_url}/proxy/{port}/")
-                if probe.status_code < 500:
-                    return preview
+            client = get_sandbox_client()
+            probe = await client.request(
+                "GET", f"/proxy/{port}/", identifier=task_id, timeout=5.0,
+            )
+            if probe.status_code < 500:
+                return preview
         except Exception:
             pass
         # Server was registered but is not responding — remove stale entry and restart
@@ -854,8 +860,13 @@ async def stop_live_preview(task_id: str):
     sandbox_task_id = preview.get("sandboxTaskId")
     if sandbox_task_id:
         try:
-            async with httpx.AsyncClient(base_url=_resolve_sandbox_url(task_id), timeout=10) as client:
-                await client.delete(f"/tasks/{sandbox_task_id}")
+            client = get_sandbox_client()
+            await client.request(
+                "DELETE",
+                f"/tasks/{sandbox_task_id}",
+                identifier=task_id,
+                timeout=10.0,
+            )
         except Exception:
             pass
     return {"stopped": True}
@@ -894,10 +905,10 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
             )
 
     port = _live_previews[task_id].get("port", 3333)
-    target_url = f"{_resolve_sandbox_url(task_id).rstrip('/')}/proxy/{port}/{path}"
+    path_with_query = f"/proxy/{port}/{path}"
     query = str(request.url.query)
     if query:
-        target_url += f"?{query}"
+        path_with_query += f"?{query}"
 
     body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
     fwd_headers = {
@@ -908,59 +919,61 @@ async def proxy_live_preview(task_id: str, path: str, request: Request):
     # Retry a few times — dev server may still be starting
     for attempt in range(3):
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.request(
-                    method=request.method,
-                    url=target_url,
-                    headers=fwd_headers,
-                    content=body,
+            client = get_sandbox_client()
+            resp = await client.request(
+                request.method,
+                path_with_query,
+                identifier=task_id,
+                headers=fwd_headers,
+                content=body,
+                timeout=30.0,
+            )
+            excluded = {"transfer-encoding", "connection", "keep-alive"}
+            headers = {
+                k: v for k, v in resp.headers.items()
+                if k.lower() not in excluded
+            }
+
+            content = resp.content
+            ct = resp.headers.get("content-type", "")
+
+            # Rewrite absolute paths in HTML/JS so they route through
+            # the proxy instead of hitting the backend root directly.
+            # Vite emits src="/@vite/client", from "/@react-refresh", etc.
+            if "text/html" in ct or "javascript" in ct:
+                proxy_base = f"/api/dev/{task_id}/preview"
+                text = content.decode("utf-8", errors="replace")
+                # src="/..." and href="/..."
+                text = re.sub(
+                    r'((?:src|href)\s*=\s*")/',
+                    rf"\1{proxy_base}/",
+                    text,
                 )
-                excluded = {"transfer-encoding", "connection", "keep-alive"}
-                headers = {
-                    k: v for k, v in resp.headers.items()
-                    if k.lower() not in excluded
-                }
-
-                content = resp.content
-                ct = resp.headers.get("content-type", "")
-
-                # Rewrite absolute paths in HTML/JS so they route through
-                # the proxy instead of hitting the backend root directly.
-                # Vite emits src="/@vite/client", from "/@react-refresh", etc.
-                if "text/html" in ct or "javascript" in ct:
-                    proxy_base = f"/api/dev/{task_id}/preview"
-                    text = content.decode("utf-8", errors="replace")
-                    # src="/..." and href="/..."
-                    text = re.sub(
-                        r'((?:src|href)\s*=\s*")/',
-                        rf"\1{proxy_base}/",
-                        text,
-                    )
-                    # ES module imports: from "/...", import("/..."),
-                    # and side-effect imports: import "/..."
-                    text = re.sub(
-                        r'''(from\s+['"])\/''',
-                        rf"\1{proxy_base}/",
-                        text,
-                    )
-                    text = re.sub(
-                        r'''(import\(\s*['"])\/''',
-                        rf"\1{proxy_base}/",
-                        text,
-                    )
-                    text = re.sub(
-                        r'''(import\s+['"])\/''',
-                        rf"\1{proxy_base}/",
-                        text,
-                    )
-                    content = text.encode("utf-8")
-                    headers.pop("content-length", None)
-
-                return Response(
-                    content=content,
-                    status_code=resp.status_code,
-                    headers=headers,
+                # ES module imports: from "/...", import("/..."),
+                # and side-effect imports: import "/..."
+                text = re.sub(
+                    r'''(from\s+['"])\/''',
+                    rf"\1{proxy_base}/",
+                    text,
                 )
+                text = re.sub(
+                    r'''(import\(\s*['"])\/''',
+                    rf"\1{proxy_base}/",
+                    text,
+                )
+                text = re.sub(
+                    r'''(import\s+['"])\/''',
+                    rf"\1{proxy_base}/",
+                    text,
+                )
+                content = text.encode("utf-8")
+                headers.pop("content-length", None)
+
+            return Response(
+                content=content,
+                status_code=resp.status_code,
+                headers=headers,
+            )
         except httpx.ConnectError:
             if attempt < 2:
                 await asyncio.sleep(2)

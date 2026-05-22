@@ -33,7 +33,13 @@ class SandboxService:
         return db.get_container_client(SANDBOX_STATE_CONTAINER_ID)
 
     def _doc_to_model(self, doc: dict) -> SandboxState:
-        """Convert a Cosmos DB document to a SandboxState model."""
+        """Convert a Cosmos DB document to a SandboxState model.
+
+        Tolerates legacy documents containing the obsolete ``containerAppUrl``
+        field (Phase 3 of ``sandbox-dynamic-sessions``): we silently ignore it
+        on read and never write it back. No batch migration needed since
+        sandbox state resets per dev-task.
+        """
         return SandboxState(
             id=doc["id"],
             userId=doc["userId"],
@@ -41,13 +47,18 @@ class SandboxService:
             skillsHash=doc.get("skillsHash"),
             githubConnected=doc.get("githubConnected", False),
             config=SandboxConfig(**doc["config"]) if doc.get("config") else SandboxConfig(),
-            containerAppUrl=doc.get("containerAppUrl"),
+            sessionIdentifier=doc.get("sessionIdentifier"),
             createdAt=doc["createdAt"],
             updatedAt=doc["updatedAt"],
         )
 
     def _model_to_doc(self, state: SandboxState) -> dict:
-        """Convert a SandboxState model to a Cosmos DB document."""
+        """Convert a SandboxState model to a Cosmos DB document.
+
+        Never writes the deprecated ``containerAppUrl`` field. Older documents
+        that still contain it are not actively cleaned up; they're simply
+        ignored on read.
+        """
         return {
             "id": state.id,
             "userId": self._user_id,
@@ -55,7 +66,7 @@ class SandboxService:
             "skillsHash": state.skills_hash,
             "githubConnected": state.github_connected,
             "config": state.config.model_dump(),
-            "containerAppUrl": state.container_app_url,
+            "sessionIdentifier": state.session_identifier,
             "docType": "sandbox_state",
             "createdAt": state.created_at.isoformat()
             if isinstance(state.created_at, datetime)

@@ -15,7 +15,8 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, Protocol
 
 import httpx
 from azure.core.credentials import AccessToken, TokenCredential
@@ -26,6 +27,40 @@ logger = logging.getLogger(__name__)
 SESSION_API_VERSION = "2025-02-02-preview"
 SESSION_SCOPE = "https://dynamicsessions.io/.default"
 TOKEN_REFRESH_BUFFER_SECONDS = 60
+
+# Local-dev fallback: when SESSION_POOL_MANAGEMENT_ENDPOINT is unset, sandbox
+# calls are routed at this base URL (the docker-compose ``sandbox`` service).
+LOCAL_SANDBOX_URL_DEFAULT = "http://sandbox:3000"
+
+
+class SandboxClient(Protocol):
+    """Common interface implemented by both the session-pool and local-dev clients.
+
+    All sandbox HTTP code paths in ``sandbox_service`` / ``dev_agent`` / routes
+    funnel through this Protocol so the runtime backend (Azure session pool vs
+    local docker-compose container) is interchangeable.
+    """
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,
+        **kwargs: Any,
+    ) -> httpx.Response: ...
+
+    def stream_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,
+        **kwargs: Any,
+    ) -> Any:  # AsyncContextManager[httpx.Response]
+        ...
+
+    async def stop_session(self, identifier: str) -> None: ...
 
 
 class SessionSandboxClient:
@@ -117,6 +152,9 @@ class SessionSandboxClient:
         is retried exactly once. A second auth failure is returned to the caller
         unchanged (status_code 401/403 on the response).
         """
+        # TODO(phase-6): on the FIRST request for ``identifier`` within a task,
+        # also attach the per-user ``X-GH-Token`` header so the sandbox can run
+        # ``gh auth login --with-token`` before the dev pipeline starts.
         url = self._build_url(path)
         caller_params = kwargs.pop("params", None)
         caller_headers = kwargs.pop("headers", None)
@@ -183,6 +221,53 @@ class SessionSandboxClient:
                         yield chunk
                     return
 
+    @asynccontextmanager
+    async def stream_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,
+        timeout: httpx.Timeout | float | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[httpx.Response]:
+        """Open a streaming HTTP response and yield the ``httpx.Response`` to the caller.
+
+        Used by SSE consumers that need ``aiter_lines()`` rather than raw bytes.
+        Auth retry on 401/403 happens transparently; if the retry succeeds the
+        retried response is the one yielded to the caller.
+        """
+        url = self._build_url(path)
+        caller_params = kwargs.pop("params", None)
+        caller_headers = kwargs.pop("headers", None)
+        params = self._merge_params(identifier, caller_params)
+        client_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            for attempt in (0, 1):
+                token = self._get_token(force_refresh=attempt == 1)
+                headers = self._merge_headers(token, caller_headers)
+                stream_ctx = client.stream(
+                    method, url, params=params, headers=headers, **kwargs
+                )
+                response = await stream_ctx.__aenter__()
+                try:
+                    if response.status_code in (401, 403) and attempt == 0:
+                        logger.debug(
+                            "Session pool stream returned %s — refreshing token and retrying",
+                            response.status_code,
+                        )
+                        await stream_ctx.__aexit__(None, None, None)
+                        continue
+                    yield response
+                    await stream_ctx.__aexit__(None, None, None)
+                    return
+                except BaseException:
+                    await stream_ctx.__aexit__(None, None, None)
+                    raise
+
     async def stop_session(self, identifier: str) -> None:
         """Explicitly stop a session by identifier.
 
@@ -194,3 +279,104 @@ class SessionSandboxClient:
             logger.debug("stop_session: session %s already gone (404, tolerated)", identifier)
             return
         response.raise_for_status()
+
+
+class LocalSandboxClient:
+    """Thin :class:`SandboxClient` implementation for docker-compose local development.
+
+    Selected automatically by :func:`get_sandbox_client` when
+    ``SESSION_POOL_MANAGEMENT_ENDPOINT`` is unset. Routes every call to a single
+    long-running sandbox container (``http://sandbox:3000`` by default), ignoring
+    the ``identifier`` parameter — local dev has no per-task isolation. The API
+    surface mirrors :class:`SessionSandboxClient` so callers don't branch.
+
+    The ``SANDBOX_URL`` env var overrides the base URL (legacy compose setups
+    use ``http://localhost:4000``).
+    """
+
+    def __init__(self, base_url: str | None = None) -> None:
+        resolved = (
+            base_url
+            if base_url is not None
+            else os.getenv("SANDBOX_URL", LOCAL_SANDBOX_URL_DEFAULT)
+        )
+        self._base_url = resolved.rstrip("/")
+
+    def _build_url(self, path: str) -> str:
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{self._base_url}{path}"
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,  # noqa: ARG002 — ignored in local mode (no per-task isolation)
+        **kwargs: Any,
+    ) -> httpx.Response:
+        url = self._build_url(path)
+        timeout = kwargs.pop("timeout", 30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(method, url, **kwargs)
+
+    @asynccontextmanager
+    async def stream_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,  # noqa: ARG002 — ignored in local mode
+        timeout: httpx.Timeout | float | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[httpx.Response]:
+        url = self._build_url(path)
+        client_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            async with client.stream(method, url, **kwargs) as response:
+                yield response
+
+    async def stop_session(self, identifier: str) -> None:  # noqa: ARG002 — no-op locally
+        """No-op in local-dev mode: the shared container is long-running.
+
+        Per-task cleanup is handled by :meth:`request` calls to
+        ``DELETE /tasks/{sandbox_task_id}`` from the dev agent.
+        """
+        logger.debug(
+            "LocalSandboxClient.stop_session: no-op (local docker-compose has no sessions)"
+        )
+
+
+# ── module-level factory ──────────────────────────────────────────────
+
+_client_singleton: SandboxClient | None = None
+
+
+def get_sandbox_client() -> SandboxClient:
+    """Return the process-wide sandbox client, instantiated lazily.
+
+    Feature-detection: if ``SESSION_POOL_MANAGEMENT_ENDPOINT`` is set, returns
+    :class:`SessionSandboxClient`; otherwise returns :class:`LocalSandboxClient`.
+    No ``USE_*`` flag — the deploy-time env determines the runtime.
+    """
+    global _client_singleton
+    if _client_singleton is None:
+        if os.getenv("SESSION_POOL_MANAGEMENT_ENDPOINT"):
+            _client_singleton = SessionSandboxClient()
+            logger.info("Sandbox client: SessionSandboxClient (Azure session pool)")
+        else:
+            _client_singleton = LocalSandboxClient()
+            logger.info(
+                "Sandbox client: LocalSandboxClient (docker-compose at %s)",
+                getattr(_client_singleton, "_base_url", "?"),
+            )
+    return _client_singleton
+
+
+def reset_sandbox_client() -> None:
+    """Reset the cached singleton — used by tests that swap env vars."""
+    global _client_singleton
+    _client_singleton = None
+

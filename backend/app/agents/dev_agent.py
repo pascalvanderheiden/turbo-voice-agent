@@ -21,11 +21,16 @@ import httpx
 
 from app.models.dev_task import DevArtifact, DevDecision
 from app.services.dev_service import InMemoryDevService, _default_iteration
+from app.services.session_sandbox_client import SandboxClient, get_sandbox_client
 
 logger = logging.getLogger(__name__)
 
 USE_CLI_SANDBOX = os.environ.get("USE_CLI_SANDBOX", "true").lower() == "true"
-SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
+# Phase 3 of sandbox-dynamic-sessions: sandbox HTTP goes through the
+# ``SandboxClient`` abstraction (session pool in Azure, local container in dev).
+# ``USE_ACI_SANDBOX`` is still read here so the legacy orphan-cleanup task in
+# ``main.py`` keeps functioning until Phase 4 deletes it; the new code paths
+# below MUST NOT branch on it.
 USE_ACI_SANDBOX = os.getenv("USE_ACI_SANDBOX", "").lower() == "true"
 
 _DEFAULT_SQUAD_THEME = "Star Wars"
@@ -76,35 +81,50 @@ def _buf_append(task_id: str, entry: dict) -> None:
 
 
 async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = None) -> bool:
-    """Kill any active sandbox task associated with a dev task. Returns True if killed."""
+    """Kill any active sandbox task associated with a dev task. Returns True if killed.
+
+    Phase 3 (sandbox-dynamic-sessions): we go through the unified ``SandboxClient``
+    abstraction and ALWAYS call ``stop_session(task_id)`` regardless of runtime.
+    The legacy ACI deletion is no longer required because the new code path
+    no longer provisions ACI groups.
+    """
     sandbox_task_id = _active_sandbox_tasks.pop(task_id, None)
-    if not sandbox_task_id:
-        # If ACI mode, still try to delete the container group
-        if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
-            try:
-                await dev_agent._aci_sandbox_service.delete_container_group(task_id)
-            except Exception:
-                pass
-        return False
-    # Resolve sandbox URL (ACI or static)
-    sandbox_url = SANDBOX_URL
-    if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
-        url = dev_agent._aci_sandbox_service.get_sandbox_url(task_id)
-        if url:
-            sandbox_url = url
+    client = get_sandbox_client()
+
+    if sandbox_task_id:
+        try:
+            resp = await client.request(
+                "DELETE",
+                f"/tasks/{sandbox_task_id}",
+                identifier=task_id,
+                timeout=10.0,
+            )
+            logger.info(
+                "Killed sandbox task %s for dev-task %s: %s",
+                sandbox_task_id, task_id, resp.status_code,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to kill sandbox task %s for dev-task %s: %s",
+                sandbox_task_id, task_id, exc,
+            )
+
+    # Release the per-task session in the pool (no-op for local-dev).
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(f"{sandbox_url}/tasks/{sandbox_task_id}")
-            logger.info("Killed sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, resp.json())
+        await client.stop_session(task_id)
     except Exception as exc:
-        logger.warning("Failed to kill sandbox task %s for dev-task %s: %s", sandbox_task_id, task_id, exc)
-    # Also clean up ACI container group if in ACI mode
-    if USE_ACI_SANDBOX and dev_agent and dev_agent._aci_sandbox_service:
+        logger.debug("stop_session(%s) raised (tolerated): %s", task_id, exc)
+
+    # Phase-4 cleanup: this still drives the legacy ACI teardown so in-flight
+    # tasks at deploy-time don't strand container groups. Removed in Phase 4
+    # alongside the rest of the ACI module.
+    if dev_agent is not None and getattr(dev_agent, "_aci_sandbox_service", None):
         try:
             await dev_agent._aci_sandbox_service.delete_container_group(task_id)
         except Exception:
             pass
-    return True
+
+    return sandbox_task_id is not None
 
 
 class DevAgent:
@@ -128,84 +148,50 @@ class DevAgent:
         self._slides_service = slides_service
         self._profile_service = profile_service
         self._squad_enabled_tasks: dict[str, bool] = {}  # Task-scoped squad flag
-        self._aci_sandbox_service = None  # Set by main.py when USE_ACI_SANDBOX=true
+        # Phase-4-only: kept for the legacy orphan-cleanup background task. The
+        # new code path uses ``_sandbox_client()`` and never touches this.
+        self._aci_sandbox_service = None
 
-    def _resolve_sandbox_url(self, task_id: str = "") -> str:
-        """Resolve the sandbox URL — per-task ACI IP or static Container App FQDN."""
-        if USE_ACI_SANDBOX and self._aci_sandbox_service and task_id:
-            url = self._aci_sandbox_service.get_sandbox_url(task_id)
-            if url:
-                return url
-        return SANDBOX_URL
+    def _sandbox_client(self) -> SandboxClient:
+        """Return the singleton sandbox HTTP client (session pool or local).
+
+        Phase 3 of sandbox-dynamic-sessions: every per-task HTTP call goes
+        through this. The client transparently routes via the Azure session
+        pool (when ``SESSION_POOL_MANAGEMENT_ENDPOINT`` is set) or via the
+        local docker-compose container in dev.
+        """
+        return get_sandbox_client()
 
     async def _provision_aci_sandbox(self, task_id: str, gh_token: str = "") -> None:
-        """Provision an ACI container group for a dev-task (if ACI mode is enabled)."""
-        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
-            return
-        logger.info("Provisioning ACI sandbox for task %s", task_id)
+        """No-op shim retained for call-site compatibility.
 
-        async def _on_progress(msg: str) -> None:
-            _buf_append(task_id, {
-                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
-            })
-
-        try:
-            extra_env = {"GH_TOKEN": gh_token} if gh_token else None
-            ip = await self._aci_sandbox_service.create_container_group(
-                task_id, extra_env=extra_env, on_progress=_on_progress,
-            )
-            logger.info("ACI sandbox ready for task %s at %s", task_id, ip)
-        except Exception as exc:
-            logger.error("ACI sandbox provisioning failed for %s: %s", task_id, exc)
-            raise
+        Sessions allocate implicitly on the first HTTP request (see Decision §5
+        of the sandbox-dynamic-sessions design doc), so explicit provisioning is
+        no longer required. The method body is preserved as a no-op to avoid a
+        large edit ripple — call sites are inlined out in Phase 4.
+        """
+        return None
 
     async def _start_aci_provisioning(self, task_id: str, gh_token: str = "") -> None:
-        """Start ACI provisioning without waiting for health. Pair with _finish_aci_provisioning.
-
-        Use this for pipelines that can overlap content gathering with sandbox startup.
-        """
-        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
-            return
-        logger.info("Starting ACI sandbox provisioning (async) for task %s", task_id)
-
-        async def _on_progress(msg: str) -> None:
-            _buf_append(task_id, {
-                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
-            })
-
-        extra_env = {"GH_TOKEN": gh_token} if gh_token else None
-        await self._aci_sandbox_service.start_provisioning(
-            task_id, extra_env=extra_env, on_progress=_on_progress,
-        )
+        """No-op shim — see ``_provision_aci_sandbox``."""
+        return None
 
     async def _finish_aci_provisioning(self, task_id: str) -> None:
-        """Wait for a previously-started ACI sandbox to become healthy."""
-        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
-            return
-
-        async def _on_progress(msg: str) -> None:
-            _buf_append(task_id, {
-                "type": "stdout", "data": f"[sandbox] {msg}\n", "ts": time.time(),
-            })
-
-        try:
-            ip = await self._aci_sandbox_service.wait_until_ready(
-                task_id, on_progress=_on_progress,
-            )
-            logger.info("ACI sandbox ready for task %s at %s", task_id, ip)
-        except Exception as exc:
-            logger.error("ACI sandbox provisioning failed for %s: %s", task_id, exc)
-            raise
+        """No-op shim — see ``_provision_aci_sandbox``."""
+        return None
 
     async def _teardown_aci_sandbox(self, task_id: str) -> None:
-        """Delete the ACI container group for a dev-task (if ACI mode is enabled)."""
-        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
-            return
+        """Release the dynamic-session pool entry for a dev-task.
+
+        Replaces the legacy ACI container-group delete: under dynamic sessions
+        the pool cools down automatically, but we still call ``stop_session``
+        on user-driven cancellation/teardown to release the seat eagerly.
+        Tolerant of 404 / local-dev no-op.
+        """
         try:
-            await self._aci_sandbox_service.delete_container_group(task_id)
-            logger.info("ACI sandbox deleted for task %s", task_id)
+            await self._sandbox_client().stop_session(task_id)
         except Exception as exc:
-            logger.warning("ACI sandbox teardown failed for %s: %s", task_id, exc)
+            logger.debug("teardown stop_session(%s) raised (tolerated): %s", task_id, exc)
 
     @property
     def tool_definitions(self) -> list[dict]:
@@ -404,11 +390,11 @@ class DevAgent:
 
     async def _is_sandbox_reachable(self, task_id: str = "") -> bool:
         """Quick health check to see if the sandbox is reachable."""
-        sandbox_url = self._resolve_sandbox_url(task_id)
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(f"{sandbox_url}/health")
-                return resp.status_code == 200
+            resp = await self._sandbox_client().request(
+                "GET", "/health", identifier=task_id or "preflight", timeout=3.0,
+            )
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -431,23 +417,23 @@ class DevAgent:
             await service.set_status(task_id, "completed")
             return
 
-        # Pre-flight: verify sandbox is reachable (skip for ACI mode which provisions on demand)
-        if not USE_ACI_SANDBOX or not self._aci_sandbox_service:
-            if not await self._is_sandbox_reachable():
-                sandbox_url = self._resolve_sandbox_url()
-                msg = (
-                    f"Sandbox not reachable at {sandbox_url}. "
-                    "Dev pipelines require a running sandbox container. "
-                    "Start it with 'docker compose up -d' or set USE_CLI_SANDBOX=false "
-                    "to skip pipeline execution."
-                )
-                logger.warning("Pipeline aborted for task %s: %s", task_id, msg)
-                _buf_append(task_id, {
-                    "type": "stderr", "data": f"{msg}\n", "ts": time.time(),
-                })
-                _buf_append(task_id, {"type": "exit", "code": 1, "ts": time.time()})
-                await service.set_status(task_id, "failed")
-                return
+        # Pre-flight: verify sandbox is reachable. With dynamic sessions, the
+        # first call allocates a session in milliseconds, so this also exercises
+        # the auth path before the pipeline kicks off.
+        if not await self._is_sandbox_reachable(task_id):
+            msg = (
+                "Sandbox not reachable via configured runtime. "
+                "Local dev: start the container with 'docker compose up -d'. "
+                "Cloud: verify SESSION_POOL_MANAGEMENT_ENDPOINT and RBAC. "
+                "Or set USE_CLI_SANDBOX=false to skip pipeline execution."
+            )
+            logger.warning("Pipeline aborted for task %s: %s", task_id, msg)
+            _buf_append(task_id, {
+                "type": "stderr", "data": f"{msg}\n", "ts": time.time(),
+            })
+            _buf_append(task_id, {"type": "exit", "code": 1, "ts": time.time()})
+            await service.set_status(task_id, "failed")
+            return
 
         pipeline_failed = False
         try:
@@ -964,65 +950,73 @@ class DevAgent:
             )
 
             # Kill stale Vite processes so port 3333 is available
-            sandbox_url = self._resolve_sandbox_url(task_id)
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                try:
-                    await client.post(
-                        f"{sandbox_url}/tasks",
-                        json={
-                            "command": "pkill -f 'vite --port' || true",
-                            "args": [],
-                            "workDir": work_dir,
-                        },
-                    )
-                    await asyncio.sleep(2)
-                except Exception:
-                    pass
-
-            # Start npm run dev as a long-running task (don't wait for exit)
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks",
+            client = self._sandbox_client()
+            try:
+                await client.request(
+                    "POST",
+                    "/tasks",
+                    identifier=task_id,
                     json={
-                        "command": "npm run dev -- --port 3333 --host",
+                        "command": "pkill -f 'vite --port' || true",
                         "args": [],
                         "workDir": work_dir,
                     },
+                    timeout=10.0,
                 )
-                resp.raise_for_status()
-                dev_task_data = resp.json()
-                dev_task_id = dev_task_data.get("id")
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+
+            # Start npm run dev as a long-running task (don't wait for exit)
+            resp = await client.request(
+                "POST",
+                "/tasks",
+                identifier=task_id,
+                json={
+                    "command": "npm run dev -- --port 3333 --host",
+                    "args": [],
+                    "workDir": work_dir,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            dev_task_data = resp.json()
+            dev_task_id = dev_task_data.get("id")
 
             # Detect actual Vite port (may differ from 3333 if port is occupied)
             actual_port = 3333
             for _ in range(30):
                 await asyncio.sleep(2)
                 try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        status = await client.get(
-                            f"{sandbox_url}/tasks/{dev_task_id}/status"
-                        )
-                        if status.status_code == 200:
-                            output = status.json().get("recentOutput", [])
-                            for entry in output:
-                                data = entry.get("data", "")
-                                # Vite prints: Local: http://localhost:NNNN/
-                                port_match = re.search(
-                                    r"Local:\s+http://localhost:(\d+)", data
-                                )
-                                if port_match:
-                                    actual_port = int(port_match.group(1))
-                                    break
+                    status = await client.request(
+                        "GET",
+                        f"/tasks/{dev_task_id}/status",
+                        identifier=task_id,
+                        timeout=5.0,
+                    )
+                    if status.status_code == 200:
+                        output = status.json().get("recentOutput", [])
+                        for entry in output:
+                            data = entry.get("data", "")
+                            # Vite prints: Local: http://localhost:NNNN/
+                            port_match = re.search(
+                                r"Local:\s+http://localhost:(\d+)", data
+                            )
+                            if port_match:
+                                actual_port = int(port_match.group(1))
+                                break
                 except Exception:
                     pass
                 # Probe the detected port
                 try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        probe = await client.get(
-                            f"{sandbox_url}/proxy/{actual_port}/"
-                        )
-                        if probe.status_code < 500:
-                            break
+                    probe = await client.request(
+                        "GET",
+                        f"/proxy/{actual_port}/",
+                        identifier=task_id,
+                        timeout=5.0,
+                    )
+                    if probe.status_code < 500:
+                        break
                 except Exception:
                     pass
             else:
@@ -1363,9 +1357,8 @@ class DevAgent:
         output_buf = _pipeline_outputs.get(task_id, [])
 
         logger.debug(
-            "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s "
-            "sandbox_url=%s buf_id=%s",
-            stage_label, task_id, self._resolve_sandbox_url(task_id), id(output_buf),
+            "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s buf_id=%s",
+            stage_label, task_id, id(output_buf),
         )
 
         # Emit stage marker (unless suppressed for sub-steps)
@@ -1374,21 +1367,21 @@ class DevAgent:
                 "type": "stage", "data": f"── {stage_label} ──\n", "ts": time.time()
             })
 
-        sandbox_url = self._resolve_sandbox_url(task_id)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{sandbox_url}/tasks", json=payload)
-            resp.raise_for_status()
-            task_data = resp.json()
-            sandbox_task_id = task_data["id"]
+        sandbox_client = self._sandbox_client()
+        resp = await sandbox_client.request(
+            "POST", "/tasks", identifier=task_id or "default", json=payload, timeout=30.0,
+        )
+        resp.raise_for_status()
+        task_data = resp.json()
+        sandbox_task_id = task_data["id"]
 
         # Track active sandbox task for cleanup on dev-task deletion
         if task_id:
             _active_sandbox_tasks[task_id] = sandbox_task_id
 
         logger.debug(
-            "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, "
-            "connecting SSE to %s/tasks/%s/stream",
-            sandbox_task_id, stage_label, sandbox_url, sandbox_task_id,
+            "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, connecting SSE",
+            sandbox_task_id, stage_label,
         )
 
         # Stream output via SSE
@@ -1404,181 +1397,181 @@ class DevAgent:
         line_count = 0
 
         try:
-            async with httpx.AsyncClient(
+            async with sandbox_client.stream_response(
+                "GET",
+                f"/tasks/{sandbox_task_id}/stream",
+                identifier=task_id or "default",
                 timeout=httpx.Timeout(10.0, read=None),
-            ) as client:
-                async with client.stream(
-                    "GET", f"{sandbox_url}/tasks/{sandbox_task_id}/stream"
-                ) as sse_resp:
-                    logger.debug(
-                        "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
-                        sse_resp.status_code, stage_label,
-                    )
-                    lines_iter = sse_resp.aiter_lines()
-                    while True:
-                        try:
-                            raw_line = await asyncio.wait_for(
-                                lines_iter.__anext__(), timeout=SSE_LINE_TIMEOUT,
+            ) as sse_resp:
+                logger.debug(
+                    "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
+                    sse_resp.status_code, stage_label,
+                )
+                lines_iter = sse_resp.aiter_lines()
+                while True:
+                    try:
+                        raw_line = await asyncio.wait_for(
+                            lines_iter.__anext__(), timeout=SSE_LINE_TIMEOUT,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        logger.warning(
+                            "SSE line timeout (%ds, no data) [%s], "
+                            "falling back to polling",
+                            SSE_LINE_TIMEOUT, stage_label,
+                        )
+                        raise
+
+                    now = time.monotonic()
+                    if now - start > timeout:
+                        await self._kill_sandbox_task(sandbox_task_id, stage_label)
+                        raise RuntimeError(
+                            f"Sandbox task timed out: {stage_label}"
+                        )
+                    # Stall detection: no meaningful stdout/stderr for too long
+                    # (keepalives don't count — they just prove the connection is alive)
+                    if now - last_output_time > stall_timeout:
+                        await self._kill_sandbox_task(sandbox_task_id, stage_label)
+                        raise RuntimeError(
+                            f"Sandbox task stalled (no output for "
+                            f"{stall_timeout:.0f}s): {stage_label}"
+                        )
+
+                    if not raw_line.startswith("data: "):
+                        # Keepalive/comment — proves connection alive but NOT real output
+                        if raw_line.strip():
+                            last_any_traffic = now
+                        continue
+
+                    line_count += 1
+                    if line_count <= 3 or line_count % 50 == 0:
+                        logger.debug(
+                            "[SANDBOX-DIAG] SSE line #%d stage=%s buf=%d",
+                            line_count, stage_label, len(output_buf),
+                        )
+
+                    try:
+                        entry = json.loads(raw_line[6:])
+                    except json.JSONDecodeError:
+                        continue
+
+                    entry_type = entry.get("type", "")
+
+                    # Forward to pipeline buffer for terminal view
+                    # (skip exit events — the pipeline emits its own on completion)
+                    if task_id and entry_type != "exit":
+                        _buf_append(task_id, entry)
+
+                    if entry_type == "stdout":
+                        data = entry.get("data", "")
+                        output_lines.append(data)
+                        accumulated_text += data
+                        if data.strip():
+                            last_output_time = now
+
+                        # Real-time premium request parsing from stream
+                        if task_id and prompt and data.strip():
+                            premium_line = re.search(
+                                r"Total usage est:\s+([\d.]+)\s+Premium request",
+                                data.strip(),
                             )
-                        except StopAsyncIteration:
-                            break
-                        except TimeoutError:
-                            logger.warning(
-                                "SSE line timeout (%ds, no data) [%s], "
-                                "falling back to polling",
-                                SSE_LINE_TIMEOUT, stage_label,
-                            )
-                            raise
-
-                        now = time.monotonic()
-                        if now - start > timeout:
-                            await self._kill_sandbox_task(sandbox_task_id, stage_label)
-                            raise RuntimeError(
-                                f"Sandbox task timed out: {stage_label}"
-                            )
-                        # Stall detection: no meaningful stdout/stderr for too long
-                        # (keepalives don't count — they just prove the connection is alive)
-                        if now - last_output_time > stall_timeout:
-                            await self._kill_sandbox_task(sandbox_task_id, stage_label)
-                            raise RuntimeError(
-                                f"Sandbox task stalled (no output for "
-                                f"{stall_timeout:.0f}s): {stage_label}"
-                            )
-
-                        if not raw_line.startswith("data: "):
-                            # Keepalive/comment — proves connection alive but NOT real output
-                            if raw_line.strip():
-                                last_any_traffic = now
-                            continue
-
-                        line_count += 1
-                        if line_count <= 3 or line_count % 50 == 0:
-                            logger.debug(
-                                "[SANDBOX-DIAG] SSE line #%d stage=%s buf=%d",
-                                line_count, stage_label, len(output_buf),
-                            )
-
-                        try:
-                            entry = json.loads(raw_line[6:])
-                        except json.JSONDecodeError:
-                            continue
-
-                        entry_type = entry.get("type", "")
-
-                        # Forward to pipeline buffer for terminal view
-                        # (skip exit events — the pipeline emits its own on completion)
-                        if task_id and entry_type != "exit":
-                            _buf_append(task_id, entry)
-
-                        if entry_type == "stdout":
-                            data = entry.get("data", "")
-                            output_lines.append(data)
-                            accumulated_text += data
-                            if data.strip():
-                                last_output_time = now
-
-                            # Real-time premium request parsing from stream
-                            if task_id and prompt and data.strip():
-                                premium_line = re.search(
-                                    r"Total usage est:\s+([\d.]+)\s+Premium request",
-                                    data.strip(),
-                                )
-                                if premium_line:
-                                    parsed_premium = float(premium_line.group(1))
-                                    # Round up fractional requests to whole number
-                                    rounded = int(parsed_premium) if parsed_premium == int(parsed_premium) else int(parsed_premium) + 1
-                                    if rounded > 0:
-                                        try:
-                                            pr_svc = (
-                                                self._service.with_user(self._current_user_id)
-                                                if hasattr(self, "_current_user_id")
-                                                and self._current_user_id
-                                                else self._service
+                            if premium_line:
+                                parsed_premium = float(premium_line.group(1))
+                                # Round up fractional requests to whole number
+                                rounded = int(parsed_premium) if parsed_premium == int(parsed_premium) else int(parsed_premium) + 1
+                                if rounded > 0:
+                                    try:
+                                        pr_svc = (
+                                            self._service.with_user(self._current_user_id)
+                                            if hasattr(self, "_current_user_id")
+                                            and self._current_user_id
+                                            else self._service
+                                        )
+                                        if hasattr(pr_svc, "add_premium_requests"):
+                                            await pr_svc.add_premium_requests(
+                                                task_id, rounded,
                                             )
-                                            if hasattr(pr_svc, "add_premium_requests"):
-                                                await pr_svc.add_premium_requests(
-                                                    task_id, rounded,
-                                                )
-                                        except Exception:
-                                            pass
+                                    except Exception:
+                                        pass
 
-                            # Parse squad agent activity from stream
-                            if task_id and data.strip():
-                                # Match squad names in various stream formats:
-                                #   "Obi-Wan: doing X"
-                                #   "**Obi-Wan** — doing X"
-                                #   "● status Obi-Wan: doing X"
-                                #   "🏗 **Obi-Wan** — doing X"
-                                clean = re.sub(r"\*\*", "", data.strip())
-                                squad_match = re.search(
-                                    r"(?:●\s+\S+\s+)?(?:\S+\s+)?"
-                                    r"([A-Z][A-Za-z0-9-]+)"
-                                    r"(?:\s*[:\u2014—-]+\s*|\s+)(.+)",
-                                    clean,
-                                )
-                                if squad_match:
-                                    agent_name = squad_match.group(1)
-                                    agent_task = squad_match.group(2).strip()
-                                    # Known squad member names from all themes
-                                    known_names = {
-                                        # Aliens (default)
-                                        "Hicks", "Ripley", "Dallas", "Lambert", "Parker", "Scribe",
-                                        # Star Wars
-                                        "Obi-Wan", "Leia", "Han", "Chewie", "R2-D2", "C-3PO",
-                                        # LOTR
-                                        "Aragorn", "Legolas", "Gimli", "Gandalf", "Samwise", "Frodo",
-                                        # Matrix
-                                        "Morpheus", "Trinity", "Neo", "Tank", "Switch", "Oracle",
-                                        # Marvel
-                                        "Fury", "Stark", "Banner", "Romanoff", "Thor", "Jarvis",
-                                    }
-                                    if agent_name in known_names:
-                                        try:
-                                            svc = (
-                                                self._service.with_user(self._current_user_id)
-                                                if hasattr(self, "_current_user_id")
-                                                and self._current_user_id
-                                                else self._service
+                        # Parse squad agent activity from stream
+                        if task_id and data.strip():
+                            # Match squad names in various stream formats:
+                            #   "Obi-Wan: doing X"
+                            #   "**Obi-Wan** — doing X"
+                            #   "● status Obi-Wan: doing X"
+                            #   "🏗 **Obi-Wan** — doing X"
+                            clean = re.sub(r"\*\*", "", data.strip())
+                            squad_match = re.search(
+                                r"(?:●\s+\S+\s+)?(?:\S+\s+)?"
+                                r"([A-Z][A-Za-z0-9-]+)"
+                                r"(?:\s*[:\u2014—-]+\s*|\s+)(.+)",
+                                clean,
+                            )
+                            if squad_match:
+                                agent_name = squad_match.group(1)
+                                agent_task = squad_match.group(2).strip()
+                                # Known squad member names from all themes
+                                known_names = {
+                                    # Aliens (default)
+                                    "Hicks", "Ripley", "Dallas", "Lambert", "Parker", "Scribe",
+                                    # Star Wars
+                                    "Obi-Wan", "Leia", "Han", "Chewie", "R2-D2", "C-3PO",
+                                    # LOTR
+                                    "Aragorn", "Legolas", "Gimli", "Gandalf", "Samwise", "Frodo",
+                                    # Matrix
+                                    "Morpheus", "Trinity", "Neo", "Tank", "Switch", "Oracle",
+                                    # Marvel
+                                    "Fury", "Stark", "Banner", "Romanoff", "Thor", "Jarvis",
+                                }
+                                if agent_name in known_names:
+                                    try:
+                                        svc = (
+                                            self._service.with_user(self._current_user_id)
+                                            if hasattr(self, "_current_user_id")
+                                            and self._current_user_id
+                                            else self._service
+                                        )
+                                        t = await svc.get_by_id(task_id)
+                                        if t and t.squad:
+                                            for m in t.squad.team_members:
+                                                if m.name == agent_name:
+                                                    m.status = "working"
+                                                    m.activity = agent_task
+                                                    break
+                                            await svc.set_squad(
+                                                task_id,
+                                                {
+                                                    "teamMembers": [
+                                                        m.model_dump(by_alias=True)
+                                                        for m in t.squad.team_members
+                                                    ]
+                                                },
                                             )
-                                            t = await svc.get_by_id(task_id)
-                                            if t and t.squad:
-                                                for m in t.squad.team_members:
-                                                    if m.name == agent_name:
-                                                        m.status = "working"
-                                                        m.activity = agent_task
-                                                        break
-                                                await svc.set_squad(
-                                                    task_id,
-                                                    {
-                                                        "teamMembers": [
-                                                            m.model_dump(by_alias=True)
-                                                            for m in t.squad.team_members
-                                                        ]
-                                                    },
-                                                )
-                                        except Exception:
-                                            pass  # Non-fatal: squad update is best-effort
+                                    except Exception:
+                                        pass  # Non-fatal: squad update is best-effort
 
-                            # Detect questions and auto-answer
-                            if _QUESTION_RE.search(accumulated_text.strip()):
-                                await self._auto_answer(
-                                    sandbox_task_id=sandbox_task_id,
-                                    question=accumulated_text.strip(),
-                                    stage_label=stage_label,
-                                    task_id=task_id,
-                                    model=model,
-                                    output_buf=output_buf,
-                                )
-                                accumulated_text = ""
+                        # Detect questions and auto-answer
+                        if _QUESTION_RE.search(accumulated_text.strip()):
+                            await self._auto_answer(
+                                sandbox_task_id=sandbox_task_id,
+                                question=accumulated_text.strip(),
+                                stage_label=stage_label,
+                                task_id=task_id,
+                                model=model,
+                                output_buf=output_buf,
+                            )
+                            accumulated_text = ""
 
-                        elif entry_type == "stderr":
-                            data = entry.get("data", "")
-                            if data.strip():
-                                last_output_time = now
+                    elif entry_type == "stderr":
+                        data = entry.get("data", "")
+                        if data.strip():
+                            last_output_time = now
 
-                        elif entry_type == "exit":
-                            exit_code = entry.get("code", -1)
-                            break
+                    elif entry_type == "exit":
+                        exit_code = entry.get("code", -1)
+                        break
 
         except (TimeoutError, httpx.HTTPError) as e:
             logger.warning(
@@ -1627,13 +1620,17 @@ class DevAgent:
     ) -> None:
         """Kill a running sandbox task process to free resources on timeout/stall."""
         try:
-            sandbox_url = self._resolve_sandbox_url(dev_task_id)
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.delete(f"{sandbox_url}/tasks/{sandbox_task_id}")
-                logger.debug(
-                    "[SANDBOX-DIAG] Kill task %s [%s]: %s",
-                    sandbox_task_id, stage_label, resp.json(),
-                )
+            client = self._sandbox_client()
+            resp = await client.request(
+                "DELETE",
+                f"/tasks/{sandbox_task_id}",
+                identifier=dev_task_id or "default",
+                timeout=10.0,
+            )
+            logger.debug(
+                "[SANDBOX-DIAG] Kill task %s [%s]: status=%d",
+                sandbox_task_id, stage_label, resp.status_code,
+            )
         except Exception as exc:
             logger.warning("Failed to kill sandbox task %s: %s", sandbox_task_id, exc)
 
@@ -1742,7 +1739,7 @@ class DevAgent:
         Tries npm-based dev server first, falls back to npx serve for static apps.
         Returns the port the server is running on, or 0 if no server started.
         """
-        sandbox_url = self._resolve_sandbox_url(task_id)
+        client = self._sandbox_client()
         from app.routes.dev import _live_previews
 
         # Strategy 1: npm run dev (for Node.js apps with package.json)
@@ -1753,23 +1750,29 @@ class DevAgent:
         ]
 
         for cmd, port in strategies:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks",
-                    json={"command": cmd, "args": [], "workDir": work_dir},
-                )
-                resp.raise_for_status()
+            resp = await client.request(
+                "POST",
+                "/tasks",
+                identifier=task_id,
+                json={"command": cmd, "args": [], "workDir": work_dir},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
 
             # Poll until dev server is healthy (30s per strategy)
             ready = False
             for _ in range(15):
                 await asyncio.sleep(2)
                 try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        probe = await client.get(f"{sandbox_url}/proxy/{port}/")
-                        if probe.status_code < 500:
-                            ready = True
-                            break
+                    probe = await client.request(
+                        "GET",
+                        f"/proxy/{port}/",
+                        identifier=task_id,
+                        timeout=5.0,
+                    )
+                    if probe.status_code < 500:
+                        ready = True
+                        break
                 except Exception:
                     pass
 
@@ -1804,12 +1807,16 @@ class DevAgent:
         if rel_path.startswith("/workspace/"):
             rel_path = rel_path[len("/workspace/"):]
         try:
-            sandbox_url = self._resolve_sandbox_url(dev_task_id)
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{sandbox_url}/files/{rel_path}")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return base64.b64decode(data["data"]).decode("utf-8", errors="replace")
+            client = self._sandbox_client()
+            resp = await client.request(
+                "GET",
+                f"/files/{rel_path}",
+                identifier=dev_task_id or "default",
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return base64.b64decode(data["data"]).decode("utf-8", errors="replace")
         except Exception as e:
             logger.debug("Could not read sandbox file %s: %s", path, e)
         return None
@@ -1866,13 +1873,15 @@ class DevAgent:
 
         # Send answer to sandbox stdin
         try:
-            sandbox_url = self._resolve_sandbox_url(task_id)
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{sandbox_url}/tasks/{sandbox_task_id}/input",
-                    json={"input": answer},
-                )
-                resp.raise_for_status()
+            client = self._sandbox_client()
+            resp = await client.request(
+                "POST",
+                f"/tasks/{sandbox_task_id}/input",
+                identifier=task_id or "default",
+                json={"input": answer},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
         except Exception as e:
             logger.warning("Failed to send auto-answer: %s", e)
             return
@@ -1936,45 +1945,47 @@ class DevAgent:
         """Fallback polling when SSE fails."""
         start = time.monotonic()
         consecutive_404s = 0
-        sandbox_url = self._resolve_sandbox_url(task_id)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            while time.monotonic() - start < remaining_timeout:
-                await asyncio.sleep(3)
-                try:
-                    resp = await client.get(
-                        f"{sandbox_url}/tasks/{sandbox_task_id}/status"
+        client = self._sandbox_client()
+        while time.monotonic() - start < remaining_timeout:
+            await asyncio.sleep(3)
+            try:
+                resp = await client.request(
+                    "GET",
+                    f"/tasks/{sandbox_task_id}/status",
+                    identifier=task_id or "default",
+                    timeout=15.0,
+                )
+                if resp.status_code == 404:
+                    consecutive_404s += 1
+                    logger.warning(
+                        "Sandbox task %s not found (attempt %d) [%s]",
+                        sandbox_task_id, consecutive_404s, stage_label,
                     )
-                    if resp.status_code == 404:
-                        consecutive_404s += 1
-                        logger.warning(
-                            "Sandbox task %s not found (attempt %d) [%s]",
+                    # Task gone — sandbox likely restarted, treat as failure
+                    if consecutive_404s >= 3:
+                        logger.error(
+                            "Sandbox task %s gone after %d 404s — "
+                            "sandbox likely restarted [%s]",
                             sandbox_task_id, consecutive_404s, stage_label,
                         )
-                        # Task gone — sandbox likely restarted, treat as failure
-                        if consecutive_404s >= 3:
-                            logger.error(
-                                "Sandbox task %s gone after %d 404s — "
-                                "sandbox likely restarted [%s]",
-                                sandbox_task_id, consecutive_404s, stage_label,
-                            )
-                            return 1  # Non-zero exit = failure
-                        continue
-                    resp.raise_for_status()
-                    status = resp.json()
-                    consecutive_404s = 0  # Reset on success
-                except httpx.HTTPStatusError:
+                        return 1  # Non-zero exit = failure
                     continue
-                except Exception:
-                    continue
+                resp.raise_for_status()
+                status = resp.json()
+                consecutive_404s = 0  # Reset on success
+            except httpx.HTTPStatusError:
+                continue
+            except Exception:
+                continue
 
-                if status.get("done"):
-                    for entry in status.get("recentOutput", []):
-                        if entry.get("type") == "stdout":
-                            data = entry.get("data", "")
-                            output_lines.append(data)
-                        if task_id:
-                            _buf_append(task_id, entry)
-                    return status.get("exitCode", -1)
+            if status.get("done"):
+                for entry in status.get("recentOutput", []):
+                    if entry.get("type") == "stdout":
+                        data = entry.get("data", "")
+                        output_lines.append(data)
+                    if task_id:
+                        _buf_append(task_id, entry)
+                return status.get("exitCode", -1)
 
         raise RuntimeError(f"Sandbox task timed out: {stage_label}")
 
@@ -1983,39 +1994,46 @@ class DevAgent:
     ) -> None:
         """Fetch screenshot PNGs from the sandbox workspace and store as artifacts."""
         svc = self._service.with_user(user_id) if user_id else self._service
-        sandbox_url = self._resolve_sandbox_url(task_id)
+        client = self._sandbox_client()
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                files: list[str] = []
-                # Search with multiple glob patterns (screenshots, slides, any png)
-                for pattern in ("screenshot*.png", "slide-*.png", "slide_*.png", "*.png"):
-                    resp = await client.get(
-                        f"{sandbox_url}/files",
-                        params={"glob": pattern, "dir": work_dir},
-                    )
-                    resp.raise_for_status()
-                    files = resp.json().get("files", [])
-                    if files:
-                        break
-                logger.info("Found %d screenshot files in sandbox for task %s", len(files), task_id)
+            files: list[str] = []
+            # Search with multiple glob patterns (screenshots, slides, any png)
+            for pattern in ("screenshot*.png", "slide-*.png", "slide_*.png", "*.png"):
+                resp = await client.request(
+                    "GET",
+                    "/files",
+                    identifier=task_id,
+                    params={"glob": pattern, "dir": work_dir},
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                files = resp.json().get("files", [])
+                if files:
+                    break
+            logger.info("Found %d screenshot files in sandbox for task %s", len(files), task_id)
 
-                for file_path in files:
-                    # file_path is absolute, e.g. /workspace/abc/screenshot.png
-                    # sandbox /files/* joins with /workspace, so strip that prefix
-                    rel = file_path.replace("/workspace/", "", 1)
-                    try:
-                        fresp = await client.get(f"{sandbox_url}/files/{rel}")
-                        fresp.raise_for_status()
-                        fdata = fresp.json()
-                        artifact = DevArtifact(
-                            type="screenshot",
-                            name=fdata.get("name", rel),
-                            data=fdata.get("data", ""),
-                        )
-                        await svc.add_artifact(task_id, artifact)
-                        logger.info("Stored screenshot artifact: %s", rel)
-                    except Exception as e:
-                        logger.warning("Failed to fetch screenshot %s: %s", rel, e)
+            for file_path in files:
+                # file_path is absolute, e.g. /workspace/abc/screenshot.png
+                # sandbox /files/* joins with /workspace, so strip that prefix
+                rel = file_path.replace("/workspace/", "", 1)
+                try:
+                    fresp = await client.request(
+                        "GET",
+                        f"/files/{rel}",
+                        identifier=task_id,
+                        timeout=15.0,
+                    )
+                    fresp.raise_for_status()
+                    fdata = fresp.json()
+                    artifact = DevArtifact(
+                        type="screenshot",
+                        name=fdata.get("name", rel),
+                        data=fdata.get("data", ""),
+                    )
+                    await svc.add_artifact(task_id, artifact)
+                    logger.info("Stored screenshot artifact: %s", rel)
+                except Exception as e:
+                    logger.warning("Failed to fetch screenshot %s: %s", rel, e)
         except Exception as e:
             logger.warning("Failed to list screenshot files: %s", e)
 
@@ -2180,34 +2198,38 @@ class DevAgent:
     async def _sync_skills_stage(self, task_id: str) -> None:
         """Sync skills from blob storage to the sandbox and report what's available."""
         logger.info("Skills sync: task=%s", task_id)
-        sandbox_url = self._resolve_sandbox_url(task_id)
+        client = self._sandbox_client()
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(f"{sandbox_url}/skills/sync")
-                resp.raise_for_status()
-                result = resp.json()
-                synced = result.get("synced", 0)
-                skills = result.get("skills", [])
+            resp = await client.request(
+                "POST",
+                "/skills/sync",
+                identifier=task_id,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            synced = result.get("synced", 0)
+            skills = result.get("skills", [])
 
-                if task_id in _pipeline_outputs:
-                    if skills:
-                        skill_list = ", ".join(skills)
-                        _buf_append(task_id, {
-                            "type": "stdout",
-                            "data": (
-                                f"Skills synced: {synced} skill(s) from blob storage\n"
-                                f"Available: {skill_list}\n"
-                            ),
-                            "stage": "skills",
-                        })
-                    else:
-                        _buf_append(task_id, {
-                            "type": "stdout",
-                            "data": "No skills available in sandbox.\n",
-                            "stage": "skills",
-                        })
+            if task_id in _pipeline_outputs:
+                if skills:
+                    skill_list = ", ".join(skills)
+                    _buf_append(task_id, {
+                        "type": "stdout",
+                        "data": (
+                            f"Skills synced: {synced} skill(s) from blob storage\n"
+                            f"Available: {skill_list}\n"
+                        ),
+                        "stage": "skills",
+                    })
+                else:
+                    _buf_append(task_id, {
+                        "type": "stdout",
+                        "data": "No skills available in sandbox.\n",
+                        "stage": "skills",
+                    })
 
-                logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
+            logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
         except httpx.ConnectError:
             logger.warning("Skills sync skipped for task %s — sandbox not reachable", task_id)
             if task_id in _pipeline_outputs:

@@ -1,7 +1,6 @@
 """Sandbox management REST API routes."""
 
 import logging
-import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -10,6 +9,7 @@ from pydantic import BaseModel
 
 from app.agents.dev_agent import _active_sandbox_tasks
 from app.models.sandbox import SandboxConfig
+from app.services.session_sandbox_client import get_sandbox_client
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,10 @@ router = APIRouter(prefix="/api/sandbox", tags=["sandbox"])
 
 _sandbox_service = None
 
-SANDBOX_URL = os.getenv("SANDBOX_URL", "http://localhost:4000")
+# Admin/global identifier for routes that don't target a specific dev task.
+# With LocalSandboxClient the identifier is ignored; with SessionSandboxClient
+# this allocates a dedicated "admin" session for health checks and task listing.
+_ADMIN_IDENTIFIER = "admin"
 
 # Persistent premium-request tracking:
 # The sandbox reports a running count that resets on container restart.
@@ -47,19 +50,21 @@ async def _probe_sandbox_health() -> tuple[bool, int, int]:
     """
     global _premium_baseline, _last_sandbox_premium
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{SANDBOX_URL}/health")
-            data = resp.json()
-            active = data.get("activeTasks", 0)
-            sandbox_premium = data.get("premiumRequests", 0)
+        client = get_sandbox_client()
+        resp = await client.request(
+            "GET", "/health", identifier=_ADMIN_IDENTIFIER, timeout=5.0,
+        )
+        data = resp.json()
+        active = data.get("activeTasks", 0)
+        sandbox_premium = data.get("premiumRequests", 0)
 
-            # Detect sandbox restart: its counter dropped below what we last saw
-            if sandbox_premium < _last_sandbox_premium:
-                _premium_baseline += _last_sandbox_premium
-            _last_sandbox_premium = sandbox_premium
+        # Detect sandbox restart: its counter dropped below what we last saw
+        if sandbox_premium < _last_sandbox_premium:
+            _premium_baseline += _last_sandbox_premium
+        _last_sandbox_premium = sandbox_premium
 
-            total_premium = _premium_baseline + sandbox_premium
-            return True, active, total_premium
+        total_premium = _premium_baseline + sandbox_premium
+        return True, active, total_premium
     except Exception:
         return False, 0, _premium_baseline + _last_sandbox_premium
 
@@ -167,7 +172,8 @@ async def stop_sandbox(request: Request):
     logger.info("Sandbox stop requested for user %s", user_id)
 
     # Cancel all running backend pipeline asyncio tasks
-    from app.routes.dev import _running_pipelines, _get_service as _get_dev_service
+    from app.routes.dev import _get_service as _get_dev_service
+    from app.routes.dev import _running_pipelines
     cancelled = 0
     for tid, atask in list(_running_pipelines.items()):
         if not atask.done():
@@ -183,19 +189,30 @@ async def stop_sandbox(request: Request):
     logger.info("Cancelled %d pipeline tasks", cancelled)
 
     # Kill all active sandbox container tasks
+    # NOTE: Listing global tasks via /tasks is admin-style behavior — primarily
+    # meaningful in local-dev (single shared sandbox). In session-pool mode each
+    # task lives in its own session; the per-task DELETE in cancel_sandbox_task_for
+    # is the canonical cleanup path.
     killed = 0
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{SANDBOX_URL}/tasks")
-            data = resp.json()
-            for t in data.get("tasks", []):
-                tid = t.get("id")
-                if tid and t.get("exitCode") is None:
-                    try:
-                        await client.delete(f"{SANDBOX_URL}/tasks/{tid}")
-                        killed += 1
-                    except Exception:
-                        pass
+        client = get_sandbox_client()
+        resp = await client.request(
+            "GET", "/tasks", identifier=_ADMIN_IDENTIFIER, timeout=10.0,
+        )
+        data = resp.json()
+        for t in data.get("tasks", []):
+            tid = t.get("id")
+            if tid and t.get("exitCode") is None:
+                try:
+                    await client.request(
+                        "DELETE",
+                        f"/tasks/{tid}",
+                        identifier=_ADMIN_IDENTIFIER,
+                        timeout=10.0,
+                    )
+                    killed += 1
+                except Exception:
+                    pass
     except Exception as exc:
         logger.warning("Failed to stop sandbox tasks: %s", exc)
 
@@ -225,19 +242,22 @@ async def create_sandbox_task(body: SandboxTaskRequest, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
     logger.info("Sandbox task created for user %s: %s %s", user_id, body.command, body.args)
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{SANDBOX_URL}/tasks",
-                json={"command": body.command, "args": body.args},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return {
-                "taskId": data.get("id", f"stask-{body.devTaskId}"),
-                "status": "submitted",
-                "command": body.command,
-                "args": body.args,
-            }
+        client = get_sandbox_client()
+        resp = await client.request(
+            "POST",
+            "/tasks",
+            identifier=body.devTaskId,
+            json={"command": body.command, "args": body.args},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "taskId": data.get("id", f"stask-{body.devTaskId}"),
+            "status": "submitted",
+            "command": body.command,
+            "args": body.args,
+        }
     except httpx.HTTPError as exc:
         logger.error("Failed to submit task to sandbox: %s", exc)
         raise HTTPException(status_code=502, detail="Sandbox unreachable") from exc
@@ -251,15 +271,16 @@ async def stream_sandbox_task(task_id: str, request: Request):
 
     async def event_stream():
         try:
-            async with httpx.AsyncClient(
+            client = get_sandbox_client()
+            async with client.stream_response(
+                "GET",
+                f"/tasks/{task_id}/stream",
+                identifier=task_id,
                 timeout=httpx.Timeout(10.0, read=None),
-            ) as client:
-                async with client.stream(
-                    "GET", f"{SANDBOX_URL}/tasks/{task_id}/stream"
-                ) as resp:
-                    async for line in resp.aiter_lines():
-                        if line:
-                            yield f"{line}\n\n"
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line:
+                        yield f"{line}\n\n"
         except httpx.HTTPError as exc:
             logger.error("Sandbox SSE stream error: %s", exc)
             yield 'data: {"type": "error", "message": "Sandbox connection lost"}\n\n'
