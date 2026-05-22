@@ -586,6 +586,42 @@ Add a short README note explaining that `.squad/` is optional project metadata u
 - OIDC is confirmed: the workflow uses `azure/login@v2` with federated credentials and `azd auth login --federated-credential-provider github`.
 
 
+### 2025-11-25: Session pool replaces ACI + sandbox CA (Phase 1 infra)
+**By:** Verbal (Infra/DevOps)
+**Change:** sandbox-dynamic-sessions Phase 1
+**What:**
+- New `infra/modules/session-pool.bicep` provisions `Microsoft.App/sessionPools@2025-02-02-preview` (`containerType: CustomContainer`) inside the existing CAE. Pool has system-assigned MI; AcrPull granted in-module with deterministic `guid()` name.
+- New `infra/modules/session-pool-role.bicep` grants the backend's MI `Azure ContainerApps Session Executor` (`0fb8eba5-…`) scoped to the pool, deterministic `guid()` name.
+- Deleted: `container-app-sandbox.bicep`, `aci-network.bicep`, `aci-identity.bicep`, `aci-backend-role.bicep`. All wiring in `main.bicep` removed (incl. `enableAciSandbox`, ACI peerings, sandbox CA, sandbox-related `rbac.bicep` entries).
+- Backend CA env vars: removed `SANDBOX_URL`, `USE_ACI_SANDBOX`, `ACI_*`; added `SESSION_POOL_MANAGEMENT_ENDPOINT`, `SESSION_POOL_NAME`, `SANDBOX_RUNTIME=session-pool`.
+- New pool params with defaults: `sessionPoolMaxConcurrent=30`, `sessionPoolReadyInstances=1`, `sessionPoolCooldownSeconds=300`, `sessionPoolCpu=1.0`, `sessionPoolMemory=2Gi`, `sandboxImageTag=latest`.
+
+**Why:** Replaces both ACI per-task containers and the shared `ca-sandbox-*` Container App with prewarmed Hyper-V-isolated sessions. Eliminates the placeholder-image catch-22 (deleted sandbox CA was the failure point) and the ARM-deploy-per-task cold start.
+
+**Cycle fix:** backendFqdn passed to the pool is computed from the predictable `ca-backend-{token}.{cae.defaultDomain}` pattern (or `customDomainName` if set), not `backend.outputs.fqdn`, because the backend module also consumes `sessionPool.outputs.*` env vars. Without this, Bicep flags `BCP080` (cycle).
+
+**Catch-22 mitigation:** Pool's own AcrPull and the backend→pool Session Executor role both use deterministic `guid(scope, principal, roleDef)` names per `.squad/skills/aca-provision-recovery/SKILL.md`. No manual `az role assignment create` workarounds needed.
+
+**Validation:** `az bicep build --file infra/main.bicep` → exit 0, no errors. Only pre-existing warnings (ai-foundry `kind` BCP187, storage listKeys, hardcoded `core.windows.net`) remain.
+
+**Follow-ups for Phase 2+ (not in scope):**
+- `azure.yaml` `sandbox` service still uses `host: containerapp` — needs revisit; image push to ACR works but the CA-revision-update step has no target.
+- `select-model-regions.sh` regional check for sessionPools (Risk table item) — defer.
+- Backend code (Fenster) must read `SESSION_POOL_MANAGEMENT_ENDPOINT` / `SESSION_POOL_NAME`.
+
+
+### 2026-05-22T13:34Z: Auth redirect URI — open-source audit
+**By:** Pascal (via Copilot)
+**What:** Login is NOT hardcoded to turboagent.nl. The redirect URI is already dynamically computed from `customDomainName` in Bicep, falling back to the ACA default FQDN if empty (`infra/modules/container-app-frontend.bicep:97`). `setup-entra-app.sh` registers the right redirect URIs from `CUSTOM_DOMAIN_NAME` + `FRONTEND_URL`. **No code changes needed for the auth flow itself.**
+
+Cosmetic cleanup belongs in the `open-source-project` openspec change (NOT in `sandbox-dynamic-sessions`):
+1. `infra/main.bicep:37` + `infra/modules/container-app-frontend.bicep:16` — replace `@description` example "e.g. voice.turboagent.nl" with `e.g. app.example.com`
+2. `mobile/app.json:12` — keep `com.turboagent.voiceagent` (project name; only swap if rebranding mobile)
+3. `frontend/playwright.prod.config.ts` + `e2e/production-verification.spec.ts` — parameterize via `PRODUCTION_URL` env var instead of hardcoded `voice.turboagent.nl`
+
+**Why:** User flagged concern that login may not work when others deploy to their own tenant + domain. Audit confirms the architecture already supports this; only docs/examples need genericizing.
+
+
 ## Governance
 
 - All meaningful changes require team consensus

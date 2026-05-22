@@ -31,3 +31,12 @@ Backend has 12 specialist agents: notes, brainstorm, research, spec, dev, market
 - OSS backend scrub: `backend/.env.example` is the highest-risk backend artifact for personal Azure references. Keep every example value resource-agnostic (`<your-...>` placeholders), add a source comment above each variable, and leave `AUTH_DISABLED=true` enabled for local development.
 - Backend metadata for OSS should stay generic: `pyproject.toml` now uses a contributors-only author entry, a generic backend description, and explicit `license = { text = "MIT" }` with no repository URL baked in.
 - Non-secret custom domains can still leak environment context: replaced the local mock user email (`dev@turboagent.nl`) and preview-domain docstring (`voice.turboagent.nl`) with neutral examples during the OSS scrub.
+
+## Learnings — 2026-05-22 (sandbox-dynamic-sessions Phase 2)
+
+**Work:** Implemented `SessionSandboxClient` (tasks 2.1–2.6) — HTTP client for Azure Container Apps Dynamic Sessions management API. Files: `backend/app/services/session_sandbox_client.py` + `backend/tests/test_session_sandbox_client.py` (19 tests, all green). Added `respx>=0.22.0` dev dep. Commit `bcdb0bf`.
+
+**Patterns to remember:**
+- Use `respx` (httpx-native) for mocking outbound HTTP in tests instead of `requests-mock` or hand-rolled stubs.
+- The session pool management endpoint contract is `{SESSION_POOL_MANAGEMENT_ENDPOINT}` + `{SESSION_POOL_NAME}` — both injected as env vars by infra (Verbal). Don't hardcode.
+- Commits can sweep in unrelated pre-staged work from disk — always `git status` before commit and call out anything unexpected in the message. `bcdb0bf` swept in Phase 1 Bicep changes that had three latent schema bugs; Verbal had to clean up afterwards in `b70212d`.

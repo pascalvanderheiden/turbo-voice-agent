@@ -319,3 +319,36 @@ az role assignment delete --ids \
 1. `azd provision` — Bicep recreates the three AcrPull assignments with deterministic names (plus any other RBAC: Cosmos, Storage, AI Foundry)
 2. `azd deploy` — builds and pushes actual application images
 3. Implement two-phase RBAC Bicep refactor (URGENT — failure cycle repeats on next `azd down → azd up`)
+
+## Learnings — 2026-05-22 (sandbox-dynamic-sessions Phase 1)
+
+**Work:** Landed Phase 1 session pool infra (tasks 1.1–1.8). New `infra/modules/session-pool.bicep` + `session-pool-role.bicep`. Deleted ACI + sandbox CA modules. Phase 1 was partially pre-landed in `bcdb0bf` (Fenster's Phase 2 commit) with 3 latent Bicep schema bugs: `cooldownPeriodInSeconds` placement, invalid `executionType`, wrong registry credential field name. Fixed and committed as `b70212d`. `az bicep build` clean.
+
+**Catch-22 prevention pattern (now codified):**
+1. **Deterministic role assignment names.** Every `Microsoft.Authorization/roleAssignments` uses `name: guid(scope, principalId, roleDefinitionId)` — idempotent across re-deploys, no manual `az role assignment create` workarounds. Applies to pool AcrPull AND backend→pool Session Executor.
+2. **Real images, not placeholders.** The session pool starts from the real ACR sandbox image tag (`sandboxImageTag=latest`), not a hello-world placeholder that would 401-loop the way the deleted sandbox CA did.
+3. **Break module cycles via computed FQDNs.** When module A needs module B's URL and B needs A's outputs, compute the FQDN deterministically (`ca-{name}-{token}.{cae.defaultDomain}` or `customDomainName` if set) rather than referencing `.outputs.fqdn`. Avoids `BCP080`.
+
+Cross-references: `.squad/skills/aca-provision-recovery/SKILL.md`, decisions.md entry "Fix Container App RBAC Dependency Ordering".
+
+## Learnings
+
+### 2026-05 — Sandbox container readiness for Container Apps session pools (Phase 5)
+
+**Probe split pattern (Liveness vs Startup):**
+- `/health`: cheap liveness, returns 200 the instant Node is listening. No I/O. Used by pool's Liveness probe on 10s period during steady state.
+- `/ready`: startup gate, returns 503 until skill sync completes. Pool's Startup probe polls 5s × 30 attempts → 150s max. Once green, traffic is routed.
+- Implementation: marker file `/tmp/sandbox-state/skills-synced` written by entrypoint.sh AFTER `sync-skills.sh` runs. `/ready` does `fs.existsSync` check (fast, no race).
+- Even when Blob Storage is unreachable, write the marker anyway so the pool doesn't stall — graceful degradation per spec.
+
+**X-GH-Token header → gh auth pattern:**
+- Express middleware reads `req.get("X-GH-Token")`, pipes via stdin to `gh auth login --with-token`.
+- Idempotency: in-process `ghAuthenticated` boolean + `ghAuthInFlight` Promise prevents concurrent first-request races (multiple first requests share one auth attempt).
+- Token hygiene: never log the value; `delete req.headers["x-gh-token"]` after middleware to prevent leak into downstream proxy/child-process env.
+- On auth failure: log stderr (token-free), reset `ghAuthInFlight` to null so a subsequent valid token can retry. Request still serves — many endpoints don't need gh.
+- Token piped via spawn stdin, not shell — avoids ever materialising the token in argv or shell history.
+
+**Smoke-test workaround when Docker daemon is unavailable:**
+- `node --check server.js` catches syntax errors fast.
+- Run `PORT=3099 node server.js` directly with deps installed — exercises express routes and middleware without container. Validated all four scenarios (health/ready-before/ready-after/header-fires).
+- `docker info` returning non-zero is the signal that Docker daemon is down even if `docker` binary exists (e.g., on macOS without Docker Desktop running).
