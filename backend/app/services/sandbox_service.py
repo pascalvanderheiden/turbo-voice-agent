@@ -80,10 +80,7 @@ class SandboxService:
         """Get sandbox state for the current user."""
         try:
             container = await self._container()
-            query = (
-                "SELECT * FROM c WHERE c.userId = @userId"
-                " AND c.docType = 'sandbox_state'"
-            )
+            query = "SELECT * FROM c WHERE c.userId = @userId AND c.docType = 'sandbox_state'"
             params = [{"name": "@userId", "value": self._user_id}]
             items = container.query_items(
                 query=query, parameters=params, partition_key=self._user_id

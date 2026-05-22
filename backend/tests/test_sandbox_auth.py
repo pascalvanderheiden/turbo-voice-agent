@@ -1,13 +1,12 @@
 """Tests for sandbox authentication token handling."""
 
 import os
-import pytest
 
 
 def test_encrypt_decrypt_roundtrip():
     """Token survives encrypt → decrypt cycle."""
     os.environ["SANDBOX_TOKEN_KEY"] = "test-encryption-key-123"
-    from app.routes.user import _encrypt_sandbox_token, _decrypt_sandbox_token
+    from app.routes.user import _decrypt_sandbox_token, _encrypt_sandbox_token
 
     original = "ghp_ABCdef123456789"
     encrypted = _encrypt_sandbox_token(original)

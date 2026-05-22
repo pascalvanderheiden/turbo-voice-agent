@@ -70,9 +70,9 @@
 
 ## 9. Final verification
 
-- [ ] 9.1 Run backend test suite: `cd backend && pytest`
-- [ ] 9.2 Run lint: `cd backend && ruff check . && ruff format --check .`
-- [ ] 9.3 Frontend smoke (no functional UI change expected, but verify dev-task flow): `cd frontend && npm run lint && npx playwright test e2e/dev-task.spec.ts` (or equivalent)
+- [x] 9.1 Run backend test suite: `cd backend && pytest`
+- [x] 9.2 Run lint: `cd backend && ruff check . && ruff format --check .`
+- [x] 9.3 Frontend smoke (no functional UI change expected, but verify dev-task flow): `cd frontend && npm run lint && npx playwright test e2e/dev-task.spec.ts` (or equivalent)
 - [ ] 9.4 Confirm `azd up` succeeds on a clean subscription with no manual steps
 - [ ] 9.5 Confirm cold-start latency for a sandbox task is under 2 seconds (vs prior ~30-120s ACI)
-- [ ] 9.6 Run `openspec status --change sandbox-dynamic-sessions` and confirm apply-ready
+- [x] 9.6 Run `openspec status --change sandbox-dynamic-sessions` and confirm apply-ready

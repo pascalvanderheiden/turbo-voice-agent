@@ -1,8 +1,9 @@
 """Tests for SandboxService."""
 
 import pytest
+
+from app.models.sandbox import SandboxConfig
 from app.services.inmemory_sandbox_service import InMemorySandboxService
-from app.models.sandbox import SandboxConfig, SandboxState
 
 
 @pytest.fixture
