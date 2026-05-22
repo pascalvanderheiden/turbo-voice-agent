@@ -27,7 +27,19 @@ from app.db.init import ensure_database_and_containers
 from app.mcp.todo_mcp_client import TodoMcpClient
 from app.mcp.work_mcp_client import WorkMcpClient
 from app.middleware.auth_middleware import EntraAuthMiddleware
-from app.routes import chat, dev, ideas, marketing, notes, research, slides, specs, todos, upload, voice_ws
+from app.routes import (
+    chat,
+    dev,
+    ideas,
+    marketing,
+    notes,
+    research,
+    slides,
+    specs,
+    todos,
+    upload,
+    voice_ws,
+)
 from app.routes import sandbox as sandbox_routes
 from app.routes.user import router as user_router
 from app.services.brainstorm_service import BrainstormService
@@ -77,7 +89,7 @@ def _resolve_local_skills_dir() -> "Path | None":
 
     # Derive from backend dir: backend/app/main.py → backend → project_root
     backend_dir = Path(__file__).resolve().parent.parent  # backend/
-    project_root = backend_dir.parent                     # project root
+    project_root = backend_dir.parent  # project root
     skills_dir = project_root / ".agents" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     return skills_dir
@@ -120,7 +132,7 @@ async def lifespan(app: FastAPI):
             logger.info("Cosmos skills service initialized.")
         except Exception:
             logger.exception("Failed to init Cosmos skills service.")
-    
+
     # Fallback to in-memory if Cosmos isn't available
     if cosmos_skills is None:
         from app.services.in_memory_skills_service import InMemorySkillsService
@@ -128,8 +140,7 @@ async def lifespan(app: FastAPI):
         local_skills_dir = _resolve_local_skills_dir()
         cosmos_skills = InMemorySkillsService(local_skills_dir=local_skills_dir)
         logger.warning(
-            "Using in-memory skills service (data will not persist). "
-            "LOCAL_SKILLS_DIR=%s",
+            "Using in-memory skills service (data will not persist). LOCAL_SKILLS_DIR=%s",
             local_skills_dir,
         )
 
@@ -192,17 +203,34 @@ async def lifespan(app: FastAPI):
     brainstorm_agent = BrainstormAgent(brainstorm_service, research_service=research_service)
     slides_agent = SlidesAgent(slides_service, research_service=research_service)
     research_agent = ResearchAgent(research_service)
-    spec_agent = SpecAgent(spec_service, brainstorm_service=brainstorm_service, research_service=research_service)
-    dev_agent = DevAgent(dev_service, spec_service=spec_service, skills_service=skills_service, cosmos_skills=cosmos_skills, slides_service=slides_service, profile_service=app.state.user_profile_service)
+    spec_agent = SpecAgent(
+        spec_service, brainstorm_service=brainstorm_service, research_service=research_service
+    )
+    dev_agent = DevAgent(
+        dev_service,
+        spec_service=spec_service,
+        skills_service=skills_service,
+        cosmos_skills=cosmos_skills,
+        slides_service=slides_service,
+        profile_service=app.state.user_profile_service,
+    )
     # Wire dev_agent into spec_agent for add_feature_to_spec pipeline
     spec_agent._dev_agent = dev_agent
+    # Expose dev_service so route handlers (e.g. GitHub disconnect) can enumerate
+    # a user's active dev-tasks to release per-task sandbox sessions.
+    app.state.dev_service = dev_service
     skills_agent = SkillsAgent(
         skills_service,
         cosmos_skills=cosmos_skills,
         sync_sandbox=_sync_sandbox_skills,
         delete_sandbox_skill=_delete_sandbox_skill,
     )
-    marketing_agent = MarketingAgent(marketing_service, dev_service=dev_service, spec_service=spec_service, profile_service=app.state.user_profile_service)
+    marketing_agent = MarketingAgent(
+        marketing_service,
+        dev_service=dev_service,
+        spec_service=spec_service,
+        profile_service=app.state.user_profile_service,
+    )
 
     # Initialize MCP client and Todo Agent
     from app.routes.user import get_todo_user_token
@@ -227,16 +255,31 @@ async def lifespan(app: FastAPI):
     work_agent = WorkAgent(work_mcp_client, get_user_token=_work_token_resolver)
 
     supervisor = SupervisorAgent(
-        notes_agent, brainstorm_agent, research_agent, spec_agent,
-        dev_agent, skills_agent, marketing_agent=marketing_agent,
-        todo_agent=todo_agent, slides_agent=slides_agent,
+        notes_agent,
+        brainstorm_agent,
+        research_agent,
+        spec_agent,
+        dev_agent,
+        skills_agent,
+        marketing_agent=marketing_agent,
+        todo_agent=todo_agent,
+        slides_agent=slides_agent,
         work_agent=work_agent,
     )
 
     notes.set_notes_service(notes_service)
-    ideas.set_brainstorm_service(brainstorm_service, refine_fn=brainstorm_agent.refine, refine_stream_fn=brainstorm_agent.refine_stream)
+    ideas.set_brainstorm_service(
+        brainstorm_service,
+        refine_fn=brainstorm_agent.refine,
+        refine_stream_fn=brainstorm_agent.refine_stream,
+    )
     ideas.set_idea_research_service(research_service)
-    slides.set_slides_service(slides_service, refine_fn=slides_agent.refine, refine_stream_fn=slides_agent.refine_stream, parse_deck_config_fn=slides_agent.parse_deck_config)
+    slides.set_slides_service(
+        slides_service,
+        refine_fn=slides_agent.refine,
+        refine_stream_fn=slides_agent.refine_stream,
+        parse_deck_config_fn=slides_agent.parse_deck_config,
+    )
     slides.set_slides_research_service(research_service)
     research.set_research_service(research_service, run_web_search, run_deep_research)
     specs.set_spec_service(
@@ -248,7 +291,14 @@ async def lifespan(app: FastAPI):
     )
     voice_ws.set_supervisor(supervisor)
     chat.set_supervisor(supervisor)
-    dev.set_dev_service(dev_service, pipeline_fn=dev_agent.run_pipeline, skills_service=skills_service, cosmos_skills=cosmos_skills, spec_service=spec_service, dev_agent=dev_agent)
+    dev.set_dev_service(
+        dev_service,
+        pipeline_fn=dev_agent.run_pipeline,
+        skills_service=skills_service,
+        cosmos_skills=cosmos_skills,
+        spec_service=spec_service,
+        dev_agent=dev_agent,
+    )
     sandbox_routes.set_sandbox_service(sandbox_service)
     marketing.set_marketing_service(marketing_service, agent=marketing_agent)
     todos.set_todo_agent(todo_agent)
@@ -349,8 +399,7 @@ app.add_middleware(EntraAuthMiddleware)
 
 # CORS for authenticated requests
 _allowed_origins = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:8081"
+    "ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8081"
 ).split(",")
 
 app.add_middleware(
@@ -412,6 +461,7 @@ async def health():
 
     status_code = 200 if overall == "healthy" else 503
     from fastapi.responses import JSONResponse
+
     return JSONResponse(
         status_code=status_code,
         content={"status": overall, "checks": checks, "version": "0.4.0"},
@@ -458,7 +508,14 @@ async def agent_status():
                 "type": "specialist",
                 "model": "gpt-5.2 + mistral-document-ai-2512",
                 "status": "online",
-                "tools": ["create_idea", "get_ideas", "get_idea", "update_idea", "delete_idea", "refine_idea"],
+                "tools": [
+                    "create_idea",
+                    "get_ideas",
+                    "get_idea",
+                    "update_idea",
+                    "delete_idea",
+                    "refine_idea",
+                ],
             },
             {
                 "id": "research",
@@ -466,7 +523,13 @@ async def agent_status():
                 "type": "specialist",
                 "model": "gpt-4.1 / o3-deep-research",
                 "status": "online",
-                "tools": ["web_search", "deep_research", "get_research_list", "get_research", "delete_research"],
+                "tools": [
+                    "web_search",
+                    "deep_research",
+                    "get_research_list",
+                    "get_research",
+                    "delete_research",
+                ],
             },
             {
                 "id": "spec",
@@ -474,7 +537,15 @@ async def agent_status():
                 "type": "specialist",
                 "model": "gpt-5.2",
                 "status": "online",
-                "tools": ["create_spec", "get_specs", "get_spec", "update_spec", "delete_spec", "generate_spec", "optimize_spec"],
+                "tools": [
+                    "create_spec",
+                    "get_specs",
+                    "get_spec",
+                    "update_spec",
+                    "delete_spec",
+                    "generate_spec",
+                    "optimize_spec",
+                ],
             },
             {
                 "id": "dev",
@@ -482,7 +553,13 @@ async def agent_status():
                 "type": "specialist",
                 "model": "GitHub Copilot CLI (Sandbox)",
                 "status": "online",
-                "tools": ["create_dev_task", "get_dev_tasks", "get_dev_task", "delete_dev_task", "trigger_dev_pipeline"],
+                "tools": [
+                    "create_dev_task",
+                    "get_dev_tasks",
+                    "get_dev_task",
+                    "delete_dev_task",
+                    "trigger_dev_pipeline",
+                ],
                 "mcpServers": ["playwright"],
             },
             {
@@ -500,7 +577,13 @@ async def agent_status():
                 "model": "sora-2",
                 "scriptModel": "gpt-5.2",
                 "status": "online",
-                "tools": ["create_marketing_video", "get_marketing_videos", "get_marketing_video", "delete_marketing_video", "trigger_video_generation"],
+                "tools": [
+                    "create_marketing_video",
+                    "get_marketing_videos",
+                    "get_marketing_video",
+                    "delete_marketing_video",
+                    "trigger_video_generation",
+                ],
             },
             {
                 "id": "slides",
@@ -508,7 +591,14 @@ async def agent_status():
                 "type": "specialist",
                 "model": "gpt-5.2",
                 "status": "online",
-                "tools": ["create_slides", "get_slides_list", "get_slides", "update_slides", "delete_slides", "refine_slides"],
+                "tools": [
+                    "create_slides",
+                    "get_slides_list",
+                    "get_slides",
+                    "update_slides",
+                    "delete_slides",
+                    "refine_slides",
+                ],
             },
             {
                 "id": "todo",
@@ -516,7 +606,14 @@ async def agent_status():
                 "type": "specialist",
                 "model": "gpt-5.2",
                 "status": "online",
-                "tools": ["create_todo", "get_todos", "get_todo", "update_todo", "delete_todo", "complete_todo"],
+                "tools": [
+                    "create_todo",
+                    "get_todos",
+                    "get_todo",
+                    "update_todo",
+                    "delete_todo",
+                    "complete_todo",
+                ],
                 "mcpServers": ["microsoft-todo"],
             },
             {
@@ -555,6 +652,7 @@ async def _sync_sandbox_skills() -> dict | None:
     sandbox_url = os.getenv("SANDBOX_URL", "http://localhost:4000")
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(f"{sandbox_url}/skills/sync")
             resp.raise_for_status()
@@ -576,6 +674,7 @@ async def _delete_sandbox_skill(name: str) -> dict | None:
     sandbox_url = os.getenv("SANDBOX_URL", "http://localhost:4000")
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.delete(f"{sandbox_url}/skills/{name}")
             resp.raise_for_status()
@@ -587,7 +686,8 @@ async def _delete_sandbox_skill(name: str) -> dict | None:
         if "Connect" in exc_name:
             logger.debug(
                 "Sandbox skill delete '%s' skipped — sandbox not reachable at %s",
-                name, sandbox_url,
+                name,
+                sandbox_url,
             )
         else:
             logger.warning("Sandbox skill delete '%s' failed (non-fatal): %s", name, exc)
@@ -629,7 +729,8 @@ async def activate_skill(body: SkillInstallRequest, request: Request):
     svc = _cosmos_skills.with_user(user_id)
     is_local = body.repo == "local"
     npx_cmd = body.npxCommand or (
-        "__local__" if is_local
+        "__local__"
+        if is_local
         else f"npx -y degit {body.repo}/{body.skillName} .github/skills/{body.skillName}"
     )
     result = await svc.activate_skill(body.skillName, body.description or "", body.repo, npx_cmd)
@@ -643,11 +744,15 @@ async def activate_skill(body: SkillInstallRequest, request: Request):
             blob_uploaded = len(uploaded)
             # Mark as blob-stored — runtime treats it like a local skill (no npx needed)
             await svc.activate_skill(
-                body.skillName, body.description or "", body.repo, "__local__",
+                body.skillName,
+                body.description or "",
+                body.repo,
+                "__local__",
             )
             logger.info(
                 "Marketplace skill '%s' uploaded to blob (%d files)",
-                body.skillName, blob_uploaded,
+                body.skillName,
+                blob_uploaded,
             )
 
     logger.info("Activated skill '%s' for user=%s", body.skillName, user_id)
@@ -664,6 +769,7 @@ async def deactivate_skill(name: str, request: Request):
     user_id = getattr(request.state, "user_id", "default-user")
     if not _cosmos_skills:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=500, detail="Skills service not available")
     svc = _cosmos_skills.with_user(user_id)
     await svc.deactivate_skill(name)
@@ -691,4 +797,6 @@ async def get_spec_dev_task(spec_id: str, request: Request):
     task = await dev_svc.with_user(user_id).get_by_id(spec.dev_task_id)
     if not task:
         return {"devTask": None}
-    return {"devTask": {"id": task.id, "title": task.title, "mode": task.mode, "status": task.status}}
+    return {
+        "devTask": {"id": task.id, "title": task.title, "mode": task.mode, "status": task.status}
+    }

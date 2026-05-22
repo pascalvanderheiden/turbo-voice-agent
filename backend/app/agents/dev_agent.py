@@ -37,27 +37,36 @@ _PIPELINE_BUFFER_CAP = 2000  # Max entries per task to prevent unbounded memory
 # ── Active sandbox task IDs per dev task (for cleanup on deletion) ────────
 _active_sandbox_tasks: dict[str, str] = {}  # dev_task_id → sandbox_task_id
 
+# ── Per-dev-task "X-GH-Token sent" tracker (Phase 6 of sandbox-dynamic-sessions) ──
+# The sandbox container middleware bootstraps ``gh auth login`` from the first
+# request that carries an ``X-GH-Token`` header per session. We track which
+# dev-tasks have already received the header so subsequent requests don't
+# resend the PAT. In-memory is sufficient: sessions are ephemeral and the
+# middleware is idempotent if a re-bootstrap ever happens.
+_gh_token_sent: set[str] = set()
+
 # Question patterns that indicate the CLI is waiting for user input
 _QUESTION_PATTERNS = [
-    r"\?\s*$",                          # ends with ?
-    r"\(y/n\)",                          # (y/n)
-    r"\(Y/n\)",                          # (Y/n)
-    r"\(y/N\)",                          # (y/N)
-    r"\[y/N\]",                          # [y/N]
-    r"\[Y/n\]",                          # [Y/n]
-    r"\[yes/no\]",                       # [yes/no]
-    r":\s*$",                            # ends with :
-    r">\s*$",                            # ends with >
-    r"Press Enter",                      # Press Enter to continue
-    r"Do you want to",                   # Do you want to ...
-    r"Would you like",                   # Would you like ...
-    r"Enter a value",                    # Enter a value for ...
-    r"Select.*:",                        # Select an option:
-    r"Choose.*:",                        # Choose ...
-    r"Overwrite.*\?",                    # Overwrite file?
-    r"proceed\?",                        # proceed?
+    r"\?\s*$",  # ends with ?
+    r"\(y/n\)",  # (y/n)
+    r"\(Y/n\)",  # (Y/n)
+    r"\(y/N\)",  # (y/N)
+    r"\[y/N\]",  # [y/N]
+    r"\[Y/n\]",  # [Y/n]
+    r"\[yes/no\]",  # [yes/no]
+    r":\s*$",  # ends with :
+    r">\s*$",  # ends with >
+    r"Press Enter",  # Press Enter to continue
+    r"Do you want to",  # Do you want to ...
+    r"Would you like",  # Would you like ...
+    r"Enter a value",  # Enter a value for ...
+    r"Select.*:",  # Select an option:
+    r"Choose.*:",  # Choose ...
+    r"Overwrite.*\?",  # Overwrite file?
+    r"proceed\?",  # proceed?
 ]
 _QUESTION_RE = re.compile("|".join(_QUESTION_PATTERNS), re.IGNORECASE)
+
 
 def get_pipeline_output(task_id: str) -> list[dict]:
     """Get the pipeline output buffer for a task (for SSE streaming)."""
@@ -82,6 +91,7 @@ async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = N
     (no-op in local-dev).
     """
     sandbox_task_id = _active_sandbox_tasks.pop(task_id, None)
+    _gh_token_sent.discard(task_id)
     client = get_sandbox_client()
 
     if sandbox_task_id:
@@ -94,12 +104,16 @@ async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = N
             )
             logger.info(
                 "Killed sandbox task %s for dev-task %s: %s",
-                sandbox_task_id, task_id, resp.status_code,
+                sandbox_task_id,
+                task_id,
+                resp.status_code,
             )
         except Exception as exc:
             logger.warning(
                 "Failed to kill sandbox task %s for dev-task %s: %s",
-                sandbox_task_id, task_id, exc,
+                sandbox_task_id,
+                task_id,
+                exc,
             )
 
     # Release the per-task session in the pool (no-op for local-dev).
@@ -149,6 +163,7 @@ class DevAgent:
         call ``stop_session`` on user-driven cancellation/teardown to release
         the seat eagerly. Tolerant of 404 / local-dev no-op.
         """
+        _gh_token_sent.discard(task_id)
         try:
             await self._sandbox_client().stop_session(task_id)
         except Exception as exc:
@@ -167,8 +182,15 @@ class DevAgent:
                         "type": "object",
                         "properties": {
                             "title": {"type": "string", "description": "The task title"},
-                            "spec_id": {"type": "string", "description": "Optional spec ID to develop"},
-                            "mode": {"type": "string", "enum": ["mockup", "sequential", "slides"], "description": "Pipeline mode: mockup (quick GUI), sequential (iterative), or slides (presentation deck)"},
+                            "spec_id": {
+                                "type": "string",
+                                "description": "Optional spec ID to develop",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["mockup", "sequential", "slides"],
+                                "description": "Pipeline mode: mockup (quick GUI), sequential (iterative), or slides (presentation deck)",
+                            },
                         },
                         "required": ["title"],
                     },
@@ -204,7 +226,10 @@ class DevAgent:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "task_id": {"type": "string", "description": "The dev task ID to delete"},
+                            "task_id": {
+                                "type": "string",
+                                "description": "The dev task ID to delete",
+                            },
                         },
                         "required": ["task_id"],
                     },
@@ -218,7 +243,10 @@ class DevAgent:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "task_id": {"type": "string", "description": "The dev task ID to run the pipeline on"},
+                            "task_id": {
+                                "type": "string",
+                                "description": "The dev task ID to run the pipeline on",
+                            },
                         },
                         "required": ["task_id"],
                     },
@@ -226,7 +254,9 @@ class DevAgent:
             },
         ]
 
-    async def handle_function_call(self, function_name: str, arguments: str, user_id: str = "default-user") -> str:
+    async def handle_function_call(
+        self, function_name: str, arguments: str, user_id: str = "default-user"
+    ) -> str:
         """Execute a function call and return the result as a string."""
         try:
             args = json.loads(arguments) if arguments else {}
@@ -237,6 +267,7 @@ class DevAgent:
 
         if function_name == "create_dev_task":
             from app.models.dev_task import DevTaskCreate
+
             mode = args.get("mode", "mockup")
             task = await service.create(
                 DevTaskCreate(
@@ -249,46 +280,69 @@ class DevAgent:
             # If linked to a spec, populate iterations and set bidirectional link
             if args.get("spec_id") and self._spec_service:
                 try:
-                    await self._populate_iterations_from_spec(task.id, args["spec_id"], mode, user_id=user_id)
-                    await self._spec_service.with_user(user_id).set_dev_task_id(args["spec_id"], task.id, "in-development")
+                    await self._populate_iterations_from_spec(
+                        task.id, args["spec_id"], mode, user_id=user_id
+                    )
+                    await self._spec_service.with_user(user_id).set_dev_task_id(
+                        args["spec_id"], task.id, "in-development"
+                    )
                 except Exception:
-                    logger.exception("Failed to populate iterations / link spec for task %s", task.id)
+                    logger.exception(
+                        "Failed to populate iterations / link spec for task %s", task.id
+                    )
             # Auto-attach relevant skills based on title + spec content
             try:
-                await self._auto_attach_skills(task.id, args["title"], args.get("spec_id"), user_id=user_id)
+                await self._auto_attach_skills(
+                    task.id, args["title"], args.get("spec_id"), user_id=user_id
+                )
             except Exception:
                 logger.exception("Failed to auto-attach skills for task %s", task.id)
             task = await service.get_by_id(task.id)
-            return json.dumps({"success": True, "task": {"id": task.id, "title": task.title, "mode": task.mode}})
+            return json.dumps(
+                {"success": True, "task": {"id": task.id, "title": task.title, "mode": task.mode}}
+            )
 
         elif function_name == "get_dev_tasks":
             tasks = await service.list()
-            return json.dumps({
-                "tasks": [
-                    {
-                        "id": t.id, "title": t.title, "mode": t.mode, "status": t.status,
-                        "iterations": len(t.iterations),
-                        "currentIteration": t.current_iteration,
-                    }
-                    for t in tasks
-                ]
-            })
+            return json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": t.id,
+                            "title": t.title,
+                            "mode": t.mode,
+                            "status": t.status,
+                            "iterations": len(t.iterations),
+                            "currentIteration": t.current_iteration,
+                        }
+                        for t in tasks
+                    ]
+                }
+            )
 
         elif function_name == "get_dev_task":
             task = await service.get_by_id(args["task_id"])
             if task:
-                return json.dumps({
-                    "task": {
-                        "id": task.id, "title": task.title, "mode": task.mode, "status": task.status,
-                        "iterations": [
-                            {
-                                "index": it.iteration_index, "label": it.label,
-                                "stages": [{"name": s.name, "status": s.status} for s in it.stages],
-                            }
-                            for it in task.iterations
-                        ],
+                return json.dumps(
+                    {
+                        "task": {
+                            "id": task.id,
+                            "title": task.title,
+                            "mode": task.mode,
+                            "status": task.status,
+                            "iterations": [
+                                {
+                                    "index": it.iteration_index,
+                                    "label": it.label,
+                                    "stages": [
+                                        {"name": s.name, "status": s.status} for s in it.stages
+                                    ],
+                                }
+                                for it in task.iterations
+                            ],
+                        }
                     }
-                })
+                )
             return json.dumps({"error": "Dev task not found"})
 
         elif function_name == "delete_dev_task":
@@ -307,7 +361,9 @@ class DevAgent:
 
         return json.dumps({"error": f"Unknown function: {function_name}"})
 
-    async def _populate_iterations_from_spec(self, task_id: str, spec_id: str, mode: str, user_id: str | None = None) -> None:
+    async def _populate_iterations_from_spec(
+        self, task_id: str, spec_id: str, mode: str, user_id: str | None = None
+    ) -> None:
         """Populate iterations from spec hierarchy."""
         if not self._spec_service:
             return
@@ -331,7 +387,7 @@ class DevAgent:
             spec_content = spec.content or ""
             for i, match in enumerate(
                 re.finditer(
-                    r'#### Feature: (.+?)\n(.*?)(?=\n#### Feature:|\n### |\n## |\Z)',
+                    r"#### Feature: (.+?)\n(.*?)(?=\n#### Feature:|\n### |\n## |\Z)",
                     spec_content,
                     re.DOTALL,
                 )
@@ -353,7 +409,10 @@ class DevAgent:
         """Quick health check to see if the sandbox is reachable."""
         try:
             resp = await self._sandbox_client().request(
-                "GET", "/health", identifier=task_id or "preflight", timeout=3.0,
+                "GET",
+                "/health",
+                identifier=task_id or "preflight",
+                timeout=3.0,
             )
             return resp.status_code == 200
         except Exception:
@@ -389,9 +448,14 @@ class DevAgent:
                 "Or set USE_CLI_SANDBOX=false to skip pipeline execution."
             )
             logger.warning("Pipeline aborted for task %s: %s", task_id, msg)
-            _buf_append(task_id, {
-                "type": "stderr", "data": f"{msg}\n", "ts": time.time(),
-            })
+            _buf_append(
+                task_id,
+                {
+                    "type": "stderr",
+                    "data": f"{msg}\n",
+                    "ts": time.time(),
+                },
+            )
             _buf_append(task_id, {"type": "exit", "code": 1, "ts": time.time()})
             await service.set_status(task_id, "failed")
             return
@@ -415,9 +479,9 @@ class DevAgent:
             logger.exception("Pipeline FAILED for task %s: %s", task_id, str(e))
             # Emit error to terminal
             if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stderr", "data": f"Pipeline failed: {e}", "ts": time.time()
-                })
+                _buf_append(
+                    task_id, {"type": "stderr", "data": f"Pipeline failed: {e}", "ts": time.time()}
+                )
             try:
                 await service.set_status(task_id, "failed")
                 # Mark any running/pending stages as failed so frontend stops spinning
@@ -427,8 +491,11 @@ class DevAgent:
                         for stage in it.stages:
                             if stage.status in ("running", "pending"):
                                 await service.set_iteration_stage_status(
-                                    task_id, it.iteration_index, stage.name,
-                                    "failed", error=str(e),
+                                    task_id,
+                                    it.iteration_index,
+                                    stage.name,
+                                    "failed",
+                                    error=str(e),
                                 )
             except Exception:
                 logger.exception(
@@ -445,11 +512,14 @@ class DevAgent:
                 buf = _pipeline_outputs[task_id]
                 # Only add if not already present (avoid duplicates)
                 if not any(e.get("type") == "exit" for e in buf[-5:] if isinstance(e, dict)):
-                    _buf_append(task_id, {
-                        "type": "exit",
-                        "code": 1 if pipeline_failed else 0,
-                        "ts": time.time(),
-                    })
+                    _buf_append(
+                        task_id,
+                        {
+                            "type": "exit",
+                            "code": 1 if pipeline_failed else 0,
+                            "ts": time.time(),
+                        },
+                    )
 
     async def _run_mockup_pipeline(self, task_id: str, user_id: str) -> None:
         """Mockup pipeline: init → skills → implement → screenshots."""
@@ -521,11 +591,14 @@ class DevAgent:
                     logger.warning("Mockup implement timed out, retrying once...")
                     await self._checkpoint(task_id, "mockup-implement-partial", work_dir)
                     if task_id in _pipeline_outputs:
-                        _buf_append(task_id, {
-                            "type": "stderr",
-                            "data": "Implement timed out — retrying with continue...\n",
-                            "stage": "implement-retry",
-                        })
+                        _buf_append(
+                            task_id,
+                            {
+                                "type": "stderr",
+                                "data": "Implement timed out — retrying with continue...\n",
+                                "stage": "implement-retry",
+                            },
+                        )
                 else:
                     logger.warning("Mockup implement failed: %s", exc)
                     break
@@ -659,7 +732,7 @@ class DevAgent:
             known_count = len(feature_prompts) + 1  # foundation + original features
             for it in task.iterations:
                 if it.iteration_index >= known_count:
-                    doc = await svc.get_raw(task_id) if hasattr(svc, 'get_raw') else None
+                    doc = await svc.get_raw(task_id) if hasattr(svc, "get_raw") else None
                     propose_instr = ""
                     if doc:
                         for it_doc in doc.get("iterations", []):
@@ -674,6 +747,7 @@ class DevAgent:
         # ── Screenshots — lightweight shell capture from running dev server ──
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
         from app.routes.dev import _live_previews
+
         preview_entry = _live_previews.get(task_id)
         seq_port = preview_entry["port"] if preview_entry else 3000
         await self._sandbox_exec(
@@ -727,9 +801,7 @@ class DevAgent:
                     if slides_data.refined_draft:
                         from app.agents.slides_agent import SlidesAgent
 
-                        deck_config = SlidesAgent.parse_deck_config(
-                            slides_data.refined_draft
-                        )
+                        deck_config = SlidesAgent.parse_deck_config(slides_data.refined_draft)
                         # Extract the ## Slides section as the prompt
                         slides_match = re.search(
                             r"## Slides\s*\n(.+)",
@@ -742,26 +814,15 @@ class DevAgent:
                             slides_prompt = slides_data.refined_draft
                     # Use model-level deck config as fallback
                     deck_config.setdefault("title", slides_data.title)
-                    deck_config.setdefault(
-                        "subtitle", getattr(slides_data, "subtitle", "") or ""
-                    )
-                    deck_config.setdefault(
-                        "icon", getattr(slides_data, "icon", "") or ""
-                    )
-                    deck_config.setdefault(
-                        "theme", getattr(slides_data, "theme", "default")
-                    )
-                    deck_config.setdefault(
-                        "appearance", getattr(slides_data, "appearance", "dark")
-                    )
-                    deck_config.setdefault(
-                        "palette", getattr(slides_data, "palette", "blue")
-                    )
+                    deck_config.setdefault("subtitle", getattr(slides_data, "subtitle", "") or "")
+                    deck_config.setdefault("icon", getattr(slides_data, "icon", "") or "")
+                    deck_config.setdefault("theme", getattr(slides_data, "theme", "default"))
+                    deck_config.setdefault("appearance", getattr(slides_data, "appearance", "dark"))
+                    deck_config.setdefault("palette", getattr(slides_data, "palette", "blue"))
                     # Check for PowerPoint template
                     if slides_data.attachments:
                         pptx_files = [
-                            a for a in slides_data.attachments
-                            if a.lower().endswith(".pptx")
+                            a for a in slides_data.attachments if a.lower().endswith(".pptx")
                         ]
                         if pptx_files:
                             pptx_url = pptx_files[0]
@@ -781,9 +842,7 @@ class DevAgent:
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         try:
             # Emit a single init marker (sub-steps suppress theirs)
-            _buf_append(task_id, {
-                "type": "stage", "data": "── init ──\n", "ts": time.time()
-            })
+            _buf_append(task_id, {"type": "stage", "data": "── init ──\n", "ts": time.time()})
 
             # Clean workspace
             await self._sandbox_exec(
@@ -841,14 +900,14 @@ class DevAgent:
                 emit_marker=False,
             )
             if "DECK_DIR_OK" not in verify_output:
-                raise RuntimeError(
-                    f"create-deckio did not produce deck directory: {deck_dir}"
-                )
+                raise RuntimeError(f"create-deckio did not produce deck directory: {deck_dir}")
             if "GITHUB_DIR_MISSING" in verify_output:
                 logger.warning(
                     "create-deckio did not create .github/ in %s — "
                     "Copilot CLI skill discovery will not work. "
-                    "Output: %s", deck_dir, verify_output[:500],
+                    "Output: %s",
+                    deck_dir,
+                    verify_output[:500],
                 )
 
             work_dir = deck_dir
@@ -877,9 +936,7 @@ class DevAgent:
             await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
         except Exception as e:
             logger.error("Slides init failed for %s: %s", task_id, e)
-            await svc.set_iteration_stage_status(
-                task_id, 0, "init", "failed", error=str(e)
-            )
+            await svc.set_iteration_stage_status(task_id, 0, "init", "failed", error=str(e))
             await svc.set_status(task_id, "failed")
             return
 
@@ -947,9 +1004,7 @@ class DevAgent:
                         for entry in output:
                             data = entry.get("data", "")
                             # Vite prints: Local: http://localhost:NNNN/
-                            port_match = re.search(
-                                r"Local:\s+http://localhost:(\d+)", data
-                            )
+                            port_match = re.search(r"Local:\s+http://localhost:(\d+)", data)
                             if port_match:
                                 actual_port = int(port_match.group(1))
                                 break
@@ -968,30 +1023,35 @@ class DevAgent:
                 except Exception:
                     pass
             else:
-                raise RuntimeError(
-                    "Dev server did not become healthy within 60s"
-                )
+                raise RuntimeError("Dev server did not become healthy within 60s")
 
             if actual_port != 3333:
                 logger.info(
                     "Vite port fallback: 3333 → %d for task %s",
-                    actual_port, task_id,
+                    actual_port,
+                    task_id,
                 )
 
             # Report the preview URL
             preview_url = f"/api/dev/{task_id}/preview/"
-            _buf_append(task_id, {
-                "type": "preview",
-                "data": preview_url,
-                "ts": time.time(),
-            })
+            _buf_append(
+                task_id,
+                {
+                    "type": "preview",
+                    "data": preview_url,
+                    "ts": time.time(),
+                },
+            )
             logger.info(
                 "Slides dev server running for task %s on port %d — preview at %s",
-                task_id, actual_port, preview_url,
+                task_id,
+                actual_port,
+                preview_url,
             )
 
             # Store preview info so routes can look it up
             from app.routes.dev import _live_previews
+
             _live_previews[task_id] = {
                 "url": preview_url,
                 "taskId": task_id,
@@ -1001,9 +1061,7 @@ class DevAgent:
             await svc.set_iteration_stage_status(task_id, 0, "run", "completed")
         except Exception as e:
             logger.error("Slides run stage failed for %s: %s", task_id, e)
-            await svc.set_iteration_stage_status(
-                task_id, 0, "run", "failed", error=str(e)
-            )
+            await svc.set_iteration_stage_status(task_id, 0, "run", "failed", error=str(e))
             await svc.set_status(task_id, "failed")
             return
 
@@ -1040,9 +1098,7 @@ class DevAgent:
             await svc.set_iteration_stage_status(task_id, 0, "slides", "completed")
         except Exception as e:
             logger.error("Slides generation failed for %s: %s", task_id, e)
-            await svc.set_iteration_stage_status(
-                task_id, 0, "slides", "failed", error=str(e)
-            )
+            await svc.set_iteration_stage_status(task_id, 0, "slides", "failed", error=str(e))
             await svc.set_status(task_id, "failed")
             return
 
@@ -1115,24 +1171,35 @@ class DevAgent:
         if not task:
             return {"error": "Dev task not found", "extended": False, "pipeline_triggered": False}
         if task.mode not in ("sequential", "openspec"):
-            return {"error": "Only sequential mode supports incremental features", "extended": False, "pipeline_triggered": False}
+            return {
+                "error": "Only sequential mode supports incremental features",
+                "extended": False,
+                "pipeline_triggered": False,
+            }
 
         # Determine foundation status
         foundation_completed = False
         if task.iterations:
             foundation = task.iterations[0]
             foundation_completed = all(
-                s.status == "completed" for s in foundation.stages
+                s.status == "completed"
+                for s in foundation.stages
                 if s.name in ("init", "propose", "apply")
             )
 
         # Create the new iteration
-        iteration_data = _default_iteration(0, f"Feature: {feature_name}", spec_id, mode="sequential")
+        iteration_data = _default_iteration(
+            0, f"Feature: {feature_name}", spec_id, mode="sequential"
+        )
         # Store the propose instruction in the iteration for later use
         iteration_data["proposeInstruction"] = propose_instruction
         new_index = await svc.add_iteration(task_id, iteration_data)
         if new_index is None:
-            return {"error": "Failed to add iteration", "extended": False, "pipeline_triggered": False}
+            return {
+                "error": "Failed to add iteration",
+                "extended": False,
+                "pipeline_triggered": False,
+            }
 
         # Trigger pipeline if foundation is done
         pipeline_triggered = False
@@ -1146,9 +1213,16 @@ class DevAgent:
 
         logger.info(
             "Appended feature iteration %d to task %s: %s (pipeline_triggered=%s)",
-            new_index, task_id, feature_name, pipeline_triggered,
+            new_index,
+            task_id,
+            feature_name,
+            pipeline_triggered,
         )
-        return {"extended": True, "pipeline_triggered": pipeline_triggered, "iteration_index": new_index}
+        return {
+            "extended": True,
+            "pipeline_triggered": pipeline_triggered,
+            "iteration_index": new_index,
+        }
 
     async def run_incremental_feature_pipeline(
         self,
@@ -1214,24 +1288,31 @@ class DevAgent:
                 continue_session=True,
             )
             await self._collect_screenshots(task_id, work_dir=work_dir, user_id=user_id)
-            await svc.set_iteration_stage_status(task_id, iteration_index, "screenshots", "completed")
+            await svc.set_iteration_stage_status(
+                task_id, iteration_index, "screenshots", "completed"
+            )
 
             # Check if all iterations are done
             task = await svc.get_by_id(task_id)
             if task:
                 all_done = all(
-                    all(s.status == "completed" for s in it.stages
-                        if s.name.startswith("implement"))
+                    all(
+                        s.status == "completed" for s in it.stages if s.name.startswith("implement")
+                    )
                     for it in task.iterations
                 )
                 if all_done:
                     await self._deactivate_squad(task_id, user_id)
                     await svc.set_status(task_id, "completed")
 
-            logger.info("Incremental feature pipeline COMPLETED: task=%s, iter=%d", task_id, iteration_index)
+            logger.info(
+                "Incremental feature pipeline COMPLETED: task=%s, iter=%d", task_id, iteration_index
+            )
 
         except Exception as e:
-            logger.exception("Incremental feature pipeline FAILED: task=%s, iter=%d", task_id, iteration_index)
+            logger.exception(
+                "Incremental feature pipeline FAILED: task=%s, iter=%d", task_id, iteration_index
+            )
             try:
                 stage_name = f"implement-feature-{iteration_index}"
                 await svc.set_iteration_stage_status(
@@ -1291,10 +1372,16 @@ class DevAgent:
         else:
             raise ValueError("prompt or command is required")
 
-        # Inject per-user GitHub PAT if available
+        # Phase 6 of sandbox-dynamic-sessions: attach the user's GitHub PAT as
+        # ``X-GH-Token`` on the FIRST sandbox call per dev-task so the sandbox
+        # container can run ``gh auth login --with-token``. Subsequent requests
+        # for the same task skip the header — gh auth state persists for the
+        # session lifetime.
         gh_token = getattr(self, "_current_gh_token", None)
-        if gh_token:
-            payload["ghToken"] = gh_token
+        first_call_headers: dict[str, str] = {}
+        if gh_token and task_id and task_id not in _gh_token_sent:
+            first_call_headers["X-GH-Token"] = gh_token
+            _gh_token_sent.add(task_id)
 
         log_preview = prompt[:120] if prompt else f"{command} {args}"
         logger.info("Sandbox exec [%s]: %s", stage_label, log_preview)
@@ -1306,18 +1393,25 @@ class DevAgent:
 
         logger.debug(
             "[SANDBOX-DIAG] Starting sandbox task stage=%s task_id=%s buf_id=%s",
-            stage_label, task_id, id(output_buf),
+            stage_label,
+            task_id,
+            id(output_buf),
         )
 
         # Emit stage marker (unless suppressed for sub-steps)
         if task_id and emit_marker:
-            _buf_append(task_id, {
-                "type": "stage", "data": f"── {stage_label} ──\n", "ts": time.time()
-            })
+            _buf_append(
+                task_id, {"type": "stage", "data": f"── {stage_label} ──\n", "ts": time.time()}
+            )
 
         sandbox_client = self._sandbox_client()
         resp = await sandbox_client.request(
-            "POST", "/tasks", identifier=task_id or "default", json=payload, timeout=30.0,
+            "POST",
+            "/tasks",
+            identifier=task_id or "default",
+            json=payload,
+            headers=first_call_headers or None,
+            timeout=30.0,
         )
         resp.raise_for_status()
         task_data = resp.json()
@@ -1329,7 +1423,8 @@ class DevAgent:
 
         logger.debug(
             "[SANDBOX-DIAG] Task created sandbox_task=%s stage=%s, connecting SSE",
-            sandbox_task_id, stage_label,
+            sandbox_task_id,
+            stage_label,
         )
 
         # Stream output via SSE
@@ -1353,30 +1448,30 @@ class DevAgent:
             ) as sse_resp:
                 logger.debug(
                     "[SANDBOX-DIAG] SSE connected status=%d stage=%s",
-                    sse_resp.status_code, stage_label,
+                    sse_resp.status_code,
+                    stage_label,
                 )
                 lines_iter = sse_resp.aiter_lines()
                 while True:
                     try:
                         raw_line = await asyncio.wait_for(
-                            lines_iter.__anext__(), timeout=SSE_LINE_TIMEOUT,
+                            lines_iter.__anext__(),
+                            timeout=SSE_LINE_TIMEOUT,
                         )
                     except StopAsyncIteration:
                         break
                     except TimeoutError:
                         logger.warning(
-                            "SSE line timeout (%ds, no data) [%s], "
-                            "falling back to polling",
-                            SSE_LINE_TIMEOUT, stage_label,
+                            "SSE line timeout (%ds, no data) [%s], falling back to polling",
+                            SSE_LINE_TIMEOUT,
+                            stage_label,
                         )
                         raise
 
                     now = time.monotonic()
                     if now - start > timeout:
                         await self._kill_sandbox_task(sandbox_task_id, stage_label)
-                        raise RuntimeError(
-                            f"Sandbox task timed out: {stage_label}"
-                        )
+                        raise RuntimeError(f"Sandbox task timed out: {stage_label}")
                     # Stall detection: no meaningful stdout/stderr for too long
                     # (keepalives don't count — they just prove the connection is alive)
                     if now - last_output_time > stall_timeout:
@@ -1396,7 +1491,9 @@ class DevAgent:
                     if line_count <= 3 or line_count % 50 == 0:
                         logger.debug(
                             "[SANDBOX-DIAG] SSE line #%d stage=%s buf=%d",
-                            line_count, stage_label, len(output_buf),
+                            line_count,
+                            stage_label,
+                            len(output_buf),
                         )
 
                     try:
@@ -1427,7 +1524,11 @@ class DevAgent:
                             if premium_line:
                                 parsed_premium = float(premium_line.group(1))
                                 # Round up fractional requests to whole number
-                                rounded = int(parsed_premium) if parsed_premium == int(parsed_premium) else int(parsed_premium) + 1
+                                rounded = (
+                                    int(parsed_premium)
+                                    if parsed_premium == int(parsed_premium)
+                                    else int(parsed_premium) + 1
+                                )
                                 if rounded > 0:
                                     try:
                                         pr_svc = (
@@ -1438,7 +1539,8 @@ class DevAgent:
                                         )
                                         if hasattr(pr_svc, "add_premium_requests"):
                                             await pr_svc.add_premium_requests(
-                                                task_id, rounded,
+                                                task_id,
+                                                rounded,
                                             )
                                     except Exception:
                                         pass
@@ -1463,15 +1565,40 @@ class DevAgent:
                                 # Known squad member names from all themes
                                 known_names = {
                                     # Aliens (default)
-                                    "Hicks", "Ripley", "Dallas", "Lambert", "Parker", "Scribe",
+                                    "Hicks",
+                                    "Ripley",
+                                    "Dallas",
+                                    "Lambert",
+                                    "Parker",
+                                    "Scribe",
                                     # Star Wars
-                                    "Obi-Wan", "Leia", "Han", "Chewie", "R2-D2", "C-3PO",
+                                    "Obi-Wan",
+                                    "Leia",
+                                    "Han",
+                                    "Chewie",
+                                    "R2-D2",
+                                    "C-3PO",
                                     # LOTR
-                                    "Aragorn", "Legolas", "Gimli", "Gandalf", "Samwise", "Frodo",
+                                    "Aragorn",
+                                    "Legolas",
+                                    "Gimli",
+                                    "Gandalf",
+                                    "Samwise",
+                                    "Frodo",
                                     # Matrix
-                                    "Morpheus", "Trinity", "Neo", "Tank", "Switch", "Oracle",
+                                    "Morpheus",
+                                    "Trinity",
+                                    "Neo",
+                                    "Tank",
+                                    "Switch",
+                                    "Oracle",
                                     # Marvel
-                                    "Fury", "Stark", "Banner", "Romanoff", "Thor", "Jarvis",
+                                    "Fury",
+                                    "Stark",
+                                    "Banner",
+                                    "Romanoff",
+                                    "Thor",
+                                    "Jarvis",
                                 }
                                 if agent_name in known_names:
                                     try:
@@ -1525,12 +1652,20 @@ class DevAgent:
             logger.warning(
                 "[SANDBOX-DIAG] SSE stream error [%s] type=%s, "
                 "lines_received=%d buf_size=%d, falling back to polling: %s",
-                stage_label, type(e).__name__, line_count, len(output_buf), e,
+                stage_label,
+                type(e).__name__,
+                line_count,
+                len(output_buf),
+                e,
             )
             # Fallback: poll for completion
             exit_code = await self._poll_until_done(
-                sandbox_task_id, stage_label, timeout - (time.monotonic() - start),
-                output_lines, output_buf, task_id,
+                sandbox_task_id,
+                stage_label,
+                timeout - (time.monotonic() - start),
+                output_lines,
+                output_buf,
+                task_id,
             )
 
         combined = "".join(output_lines)
@@ -1538,10 +1673,13 @@ class DevAgent:
         # Clear active sandbox task tracking
         _active_sandbox_tasks.pop(task_id, None)
         logger.debug(
-            "[SANDBOX-DIAG] Sandbox exec [%s] exit=%d chars=%d "
-            "lines=%d buf_size=%d elapsed=%.0fs",
-            stage_label, exit_code, len(combined),
-            line_count, len(output_buf), time.monotonic() - start,
+            "[SANDBOX-DIAG] Sandbox exec [%s] exit=%d chars=%d lines=%d buf_size=%d elapsed=%.0fs",
+            stage_label,
+            exit_code,
+            len(combined),
+            line_count,
+            len(output_buf),
+            time.monotonic() - start,
         )
 
         # Emit a per-stage exit marker so SSE consumers see the stage ended.
@@ -1549,17 +1687,18 @@ class DevAgent:
         # but individual stage completion must also be signalled — especially when
         # the SSE stream fell back to polling and the original exit event was lost.
         if task_id and task_id in _pipeline_outputs:
-            _buf_append(task_id, {
-                "type": "stage_exit",
-                "stage": stage_label,
-                "code": exit_code,
-                "ts": time.time(),
-            })
+            _buf_append(
+                task_id,
+                {
+                    "type": "stage_exit",
+                    "stage": stage_label,
+                    "code": exit_code,
+                    "ts": time.time(),
+                },
+            )
 
         if exit_code != 0 and raise_on_error:
-            raise RuntimeError(
-                f"Sandbox task [{stage_label}] failed with exit code {exit_code}"
-            )
+            raise RuntimeError(f"Sandbox task [{stage_label}] failed with exit code {exit_code}")
 
         return combined
 
@@ -1577,13 +1716,18 @@ class DevAgent:
             )
             logger.debug(
                 "[SANDBOX-DIAG] Kill task %s [%s]: status=%d",
-                sandbox_task_id, stage_label, resp.status_code,
+                sandbox_task_id,
+                stage_label,
+                resp.status_code,
             )
         except Exception as exc:
             logger.warning("Failed to kill sandbox task %s: %s", sandbox_task_id, exc)
 
     async def _poll_squad_status(
-        self, task_id: str, work_dir: str, user_id: str,
+        self,
+        task_id: str,
+        work_dir: str,
+        user_id: str,
     ) -> None:
         """Poll squad status and update member activity in the service."""
         try:
@@ -1613,7 +1757,9 @@ class DevAgent:
                 elif m.status == "working":
                     m.status = "done"
                 updated_members.append(m)
-            await svc.set_squad(task_id, {"teamMembers": [m.model_dump(by_alias=True) for m in updated_members]})
+            await svc.set_squad(
+                task_id, {"teamMembers": [m.model_dump(by_alias=True) for m in updated_members]}
+            )
         except Exception as exc:
             logger.debug("squad status poll failed (non-fatal): %s", exc)
 
@@ -1679,9 +1825,7 @@ class DevAgent:
         except Exception as e:
             logger.debug("Checkpoint failed (non-critical): %s", e)
 
-    async def _start_mockup_dev_server(
-        self, task_id: str, work_dir: str
-    ) -> int:
+    async def _start_mockup_dev_server(self, task_id: str, work_dir: str) -> int:
         """Start a dev server in the sandbox for live preview.
 
         Tries npm-based dev server first, falls back to npx serve for static apps.
@@ -1693,7 +1837,10 @@ class DevAgent:
         # Strategy 1: npm run dev (for Node.js apps with package.json)
         # Strategy 2: npx serve (for static HTML apps)
         strategies = [
-            ("npm install --legacy-peer-deps 2>/dev/null && npm run dev -- --port 3000 --host", 3000),
+            (
+                "npm install --legacy-peer-deps 2>/dev/null && npm run dev -- --port 3000 --host",
+                3000,
+            ),
             (f"npx --yes serve {work_dir} -l 3000 --no-clipboard", 3000),
         ]
 
@@ -1726,14 +1873,19 @@ class DevAgent:
 
             if ready:
                 preview_url = f"/api/dev/{task_id}/preview/"
-                _buf_append(task_id, {
-                    "type": "preview",
-                    "data": preview_url,
-                    "ts": time.time(),
-                })
+                _buf_append(
+                    task_id,
+                    {
+                        "type": "preview",
+                        "data": preview_url,
+                        "ts": time.time(),
+                    },
+                )
                 logger.info(
                     "Dev server running for task %s on port %d — preview at %s",
-                    task_id, port, preview_url,
+                    task_id,
+                    port,
+                    preview_url,
                 )
                 _live_previews[task_id] = {
                     "url": preview_url,
@@ -1753,7 +1905,7 @@ class DevAgent:
         # The /files/* endpoint serves from /workspace, so strip the prefix
         rel_path = path
         if rel_path.startswith("/workspace/"):
-            rel_path = rel_path[len("/workspace/"):]
+            rel_path = rel_path[len("/workspace/") :]
         try:
             client = self._sandbox_client()
             resp = await client.request(
@@ -1793,9 +1945,7 @@ class DevAgent:
             if not tasks_content:
                 return []
             # Parse task titles from markdown: lines starting with "- [ ]" or "### "
-            tasks = re.findall(
-                r"^(?:- \[[ x]\] |### )(.+)$", tasks_content, re.MULTILINE
-            )
+            tasks = re.findall(r"^(?:- \[[ x]\] |### )(.+)$", tasks_content, re.MULTILINE)
             return tasks
         except Exception as e:
             logger.debug("Could not parse tasks: %s", e)
@@ -1816,7 +1966,9 @@ class DevAgent:
         answer = self._generate_quick_answer(question)
         logger.info(
             "Auto-answer [%s]: Q=%s → A=%s",
-            stage_label, question[-100:], answer,
+            stage_label,
+            question[-100:],
+            answer,
         )
 
         # Send answer to sandbox stdin
@@ -1835,11 +1987,14 @@ class DevAgent:
             return
 
         # Log to output buffer
-        _buf_append(task_id, {
-            "type": "decision",
-            "data": f"🤖 Auto-answered: {answer}",
-            "ts": time.time(),
-        })
+        _buf_append(
+            task_id,
+            {
+                "type": "decision",
+                "data": f"🤖 Auto-answered: {answer}",
+                "ts": time.time(),
+            },
+        )
 
         # Store decision in the dev task
         if task_id:
@@ -1863,11 +2018,20 @@ class DevAgent:
         q_lower = question.lower().strip()
 
         # Common yes/no patterns — default to yes (proceed)
-        if any(p in q_lower for p in [
-            "(y/n)", "[y/n]", "(yes/no)", "[yes/no]",
-            "do you want to", "would you like", "overwrite",
-            "proceed?", "continue?",
-        ]):
+        if any(
+            p in q_lower
+            for p in [
+                "(y/n)",
+                "[y/n]",
+                "(yes/no)",
+                "[yes/no]",
+                "do you want to",
+                "would you like",
+                "overwrite",
+                "proceed?",
+                "continue?",
+            ]
+        ):
             return "y"
 
         # Press Enter to continue
@@ -1907,14 +2071,17 @@ class DevAgent:
                     consecutive_404s += 1
                     logger.warning(
                         "Sandbox task %s not found (attempt %d) [%s]",
-                        sandbox_task_id, consecutive_404s, stage_label,
+                        sandbox_task_id,
+                        consecutive_404s,
+                        stage_label,
                     )
                     # Task gone — sandbox likely restarted, treat as failure
                     if consecutive_404s >= 3:
                         logger.error(
-                            "Sandbox task %s gone after %d 404s — "
-                            "sandbox likely restarted [%s]",
-                            sandbox_task_id, consecutive_404s, stage_label,
+                            "Sandbox task %s gone after %d 404s — sandbox likely restarted [%s]",
+                            sandbox_task_id,
+                            consecutive_404s,
+                            stage_label,
                         )
                         return 1  # Non-zero exit = failure
                     continue
@@ -1985,11 +2152,11 @@ class DevAgent:
         except Exception as e:
             logger.warning("Failed to list screenshot files: %s", e)
 
-
-
     # ── Shared pipeline stages ──────────────────────────────────────
 
-    async def _auto_attach_skills(self, task_id: str, title: str, spec_id: str | None = None, user_id: str | None = None) -> None:
+    async def _auto_attach_skills(
+        self, task_id: str, title: str, spec_id: str | None = None, user_id: str | None = None
+    ) -> None:
         """Auto-suggest and attach relevant skills to a task based on title + spec content."""
         if not self._cosmos_skills:
             return
@@ -2024,13 +2191,52 @@ class DevAgent:
         team: list[dict] = []
 
         # Always-present roles
-        team.append({"name": theme_names["lead"], "role": "Lead", "expertise": "Architecture, code review, scope", "status": "idle"})
+        team.append(
+            {
+                "name": theme_names["lead"],
+                "role": "Lead",
+                "expertise": "Architecture, code review, scope",
+                "status": "idle",
+            }
+        )
 
         # Dynamic roles based on tech stack detection
-        frontend_kw = ["react", "next.js", "nextjs", "vue", "angular", "svelte", "tailwind", "css", "html", "frontend", "ui component"]
-        backend_kw = ["python", "fastapi", "flask", "django", "express", "node.js", "api", "endpoint", "backend", "server"]
+        frontend_kw = [
+            "react",
+            "next.js",
+            "nextjs",
+            "vue",
+            "angular",
+            "svelte",
+            "tailwind",
+            "css",
+            "html",
+            "frontend",
+            "ui component",
+        ]
+        backend_kw = [
+            "python",
+            "fastapi",
+            "flask",
+            "django",
+            "express",
+            "node.js",
+            "api",
+            "endpoint",
+            "backend",
+            "server",
+        ]
         test_kw = ["test", "jest", "pytest", "playwright", "cypress", "testing", "spec"]
-        devops_kw = ["docker", "kubernetes", "bicep", "terraform", "ci/cd", "pipeline", "deploy", "infrastructure"]
+        devops_kw = [
+            "docker",
+            "kubernetes",
+            "bicep",
+            "terraform",
+            "ci/cd",
+            "pipeline",
+            "deploy",
+            "infrastructure",
+        ]
 
         has_frontend = any(kw in content_lower for kw in frontend_kw)
         has_backend = any(kw in content_lower for kw in backend_kw)
@@ -2038,21 +2244,70 @@ class DevAgent:
         has_devops = any(kw in content_lower for kw in devops_kw)
 
         if has_frontend:
-            team.append({"name": theme_names["frontend"], "role": "Frontend Dev", "expertise": "React, TypeScript, UI", "status": "idle"})
+            team.append(
+                {
+                    "name": theme_names["frontend"],
+                    "role": "Frontend Dev",
+                    "expertise": "React, TypeScript, UI",
+                    "status": "idle",
+                }
+            )
         if has_backend:
-            team.append({"name": theme_names["backend"], "role": "Backend Dev", "expertise": "Python, FastAPI, APIs", "status": "idle"})
+            team.append(
+                {
+                    "name": theme_names["backend"],
+                    "role": "Backend Dev",
+                    "expertise": "Python, FastAPI, APIs",
+                    "status": "idle",
+                }
+            )
         if has_testing or has_frontend or has_backend:
-            team.append({"name": theme_names["tester"], "role": "Tester", "expertise": "Jest, Playwright, integration tests", "status": "idle"})
+            team.append(
+                {
+                    "name": theme_names["tester"],
+                    "role": "Tester",
+                    "expertise": "Jest, Playwright, integration tests",
+                    "status": "idle",
+                }
+            )
         if has_devops:
-            team.append({"name": theme_names["devops"], "role": "DevOps", "expertise": "Docker, CI/CD, infrastructure", "status": "idle"})
+            team.append(
+                {
+                    "name": theme_names["devops"],
+                    "role": "DevOps",
+                    "expertise": "Docker, CI/CD, infrastructure",
+                    "status": "idle",
+                }
+            )
 
         # If nothing detected, add a generic Developer
         if len(team) == 1:
-            team.append({"name": theme_names["backend"], "role": "Developer", "expertise": "Full-stack development", "status": "idle"})
-            team.append({"name": theme_names["tester"], "role": "Tester", "expertise": "Testing, quality assurance", "status": "idle"})
+            team.append(
+                {
+                    "name": theme_names["backend"],
+                    "role": "Developer",
+                    "expertise": "Full-stack development",
+                    "status": "idle",
+                }
+            )
+            team.append(
+                {
+                    "name": theme_names["tester"],
+                    "role": "Tester",
+                    "expertise": "Testing, quality assurance",
+                    "status": "idle",
+                }
+            )
 
         # Scribe is always last (silent role)
-        team.append({"name": theme_names["scribe"], "role": "Scribe", "expertise": "Memory, decisions, session logs", "status": "idle"})
+        team.append(
+            {
+                "name": theme_names["scribe"],
+                "role": "Scribe",
+                "expertise": "Memory, decisions, session logs",
+                "status": "idle",
+            }
+        )
 
         return team
 
@@ -2062,45 +2317,76 @@ class DevAgent:
         t = theme.strip().lower() if theme else ""
         if "star wars" in t:
             return {
-                "lead": "Obi-Wan", "frontend": "Leia", "backend": "Han",
-                "tester": "Chewie", "devops": "R2-D2", "scribe": "C-3PO",
+                "lead": "Obi-Wan",
+                "frontend": "Leia",
+                "backend": "Han",
+                "tester": "Chewie",
+                "devops": "R2-D2",
+                "scribe": "C-3PO",
             }
         if "lord of the rings" in t or "lotr" in t:
             return {
-                "lead": "Aragorn", "frontend": "Legolas", "backend": "Gimli",
-                "tester": "Gandalf", "devops": "Samwise", "scribe": "Frodo",
+                "lead": "Aragorn",
+                "frontend": "Legolas",
+                "backend": "Gimli",
+                "tester": "Gandalf",
+                "devops": "Samwise",
+                "scribe": "Frodo",
             }
         if "matrix" in t:
             return {
-                "lead": "Morpheus", "frontend": "Trinity", "backend": "Neo",
-                "tester": "Tank", "devops": "Switch", "scribe": "Oracle",
+                "lead": "Morpheus",
+                "frontend": "Trinity",
+                "backend": "Neo",
+                "tester": "Tank",
+                "devops": "Switch",
+                "scribe": "Oracle",
             }
         if "marvel" in t:
             return {
-                "lead": "Fury", "frontend": "Stark", "backend": "Banner",
-                "tester": "Romanoff", "devops": "Thor", "scribe": "Jarvis",
+                "lead": "Fury",
+                "frontend": "Stark",
+                "backend": "Banner",
+                "tester": "Romanoff",
+                "devops": "Thor",
+                "scribe": "Jarvis",
             }
         # Default: Aliens theme
         return {
-            "lead": "Hicks", "frontend": "Ripley", "backend": "Dallas",
-            "tester": "Lambert", "devops": "Parker", "scribe": "Scribe",
+            "lead": "Hicks",
+            "frontend": "Ripley",
+            "backend": "Dallas",
+            "tester": "Lambert",
+            "devops": "Parker",
+            "scribe": "Scribe",
         }
 
     def _generate_squad_files(self, team: list[dict], spec_content: str) -> dict[str, str]:
         """Generate .squad/ config files from team and spec content."""
         # config.json — must be valid JSON for squad-pr validation
-        config_json = json.dumps({
-            "teamRoot": ".",
-            "team": "team.md",
-            "routing": "routing.md",
-            "directives": "directives.md",
-        }, indent=2) + "\n"
+        config_json = (
+            json.dumps(
+                {
+                    "teamRoot": ".",
+                    "team": "team.md",
+                    "routing": "routing.md",
+                    "directives": "directives.md",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
         # team.md — squad-pr expects "## Members" header
         team_lines = ["## Members\n"]
         role_emojis = {
-            "Lead": "🏗️", "Frontend Dev": "⚛️", "Backend Dev": "🔧",
-            "Tester": "🧪", "DevOps": "🚀", "Developer": "💻", "Scribe": "📋",
+            "Lead": "🏗️",
+            "Frontend Dev": "⚛️",
+            "Backend Dev": "🔧",
+            "Tester": "🧪",
+            "DevOps": "🚀",
+            "Developer": "💻",
+            "Scribe": "📋",
         }
         for m in team:
             emoji = role_emojis.get(m["role"], "👤")
@@ -2162,41 +2448,57 @@ class DevAgent:
             if task_id in _pipeline_outputs:
                 if skills:
                     skill_list = ", ".join(skills)
-                    _buf_append(task_id, {
-                        "type": "stdout",
-                        "data": (
-                            f"Skills synced: {synced} skill(s) from blob storage\n"
-                            f"Available: {skill_list}\n"
-                        ),
-                        "stage": "skills",
-                    })
+                    _buf_append(
+                        task_id,
+                        {
+                            "type": "stdout",
+                            "data": (
+                                f"Skills synced: {synced} skill(s) from blob storage\n"
+                                f"Available: {skill_list}\n"
+                            ),
+                            "stage": "skills",
+                        },
+                    )
                 else:
-                    _buf_append(task_id, {
-                        "type": "stdout",
-                        "data": "No skills available in sandbox.\n",
-                        "stage": "skills",
-                    })
+                    _buf_append(
+                        task_id,
+                        {
+                            "type": "stdout",
+                            "data": "No skills available in sandbox.\n",
+                            "stage": "skills",
+                        },
+                    )
 
             logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
         except httpx.ConnectError:
             logger.warning("Skills sync skipped for task %s — sandbox not reachable", task_id)
             if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stdout",
-                    "data": "Skills sync skipped (sandbox not reachable).\n",
-                    "stage": "skills",
-                })
+                _buf_append(
+                    task_id,
+                    {
+                        "type": "stdout",
+                        "data": "Skills sync skipped (sandbox not reachable).\n",
+                        "stage": "skills",
+                    },
+                )
         except Exception as exc:
             logger.warning("Skills sync failed for task %s: %s", task_id, exc)
             if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stderr",
-                    "data": f"Skills sync warning: {exc}\n",
-                    "stage": "skills",
-                })
+                _buf_append(
+                    task_id,
+                    {
+                        "type": "stderr",
+                        "data": f"Skills sync warning: {exc}\n",
+                        "stage": "skills",
+                    },
+                )
 
     async def _run_squad_stage(
-        self, task_id: str, work_dir: str, spec_content: str, user_id: str,
+        self,
+        task_id: str,
+        work_dir: str,
+        spec_content: str,
+        user_id: str,
     ) -> None:
         """Initialize squad-pr in the workspace and hire agents based on spec."""
         svc = self._service.with_user(user_id)
@@ -2204,9 +2506,14 @@ class DevAgent:
 
         # Step 1: squad init
         if task_id in _pipeline_outputs:
-            _buf_append(task_id, {
-                "type": "stdout", "data": "── Initializing Squad ──\n", "stage": "squad",
-            })
+            _buf_append(
+                task_id,
+                {
+                    "type": "stdout",
+                    "data": "── Initializing Squad ──\n",
+                    "stage": "squad",
+                },
+            )
         try:
             await self._sandbox_exec(
                 task_id=task_id,
@@ -2264,11 +2571,14 @@ class DevAgent:
         # Step 4: Hire each agent
         for member in team:
             if task_id in _pipeline_outputs:
-                _buf_append(task_id, {
-                    "type": "stdout",
-                    "data": f"  Hiring {member['name']} as {member['role']}...\n",
-                    "stage": "squad",
-                })
+                _buf_append(
+                    task_id,
+                    {
+                        "type": "stdout",
+                        "data": f"  Hiring {member['name']} as {member['role']}...\n",
+                        "stage": "squad",
+                    },
+                )
             try:
                 await self._sandbox_exec(
                     task_id=task_id,
@@ -2302,11 +2612,14 @@ class DevAgent:
 
         if task_id in _pipeline_outputs:
             names = ", ".join(f"{m['name']} ({m['role']})" for m in team)
-            _buf_append(task_id, {
-                "type": "stdout",
-                "data": f"── Squad ready: {names} ──\n",
-                "stage": "squad",
-            })
+            _buf_append(
+                task_id,
+                {
+                    "type": "stdout",
+                    "data": f"── Squad ready: {names} ──\n",
+                    "stage": "squad",
+                },
+            )
         logger.info("Squad stage complete: %d members for task %s", len(team), task_id)
 
     # ── Spec content helpers ────────────────────────────────────────
@@ -2320,23 +2633,21 @@ class DevAgent:
 
     def _extract_mockup_description(self, spec_content: str) -> str:
         """Extract the Mockup Description section from a spec."""
-        match = re.search(
-            r'## Mockup Description\s*\n(.*?)(?=\n## |\Z)', spec_content, re.DOTALL
-        )
+        match = re.search(r"## Mockup Description\s*\n(.*?)(?=\n## |\Z)", spec_content, re.DOTALL)
         return match.group(1).strip() if match else spec_content
 
     def _extract_openspec_config(self, spec_content: str) -> tuple[str, list[str]]:
         """Extract foundation and feature prompts from OpenSpec Config section."""
         # Extract foundation prompt
         foundation_match = re.search(
-            r'### Foundation\s*\n(.*?)(?=\n### |\Z)', spec_content, re.DOTALL
+            r"### Foundation\s*\n(.*?)(?=\n### |\Z)", spec_content, re.DOTALL
         )
         foundation = foundation_match.group(1).strip() if foundation_match else ""
 
         # Extract feature prompts
         features: list[str] = []
         for match in re.finditer(
-            r'#### Feature: .+?\n(.*?)(?=\n#### Feature:|\n### |\n## |\Z)',
+            r"#### Feature: .+?\n(.*?)(?=\n#### Feature:|\n### |\n## |\Z)",
             spec_content,
             re.DOTALL,
         ):

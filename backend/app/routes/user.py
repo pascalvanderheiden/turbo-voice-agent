@@ -114,17 +114,18 @@ async def initiate_todo_connection(request: Request):
 
     from urllib.parse import urlencode
 
-    params = urlencode({
-        "client_id": cfg["client_id"],
-        "response_type": "code",
-        "redirect_uri": cfg["redirect_uri"],
-        "scope": cfg["scope"],
-        "state": user_id,
-        "prompt": "consent",
-    })
+    params = urlencode(
+        {
+            "client_id": cfg["client_id"],
+            "response_type": "code",
+            "redirect_uri": cfg["redirect_uri"],
+            "scope": cfg["scope"],
+            "state": user_id,
+            "prompt": "consent",
+        }
+    )
     auth_url = (
-        f"https://login.microsoftonline.com/{cfg['tenant_id']}"
-        f"/oauth2/v2.0/authorize?{params}"
+        f"https://login.microsoftonline.com/{cfg['tenant_id']}/oauth2/v2.0/authorize?{params}"
     )
     return {"authUrl": auth_url}
 
@@ -287,17 +288,18 @@ async def initiate_work_connection(request: Request):
 
     from urllib.parse import urlencode
 
-    params = urlencode({
-        "client_id": cfg["client_id"],
-        "response_type": "code",
-        "redirect_uri": cfg["redirect_uri"],
-        "scope": cfg["scope"],
-        "state": user_id,
-        "prompt": "consent",
-    })
+    params = urlencode(
+        {
+            "client_id": cfg["client_id"],
+            "response_type": "code",
+            "redirect_uri": cfg["redirect_uri"],
+            "scope": cfg["scope"],
+            "state": user_id,
+            "prompt": "consent",
+        }
+    )
     auth_url = (
-        f"https://login.microsoftonline.com/{cfg['tenant_id']}"
-        f"/oauth2/v2.0/authorize?{params}"
+        f"https://login.microsoftonline.com/{cfg['tenant_id']}/oauth2/v2.0/authorize?{params}"
     )
     return {"authUrl": auth_url}
 
@@ -454,10 +456,37 @@ async def set_sandbox_token(request: Request):
 
 @router.delete("/me/connections/github-sandbox")
 async def disconnect_sandbox(request: Request):
-    """Disconnect GitHub sandbox — remove stored token."""
+    """Disconnect GitHub sandbox — stop active sandbox sessions and clear the stored token."""
     user_id, _ = _get_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    # Phase 6 of sandbox-dynamic-sessions: enumerate the user's active dev-tasks
+    # and release their per-task sandbox sessions BEFORE clearing the PAT. The
+    # tasks themselves are not deleted — just their session-pool seats. The
+    # next dev-task run by the user will require re-connecting GitHub first.
+    stopped_sessions = 0
+    dev_service = getattr(request.app.state, "dev_service", None)
+    if dev_service is not None:
+        try:
+            from app.agents.dev_agent import _gh_token_sent
+            from app.services.session_sandbox_client import get_sandbox_client
+
+            client = get_sandbox_client()
+            user_dev_svc = dev_service.with_user(user_id)
+            tasks = await user_dev_svc.list()
+            active_statuses = {"running", "provisioning", "pending"}
+            for t in tasks:
+                if getattr(t, "status", None) in active_statuses:
+                    try:
+                        await client.stop_session(t.id)
+                        stopped_sessions += 1
+                    except Exception as exc:
+                        logger.warning("disconnect_sandbox: stop_session(%s) failed: %s", t.id, exc)
+                    # Force re-bootstrap of gh auth on the next run for this task
+                    _gh_token_sent.discard(t.id)
+        except Exception:
+            logger.exception("disconnect_sandbox: failed to enumerate active sessions")
 
     _connection_store.pop(f"sandbox:{user_id}", None)
 
@@ -468,14 +497,19 @@ async def disconnect_sandbox(request: Request):
         except Exception:
             logger.exception("Failed to clear sandbox token in Cosmos for user %s", user_id)
 
-    logger.info("GitHub sandbox disconnected for user %s", user_id)
-    return {"connected": False}
+    logger.info(
+        "GitHub sandbox disconnected for user %s (released %d session(s))",
+        user_id,
+        stopped_sessions,
+    )
+    return {"connected": False, "stoppedSessions": stopped_sessions}
 
 
 def _encrypt_sandbox_token(token: str) -> str:
     """Encrypt a sandbox token using SANDBOX_TOKEN_KEY env var (simple XOR for now)."""
     key = os.environ.get("SANDBOX_TOKEN_KEY", "default-dev-key-not-for-production")
     import base64
+
     # Simple reversible encoding — production should use Fernet or Azure Key Vault
     key_bytes = key.encode()
     token_bytes = token.encode()
@@ -487,6 +521,7 @@ def _decrypt_sandbox_token(encrypted: str) -> str:
     """Decrypt a sandbox token."""
     key = os.environ.get("SANDBOX_TOKEN_KEY", "default-dev-key-not-for-production")
     import base64
+
     key_bytes = key.encode()
     encrypted_bytes = base64.b64decode(encrypted.encode())
     decrypted = bytes(e ^ key_bytes[i % len(key_bytes)] for i, e in enumerate(encrypted_bytes))
@@ -617,9 +652,7 @@ async def get_premium_usage(request: Request):
     """Get monthly premium request usage for the authenticated user."""
     user_id, _ = _get_user(request)
     if not user_id:
-        return JSONResponse(
-            status_code=401, content={"detail": "Not authenticated"}
-        )
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
     svc = request.app.state.user_profile_service
     if svc is None:
         return {"total": 0, "usage": {}}
@@ -637,7 +670,9 @@ async def get_profile_photo(request: Request):
         if svc:
             profile = await svc.get_profile(user_id)
             photo_url = profile.get("profilePhotoUrl") if profile else None
-            logger.debug("Photo lookup user=%s profile=%s url=%s", user_id, bool(profile), photo_url)
+            logger.debug(
+                "Photo lookup user=%s profile=%s url=%s", user_id, bool(profile), photo_url
+            )
             if photo_url:
                 storage_account = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
                 if (
@@ -661,9 +696,7 @@ async def get_profile_photo(request: Request):
                             download = await blob_client.download_blob()
                             photo_data = await download.readall()
                             props = await blob_client.get_blob_properties()
-                            content_type = (
-                                props.content_settings.content_type or "image/jpeg"
-                            )
+                            content_type = props.content_settings.content_type or "image/jpeg"
                         await credential.close()
                         return Response(content=photo_data, media_type=content_type)
                     except Exception:
@@ -711,9 +744,7 @@ async def get_profile_photo(request: Request):
                     content_type = resp.headers.get("Content-Type", "image/jpeg")
                     return Response(content=photo_data, media_type=content_type)
                 else:
-                    return JSONResponse(
-                        status_code=404, content={"detail": "No photo available"}
-                    )
+                    return JSONResponse(status_code=404, content={"detail": "No photo available"})
     except Exception:
         return JSONResponse(status_code=404, content={"detail": "No photo available"})
 

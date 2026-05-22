@@ -45,9 +45,9 @@
 
 ## 6. Auth & token flow
 
-- [ ] 6.1 Update backend code that previously injected `GH_TOKEN` into ACI env to instead attach `X-GH-Token` header on the first session call for the task
-- [ ] 6.2 On "Disconnect" in profile settings, call `SessionSandboxClient.stop_session(...)` for any active sessions belonging to that user
-- [ ] 6.3 Update `sandbox-auth` related backend tests for the header-based token flow
+- [x] 6.1 Update backend code that previously injected `GH_TOKEN` into ACI env to instead attach `X-GH-Token` header on the first session call for the task
+- [x] 6.2 On "Disconnect" in profile settings, call `SessionSandboxClient.stop_session(...)` for any active sessions belonging to that user
+- [x] 6.3 Update `sandbox-auth` related backend tests for the header-based token flow
 
 ## 7. Deployment & migration
 

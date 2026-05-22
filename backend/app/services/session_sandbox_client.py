@@ -151,10 +151,12 @@ class SessionSandboxClient:
         On a 401/403 response the cached token is force-refreshed and the request
         is retried exactly once. A second auth failure is returned to the caller
         unchanged (status_code 401/403 on the response).
+
+        Callers may pass ``headers={"X-GH-Token": <pat>}`` on the first request
+        per session — the sandbox container middleware uses it to bootstrap
+        ``gh auth login --with-token`` and ignores the header on subsequent
+        requests within the same session (Phase 6 of sandbox-dynamic-sessions).
         """
-        # TODO(phase-6): on the FIRST request for ``identifier`` within a task,
-        # also attach the per-user ``X-GH-Token`` header so the sandbox can run
-        # ``gh auth login --with-token`` before the dev pipeline starts.
         url = self._build_url(path)
         caller_params = kwargs.pop("params", None)
         caller_headers = kwargs.pop("headers", None)
@@ -249,9 +251,7 @@ class SessionSandboxClient:
             for attempt in (0, 1):
                 token = self._get_token(force_refresh=attempt == 1)
                 headers = self._merge_headers(token, caller_headers)
-                stream_ctx = client.stream(
-                    method, url, params=params, headers=headers, **kwargs
-                )
+                stream_ctx = client.stream(method, url, params=params, headers=headers, **kwargs)
                 response = await stream_ctx.__aenter__()
                 try:
                     if response.status_code in (401, 403) and attempt == 0:
@@ -379,4 +379,3 @@ def reset_sandbox_client() -> None:
     """Reset the cached singleton — used by tests that swap env vars."""
     global _client_singleton
     _client_singleton = None
-
