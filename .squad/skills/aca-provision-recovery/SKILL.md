@@ -1,8 +1,8 @@
 # Azure Container Apps Provision Recovery
 
-**Confidence:** HIGH (validated by 3 consecutive recovery sessions on 2026-05-22)  
-**Last Updated:** 2026-05-22 09:15 UTC  
-**Validation:** Successfully diagnosed and recovered from identical failures on backend, frontend, and sandbox Container Apps. Includes side-effect mitigation for manual RBAC fixes.
+**Confidence:** HIGH (validated by 3 consecutive recovery sessions on 2026-05-22; session-pool variant validated 2026-05-22 on sandbox-dynamic-sessions migration)  
+**Last Updated:** 2026-05-22 14:35 UTC  
+**Validation:** Successfully diagnosed and recovered from identical failures on backend, frontend, and sandbox Container Apps. Includes side-effect mitigation for manual RBAC fixes. Session-pool variant root-cause confirmed via ARM operation logs and role-assignment inspection.
 
 ## When to Use
 - `azd up` or `azd provision` fails with "Operation expired" on Container App
@@ -257,6 +257,140 @@ In `infra/modules/rbac.bicep`, **delete lines 142-178** (ACR Pull assignments fo
 - Container App revision provisioning timeout
 - "Resource with this name already exists or is in a conflicting state"
 - Managed identity authentication to ACR fails on first deploy
+- **Session pool variant** — see next section
+
+## Session Pool Variant: First-Deploy ACR Pull Race
+
+**Confidence:** HIGH (validated 2026-05-22 — Pascal hit it on first `azd up` of sandbox-dynamic-sessions)
+
+### Symptoms
+
+- Outer error from `azd`:
+  ```
+  ERROR: A resource with this name already exists or is in a conflicting state.
+  SessionPoolOperationError: Failed to provision session pool 'sp-sandbox-<token>'.
+  Error details: pool group create/update failed with error: time out.
+  ```
+- `az deployment operation group list -g <rg> -n deploy-session-pool` shows the pool resource with `code: SessionPoolOperationError` and the timeout message.
+- `az role assignment list --assignee <pool-system-mi-principalId> --all` returns **empty**.
+- `az resource show ... --query properties.customContainerTemplate.registryCredentials` shows `identity: "system"`.
+- The image **does** exist in ACR (`az acr repository show` returns a manifest). Image availability is a red herring — the postdeploy/postprovision hook built it. The pool just can't read it.
+
+### Why the Container App recovery pattern doesn't apply
+
+Container Apps tolerate "no ACR Pull yet" because revision provisioning is async — ARM marks the Container App `Succeeded` before the first pull, so the sibling role-assignment resource gets a chance to run, and a subsequent revision pulls successfully.
+
+Session pools do **not** have this grace. The pool RP synchronously pulls during `PUT`. If the pull fails, the RP polls/retries internally and eventually returns "time out". The sibling role-assignment never executes because the pool reached terminal Failed state first.
+
+### Root Cause
+
+```
+Bicep declares:
+  resource sessionPool { identity: { type: 'SystemAssigned' } ... }
+  resource acrPullRole { ... principalId: sessionPool.identity.principalId ... }
+
+ARM execution:
+  1. Create sessionPool shell → principalId allocated
+  2. Pool starts pulling image (uses system MI = principalId)
+  3. ACR returns 401 (no role assignment yet)
+  4. Pool retries internally, eventually times out
+  5. Pool resource → Failed
+  6. acrPullRole resource → Skipped (parent dependency failed)
+```
+
+The sibling role assignment was never going to run in time.
+
+### Recovery
+
+1. **Delete the failed pool** so retry isn't blocked by name collision:
+   ```bash
+   az resource delete --ids /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/sessionPools/<pool-name>
+   ```
+   Takes ~1 minute. No `az containerapp sessionpool` CLI is required.
+
+2. **Switch the pool to a pre-granted user-assigned MI.** This is the fix — apply the Bicep changes below, then `azd provision`.
+
+### Prevention (Bicep)
+
+**Module 1 — pre-granted UAMI** (`infra/modules/session-pool-identity.bicep`):
+
+```bicep
+param name string
+param location string
+param acrId string
+
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: name
+  location: location
+}
+
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: last(split(acrId, '/'))
+}
+
+resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, uami.id, acrPullRoleId)   // deterministic — see Side Effects above
+  scope: acr
+  properties: {
+    principalId: uami.properties.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+output id string = uami.id
+output principalId string = uami.properties.principalId
+```
+
+**Module 2 — session pool** (`infra/modules/session-pool.bicep`, changed bits):
+
+```bicep
+param pullIdentityId string   // resource ID of the UAMI above
+// ...
+resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
+  // ...
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentityId}': {}
+    }
+  }
+  properties: {
+    customContainerTemplate: {
+      // ...
+      registryCredentials: {
+        server: acrLoginServer
+        identity: pullIdentityId   // resource ID, NOT 'system'
+      }
+    }
+  }
+}
+```
+
+Remove any inline `acrPullRole` resource that targets the pool's system MI — it can't help and confuses post-mortem readers.
+
+**Module 3 — main.bicep ordering:**
+
+```bicep
+module sessionPoolIdentity 'modules/session-pool-identity.bicep' = {
+  // params: name, location, acrId
+}
+
+module sessionPool 'modules/session-pool.bicep' = {
+  params: {
+    // ...
+    pullIdentityId: sessionPoolIdentity.outputs.id
+  }
+}
+```
+
+The implicit `dependsOn` from the parameter reference is sufficient — ARM deploys identity (and the AcrPull assignment inside it) before the pool starts pulling.
+
+### When to apply this pattern
+
+Any ACA resource that **synchronously pulls during create** in a single ARM operation. Session pools today; likely future resource types with the same shape (prewarmed pools, replicas, etc.). If a resource has the "create + pull" combined, pre-grant a UAMI. Don't rely on a sibling role assignment to its system-assigned identity.
 
 ## References
 - [Azure Container Apps Managed Identity](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)

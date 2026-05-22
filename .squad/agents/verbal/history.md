@@ -364,3 +364,11 @@ Cross-references: `.squad/skills/aca-provision-recovery/SKILL.md`, decisions.md 
 - Checked off 7.1 + 7.2 in tasks.md; flagged 7.3 + 7.4 as awaiting Phase 4 + 6 (validation wave).
 
 **Pattern reinforced:** sandbox image tag must stay synced between Bicep (`main.bicep:263`) and the build script. Both now reference `turbo-voice-agent/sandbox:latest`. If the Bicep param `sandboxImageTag` changes from `latest`, `build-sandbox-image.sh` must follow.
+
+## Learnings — 2026-05-22 — Session pool ACR Pull chicken-and-egg
+- `Microsoft.App/sessionPools` with `identity.type: SystemAssigned` + inline AcrPull role assignment is a deployment race that always loses on first deploy. The pool pulls during create; the role assignment runs after the pool's principalId resolves; the pool fails before the assignment can be applied.
+- Symptom: `SessionPoolOperationError: pool group create/update failed with error: time out` in the deployment operation list. Outer azd surface looks like "resource with this name already exists or is in a conflicting state" because azd internally retries and the prior Failed pool is still there.
+- Fix: **user-assigned MI** for the pool. Grant AcrPull on the registry in a separate module that runs BEFORE the pool module. `registryCredentials.identity` takes the UAMI resource ID directly.
+- The session pool is in the CAE's region (East US 2 in this deployment), even though `AZURE_LOCATION=westeurope`. That's because `cae.outputs.id` is the source of truth — pool MUST match CAE region. Don't try to "fix" this.
+- Pool delete via `az resource delete --ids <pool-id>` works (takes ~1 minute). No special `az containerapp sessionpool` CLI needed.
+- Apply the same pattern (pre-granted UAMI for image pull) to **any future** ACA resource that creates+pulls in a single ARM operation. Container Apps themselves get away with system-assigned because their revision provisioning is async and ARM marks them Succeeded before the first pull completes — session pools do NOT have that grace.

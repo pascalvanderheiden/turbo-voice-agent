@@ -18,8 +18,8 @@ param image string
 @description('ACR login server (used in registryCredentials)')
 param acrLoginServer string
 
-@description('ACR resource ID (used to scope the AcrPull role assignment for the pool identity)')
-param acrId string
+@description('Resource ID of the user-assigned managed identity that pulls the image. Must already have AcrPull on the registry BEFORE this pool is created — see session-pool-identity.bicep.')
+param pullIdentityId string
 
 @description('Backend container app FQDN, used to set BACKEND_URL inside session containers')
 param backendFqdn string = ''
@@ -48,9 +48,6 @@ param cpu string = '1.0'
 @description('Memory per session container (e.g. 2Gi, 4Gi)')
 param memory string = '2Gi'
 
-// Built-in role definition: AcrPull
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-
 resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
   name: name
   location: location
@@ -58,7 +55,10 @@ resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
     'azd-service-name': 'sandbox'
   }
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentityId}': {}
+    }
   }
   properties: {
     environmentId: containerAppsEnvId
@@ -122,34 +122,20 @@ resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
       }
       registryCredentials: {
         server: acrLoginServer
-        identity: 'system'
+        // Reference the pre-granted UAMI by its resource ID. The platform
+        // resolves this to the identity's clientId at pull time.
+        identity: pullIdentityId
       }
     }
   }
 }
 
-// ── ACR Pull for the pool's system-assigned identity ──
-// Deterministic guid() name avoids the manual-vs-bicep collision pattern
-// documented in .squad/skills/aca-provision-recovery/SKILL.md.
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: last(split(acrId, '/'))
-}
-
-resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, sessionPool.id, acrPullRoleId)
-  scope: acr
-  properties: {
-    principalId: sessionPool.identity.principalId
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      acrPullRoleId
-    )
-    principalType: 'ServicePrincipal'
-  }
-}
+// NOTE: ACR Pull is granted on the UAMI in session-pool-identity.bicep
+// BEFORE this pool is created. Granting it here (post-create) reintroduces
+// the chicken-and-egg that caused the original `pool group create/update
+// failed with error: time out` failure.
 
 output id string = sessionPool.id
 output name string = sessionPool.name
-output principalId string = sessionPool.identity.principalId
 output sessionPoolManagementEndpoint string = sessionPool.properties.poolManagementEndpoint
 output sessionPoolName string = sessionPool.name

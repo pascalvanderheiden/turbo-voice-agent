@@ -253,6 +253,20 @@ module backend 'modules/container-app-backend.bicep' = {
 // ──────────────────────────────────────────────
 var backendFqdnComputed = customDomainName != '' ? customDomainName : 'ca-backend-${resourceToken}.${cae.outputs.defaultDomain}'
 
+// ── UAMI for the session pool image pull, AcrPull pre-granted ──
+// MUST be deployed BEFORE the sessionPool module so the role assignment
+// exists when the pool tries to pull. Removing this step reintroduces the
+// "pool group create/update failed with error: time out" failure mode.
+module sessionPoolIdentity 'modules/session-pool-identity.bicep' = {
+  name: 'session-pool-identity'
+  scope: rg
+  params: {
+    name: 'id-sandbox-pool-${resourceToken}'
+    location: location
+    acrId: acr.outputs.id
+  }
+}
+
 module sessionPool 'modules/session-pool.bicep' = {
   name: 'deploy-session-pool'
   scope: rg
@@ -262,7 +276,7 @@ module sessionPool 'modules/session-pool.bicep' = {
     containerAppsEnvId: cae.outputs.id
     image: '${acr.outputs.loginServer}/turbo-voice-agent/sandbox:${sandboxImageTag}'
     acrLoginServer: acr.outputs.loginServer
-    acrId: acr.outputs.id
+    pullIdentityId: sessionPoolIdentity.outputs.id
     backendFqdn: backendFqdnComputed
     storageAccountName: storage.outputs.name
     maxConcurrentSessions: sessionPoolMaxConcurrent
