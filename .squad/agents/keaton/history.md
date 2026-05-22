@@ -9,6 +9,7 @@ Architecture: SupervisorAgent routes to 12 specialist agents. ACI sandbox runs C
 
 ## Team Updates
 
+- **2026-05-22:** Verbal diagnosed and recovered failed `azd up` deployment caused by Bicep RBAC module dependency ordering issue. Backend Container App identity could not pull from ACR (401) because RBAC module never executed — it depends on backend succeeding first (circular dependency). Immediate fix: manual `az role assignment create` granted AcrPull to backend identity. **Permanent fix required:** Two-phase RBAC Bicep refactor — create `rbac-acr-only.bicep` module (AcrPull only, immediate post-identity-creation) and update main.bicep ordering to invoke it before backend health check. See `.squad/decisions/decisions.md` for full decision and implementation plan. See `.squad/skills/aca-provision-recovery/SKILL.md` for runbook.
 - **2026-05-20:** Verbal deployed quota-aware region selector (`infra/scripts/select-model-regions.sh`) as `azd` preprovision hook. Three new env vars in CI/CD: `AZURE_OPENAI_LOCATION_PRIMARY`, `AZURE_OPENAI_LOCATION_VOICE`, `AZURE_OPENAI_LOCATION_RESEARCH`. Resolves fresh `azd up` quota failures on new subscriptions. See `.squad/decisions/decisions.md` for full spec.
 
 ## Learnings

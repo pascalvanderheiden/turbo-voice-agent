@@ -1,5 +1,80 @@
 # Squad Decisions
 
+# Decision: Fix Container App RBAC Dependency Ordering
+
+---
+date: 2026-05-22
+author: verbal
+status: proposed
+---
+
+## Problem
+`azd up` failed during provision with "Operation expired" error. Root cause: Bicep dependency ordering issue.
+
+**Failure sequence:**
+1. Backend Container App created with system-assigned identity
+2. Container App tries to pull placeholder image from ACR
+3. ACR authentication fails (401) because RBAC module hasn't run yet
+4. RBAC module depends on `backend.outputs.principalId`, but backend is in failed state
+5. Deployment fails before RBAC can execute — catch-22
+
+**Evidence:**
+- 88 repeated ACR auth errors: "ACR token exchange endpoint returned error status: 401"
+- Backend identity (e8b91c28-9125-4f2f-a64a-8a536fc8e66e) had ZERO role assignments
+- RBAC module never deployed (no deployment named 'rbac' found)
+
+## Solution
+Two-phase RBAC assignment:
+1. **Phase 1 (immediate post-identity-creation):** Grant ACR Pull ONLY — allows Container App to pull images
+2. **Phase 2 (post-provisioning):** Grant all other permissions (Cosmos DB, AI Foundry, Storage)
+
+## Implementation
+Create `infra/modules/rbac-acr-only.bicep`:
+- Takes backend/frontend/sandbox principal IDs as parameters
+- Grants ONLY AcrPull role on ACR
+- No dependencies on backend being healthy — just needs identity to exist
+
+Update `infra/main.bicep`:
+```bicep
+// Immediate ACR access — no backend health dependency
+module acrRbac 'modules/rbac-acr-only.bicep' = {
+  name: 'rbac-acr'
+  scope: rg
+  params: {
+    backendPrincipalId: backend.outputs.principalId
+    frontendPrincipalId: frontend.outputs.principalId
+    sandboxPrincipalId: sandbox.outputs.principalId
+    acrName: acr.outputs.name
+  }
+}
+
+// Full RBAC — runs after backend is healthy
+module rbac 'modules/rbac.bicep' = if (deployRbac) {
+  name: 'rbac'
+  scope: rg
+  dependsOn: [acrRbac]  // ACR access must exist first
+  params: {
+    // ... existing params ...
+  }
+}
+```
+
+Remove ACR Pull assignments from `rbac.bicep` (lines 142-178) since they're now in `rbac-acr-only.bicep`.
+
+## Status
+**Manual fix applied:** ACR Pull granted to backend identity (`az role assignment create` at 2026-05-22 07:08:14 UTC).
+
+**Next steps:**
+1. Complete current deployment: `azd provision` (should succeed now that RBAC is fixed)
+2. Implement two-phase RBAC Bicep modules for future deployments
+3. Test full `azd down --purge && azd up` cycle
+
+## Related
+- Container App stuck in "Failed" state with no revisions
+- Logs: `infra/modules/rbac.bicep` lines 144-152 (ACR Pull assignment)
+
+---
+
 # Decision: Stdout/Stderr Discipline for azd Preprovision Functions
 
 **Agent:** Verbal  
@@ -490,86 +565,6 @@ Add a short README note explaining that `.squad/` is optional project metadata u
 - History audit found 1 critical tracked file (`backend/key.pem`, commit `4fdbe03`) and 1 suspicious tracked env artifact (`frontend/.!38121!.env.local`, commit `4fdbe03`).
 - OIDC is confirmed: the workflow uses `azure/login@v2` with federated credentials and `azd auth login --federated-credential-provider github`.
 
-## Historical Decisions
-
-### Local Dev Graceful Degradation
-
-**Author:** Fenster  
-**Date:** 2025-07-24  
-**Status:** Implemented
-
-Follow the existing dual-implementation pattern (Cosmos DB + InMemory fallback) for all Azure-dependent services:
-- ACI sandbox init: try/except fallback to static `SANDBOX_URL`
-- Pipeline sandbox check: pre-flight health check with actionable message
-- Blob storage errors: downgraded from `exception()` to `warning()` logging
-- Sandbox skill sync: connection errors at `debug` level
-- PPTX upload: added MIME type to `/api/upload`
-
-**Rules:** Never use `logger.exception()` for expected-absent infrastructure; connection errors from local services → `debug`; all changes backward-compatible.
-
-### ACI Sandbox Cold-Start Optimizations
-
-**Author:** Fenster  
-**Date:** 2025-07-14  
-**Status:** Implemented
-
-Optimized provisioning latency:
-- Health poll interval: 5s → 2s
-- Fast poll after ARM Succeeded: 0.5s
-- Split provisioning API: `start_provisioning()` + `wait_until_ready()`
-- Slides pipeline overlap: concurrent content gathering with ACI provisioning
-- Progress callbacks: status messages to pipeline terminal
-
-**Files:** `backend/app/services/aci_sandbox_service.py`, `backend/app/agents/dev_agent.py`
-
-### Slides Pipeline Restructured to init→slides→run
-
-**Author:** Fenster  
-**Date:** 2025-01-20  
-**Status:** Implemented
-
-Pipeline stages changed from `["init", "skills", "slides"]` to `["init", "slides", "run"]`:
-- Skills sync merged into init (prerequisite, not user-visible)
-- Slides stage uses `copilot --autopilot --yolo` shell command
-- Run stage owns dev server lifecycle: `npm install` → `npm run dev` → health check → auto-register
-- PowerPoint handling consolidated into slides prompt
-- Default theme/palette: `default`/`blue`
-
-**Impact:** Frontend stage display names updated; tests referencing old `"skills"` stage name updated.
-
-### Slides Preview Auto-Shows on Run Stage Completion
-
-**Author:** McManus  
-**Date:** 2025-07-25  
-**Status:** Implemented
-
-Slides preview iframe auto-displays when `run` stage completes using `/api/dev/{task_id}/preview/`. Fallback "Start Preview" button remains for edge cases. Refresh and Stop buttons available.
-
-**Impact:** Frontend only—no backend API contract change. Both `development/page.tsx` and `development/[id]/page.tsx` updated.
-
-### Cosmos DB Private Networking Architecture
-
-**Author:** Verbal  
-**Date:** 2025-07-25  
-**Status:** Implemented (IaC only — deployment pending)
-
-Cosmos DB now uses a private endpoint for data-plane traffic. VNet peering connects CAE and ACI sandbox networks.
-
-**Key Architecture:**
-- CAE VNet (10.2.0.0/16) with 3 subnets
-- Private endpoint for Cosmos DB (privatelink.documents.azure.com DNS zone)
-- Bidirectional VNet peering between CAE VNet and ACI sandbox VNet
-- Public access disabled on Cosmos DB account
-
-**Files Changed:** `infra/modules/vnet-cae.bicep`, `cosmos-private-endpoint.bicep`, `vnet-peering.bicep`, `container-apps-env.bicep`, `cosmos-db.bicep`, `main.bicep`
-
-### Model Preference Directive
-
-**Author:** Project Maintainer
-**Date:** 2026-03-29T10:35:13Z  
-**Status:** Active
-
-Use `claude-opus-4.6` as the preferred model for all squad agent spawns. Do not use `claude-sonnet-4.5` as default.
 
 ## Governance
 

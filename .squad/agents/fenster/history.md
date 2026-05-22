@@ -9,6 +9,7 @@ Backend has 12 specialist agents: notes, brainstorm, research, spec, dev, market
 
 ## Team Updates
 
+- **2026-05-22:** Verbal diagnosed and recovered failed `azd up` deployment. Root cause: Bicep RBAC module dependency ordering catch-22 — backend Container App identity had zero role assignments because RBAC module depends on backend being healthy, creating circular dependency. Manual fix: `az role assignment create` granted AcrPull to backend identity. **Action required:** Run `azd provision` then `azd deploy` to complete deployment. Permanent fix: Two-phase RBAC Bicep refactor proposed (see `.squad/decisions/decisions.md`).
 - **2026-05-20:** Verbal deployed quota-aware region selector (`infra/scripts/select-model-regions.sh`) as `azd` preprovision hook. Three new env vars in CI/CD pipelines: `AZURE_OPENAI_LOCATION_PRIMARY`, `AZURE_OPENAI_LOCATION_VOICE`, `AZURE_OPENAI_LOCATION_RESEARCH`. This resolves fresh `azd up` quota failures on new subscriptions and enables interactive region selection for multi-region deployments.
 
 ## Learnings

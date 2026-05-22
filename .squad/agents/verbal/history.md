@@ -225,3 +225,41 @@ Cosmos DB private networking deployment session completed. All critical componen
 - `bash -n` syntax check: ✅
 - Stdout/stderr discipline: manual code inspection confirms all diagnostic output now uses `>&2`
 - Portability: no bash 4.x-only features remain
+
+### Container App RBAC Timing Issue (2026-05-22)
+
+**Problem:** `azd up` failed with "Operation expired" during Container App provisioning.
+
+**Root cause:** Bicep module dependency ordering catch-22:
+- Container App needs ACR Pull role to pull placeholder image
+- RBAC module depends on `backend.outputs.principalId`
+- If backend fails, RBAC module never executes
+- Backend failed because ACR auth returned 401 (no RBAC yet)
+
+**Evidence:**
+- System logs: 88 repeated "ACR token exchange endpoint returned error status: 401"
+- Backend identity had ZERO role assignments (RBAC module never ran)
+- Container App in "Failed" state with no revisions created
+- ACR repository completely empty (no images pushed — provision failed before deploy)
+
+**Manual recovery applied (2026-05-22 07:08:14 UTC):**
+```bash
+az role assignment create \
+  --assignee <backend-principal-id> \
+  --role "7f951dda-4ed3-4680-a7ca-43fe172d538d" \
+  --scope "<acr-resource-id>"
+```
+
+**Pattern:** Container Apps with system-assigned identities need ACR Pull role IMMEDIATELY after identity creation, not in a dependent module. Consider two-phase RBAC:
+1. Phase 1: ACR Pull only (inline or separate lightweight module with no health dependencies)
+2. Phase 2: All other permissions (Cosmos, Storage, AI Foundry) after app is healthy
+
+**Next steps for user:**
+1. Run `azd provision` to complete infrastructure setup (RBAC now exists)
+2. Run `azd deploy` to build and push container images
+3. Implement two-phase RBAC Bicep refactor (see `.squad/decisions/inbox/verbal-aca-rbac-timing-fix.md`)
+
+**Files involved:**
+- `infra/modules/rbac.bicep` (lines 144-152: ACR Pull assignments)
+- `infra/main.bicep` (line 330: RBAC module invocation)
+- `infra/modules/container-app-backend.bicep` (line 109: placeholder image)
