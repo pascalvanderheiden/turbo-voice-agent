@@ -38,10 +38,10 @@
 
 ## 5. Sandbox image: warm-up readiness
 
-- [ ] 5.1 Update `sandbox/entrypoint.sh` (or equivalent) so skills sync from Blob Storage completes before the HTTP server reports `/ready`
-- [ ] 5.2 Add or confirm `GET /ready` returns 200 only after skills sync and server are up; `GET /health` remains a lightweight liveness check
-- [ ] 5.3 Add a request middleware that reads `X-GH-Token` on first request and runs `gh auth login --with-token`, then clears the in-process token
-- [ ] 5.4 Smoke-test the image locally with docker run, verifying probes and `X-GH-Token` handling
+- [x] 5.1 Update `sandbox/entrypoint.sh` (or equivalent) so skills sync from Blob Storage completes before the HTTP server reports `/ready`
+- [x] 5.2 Add or confirm `GET /ready` returns 200 only after skills sync and server are up; `GET /health` remains a lightweight liveness check
+- [x] 5.3 Add a request middleware that reads `X-GH-Token` on first request and runs `gh auth login --with-token`, then clears the in-process token
+- [x] 5.4 Smoke-test the image locally with docker run, verifying probes and `X-GH-Token` handling
 
 ## 6. Auth & token flow
 

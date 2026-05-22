@@ -11,11 +11,21 @@ fi
 
 # OpenSpec init moved to explicit pipeline stage (runs at dev_agent.py openspec stage)
 
-# Sync custom skills from Azure Blob Storage (if running in Azure)
+# Sync custom skills from Azure Blob Storage (if running in Azure).
+# Runs synchronously BEFORE the HTTP server starts so the Startup probe
+# (GET /ready) only succeeds once skills are in place.
+# If Blob Storage is unreachable we still mark ready=true so the session
+# pool doesn't stall — users can retry via POST /skills/sync.
 if [ -n "$AZURE_STORAGE_ACCOUNT_NAME" ]; then
   echo "Syncing skills from Blob Storage (account: $AZURE_STORAGE_ACCOUNT_NAME)..."
-  /app/sync-skills.sh
+  /app/sync-skills.sh || echo "Skill sync returned non-zero — continuing to mark ready."
 fi
+
+# Readiness marker — server.js GET /ready reads this file. Created
+# unconditionally so missing/unconfigured storage doesn't block the pool.
+mkdir -p /tmp/sandbox-state
+touch /tmp/sandbox-state/skills-synced
+echo "Readiness marker written: /tmp/sandbox-state/skills-synced"
 
 # List installed skills on startup (CLI-based verification happens at pipeline time)
 echo "=== Installed Skills ==="

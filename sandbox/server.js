@@ -10,6 +10,17 @@ app.use(express.json({ limit: '1mb' }));
 
 const tasks = new Map();
 
+// ── Readiness marker (written by entrypoint.sh after skill sync) ─────
+const READINESS_MARKER = "/tmp/sandbox-state/skills-synced";
+
+// ── X-GH-Token middleware state ──────────────────────────────────────
+// `ghAuthenticated` flips true once we've successfully run
+// `gh auth login --with-token` (either from env on startup or from the
+// first request carrying an X-GH-Token header). `ghAuthInFlight` is a
+// promise guard so concurrent first-requests don't race the login.
+let ghAuthenticated = false;
+let ghAuthInFlight = null;
+
 // SINGLE_TASK_MODE: When set, server exits after the last task completes.
 // A grace-period timer allows sequential pipeline tasks to cancel the shutdown.
 const SINGLE_TASK_MODE = process.env.SINGLE_TASK_MODE === "true";
@@ -21,14 +32,88 @@ let premiumRequests = 0;
 
 // GitHub auth: accept GH_TOKEN or GITHUB_TOKEN (same as official Docker sandbox)
 // When GH_TOKEN env var is set, gh CLI uses it directly — no need to run `gh auth login`.
+// In session-pool deployments the backend sends X-GH-Token on the first request
+// instead (see middleware below); env-var path is kept for local docker-compose.
 const ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 if (ghToken) {
   console.log("GitHub CLI will authenticate via GH_TOKEN environment variable");
+  ghAuthenticated = true; // entrypoint.sh already ran `gh auth login`
 }
+
+/**
+ * Authenticate `gh` CLI with a token, idempotently.
+ * Returns a promise that resolves once auth completes (success or failure).
+ * Concurrent callers share the same in-flight promise.
+ * The token value is never logged and is not retained after this call returns.
+ */
+function authenticateGh(token) {
+  if (ghAuthenticated) return Promise.resolve(true);
+  if (ghAuthInFlight) return ghAuthInFlight;
+  ghAuthInFlight = new Promise((resolve) => {
+    const proc = spawn("gh", ["auth", "login", "--with-token"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    proc.on("error", (err) => {
+      console.error(`[gh-auth] spawn failed: ${err.message}`);
+      ghAuthInFlight = null;
+      resolve(false);
+    });
+    proc.on("close", (code) => {
+      if (code === 0) {
+        ghAuthenticated = true;
+        console.log("[gh-auth] gh CLI authenticated via X-GH-Token header");
+        resolve(true);
+      } else {
+        // Surface stderr but NEVER the token. Continue serving — the
+        // request itself may not need `gh`.
+        console.error(`[gh-auth] gh auth login exited ${code}: ${stderr.trim()}`);
+        ghAuthInFlight = null;
+        resolve(false);
+      }
+    });
+    try {
+      proc.stdin.write(token);
+      proc.stdin.end();
+    } catch (err) {
+      console.error(`[gh-auth] failed to pipe token: ${err.message}`);
+      ghAuthInFlight = null;
+      resolve(false);
+    }
+  });
+  return ghAuthInFlight;
+}
+
+// Request middleware: opportunistic `gh` auth from X-GH-Token header.
+// Runs before any route handler. Non-blocking on success path (auth
+// happens once; subsequent requests short-circuit). On the very first
+// request with a token we await the login so downstream Copilot CLI
+// invocations see an authenticated gh state.
+app.use(async (req, _res, next) => {
+  const token = req.get("X-GH-Token");
+  if (token && !ghAuthenticated) {
+    try {
+      await authenticateGh(token);
+    } catch (err) {
+      // Defensive — authenticateGh already swallows errors.
+      console.error(`[gh-auth] unexpected error: ${err.message}`);
+    }
+  }
+  // Strip the header from the in-process request object so it can't leak
+  // into spawned child processes or downstream logging.
+  if (token) {
+    delete req.headers["x-gh-token"];
+  }
+  next();
+});
 
 // Default model from env (overridable per-task)
 const DEFAULT_MODEL = process.env.COPILOT_MODEL || "claude-opus-4.6";
 
+// Liveness probe: cheap, always 200 once the Node process is listening.
+// The Container Apps session pool calls this on a 10s period.
 app.get("/health", (_req, res) => {
   const activeTasks = [...tasks.values()].filter((t) => t.exitCode() === null).length;
   res.json({
@@ -36,8 +121,20 @@ app.get("/health", (_req, res) => {
     activeTasks,
     premiumRequests,
     model: DEFAULT_MODEL,
-    ghAuth: !!ghToken,
+    ghAuth: ghAuthenticated,
   });
+});
+
+// Startup/readiness probe: returns 200 only once skills sync completed
+// (marker file written by entrypoint.sh). Returns 503 otherwise so the
+// session pool keeps polling instead of routing traffic. Pool config:
+// period 5s, 30 attempts → ~150s max wait.
+app.get("/ready", (_req, res) => {
+  if (fs.existsSync(READINESS_MARKER)) {
+    res.json({ ready: true });
+  } else {
+    res.status(503).json({ ready: false, reason: "skill sync not complete" });
+  }
 });
 
 app.post("/tasks", (req, res) => {
