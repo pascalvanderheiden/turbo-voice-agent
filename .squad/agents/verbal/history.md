@@ -7,6 +7,32 @@ User: the project maintainer.
 
 Infrastructure: Azure Container Apps for backend + frontend, ACI for sandbox containers, Cosmos DB, Azure Storage for skills, ACR for container images. Deployed via `azd up`.
 
+## Core Context
+
+**Recent Focus (2026-05):**
+- Quota-aware region selection for multi-region AI Foundry deployments (`select-model-regions.sh`)
+- Automated deployment parameter collection (`collect-deployment-params.sh`)
+- Deployment parameter orchestration & CI/CD workflow genericization
+- Fixed stdout/stderr pollution bug in region picker causing env var persistence failure
+- Fixed per-model quota dimension checking (OpenAI.GlobalStandard.<model-name> not generic OpenAI.Standard)
+- Diagnosed & recovered Container App RBAC timing catch-22: identity created before ACR Pull role assignment
+
+**Key Patterns:**
+- Preprovision hooks in `azure.yaml` for interactive parameter collection (idempotent, CI-safe)
+- Bicep dependency ordering: RBAC must execute BEFORE backend deployment (or use two-phase approach)
+- Quota validation must be per-model not aggregate (different models → different quotas)
+- Stdout/stderr discipline critical in azd hook scripts for clean env var capture
+
+**Active Issues:**
+- Container App RBAC timing: manual fix applied 2026-05-22; permanent two-phase Bicep refactor pending
+- CAE VNet integration still blocked (Microsoft.ContainerService provider registration issue from 2025-07-29)
+
+**Deployment State:**
+- Backend + Frontend: deployed to Azure Container Apps via `azd deploy`
+- Cosmos DB: private networking infrastructure complete, public access disabled
+- ACI Sandbox: functional, cold-start optimizations (2s health poll, split provisioning)
+- GitHub Actions: OIDC-only, re-enabled for infra/backend/frontend changes
+
 ## Work Queue
 
 ### 2026-03-25T20:47 — Fenster Local Dev Fixes Ready for Deploy
@@ -263,3 +289,53 @@ az role assignment create \
 - `infra/modules/rbac.bicep` (lines 144-152: ACR Pull assignments)
 - `infra/main.bicep` (line 330: RBAC module invocation)
 - `infra/modules/container-app-backend.bicep` (line 109: placeholder image)
+
+### Container App RBAC Timing Issue — Second Occurrence (2026-05-22 08:44 UTC)
+
+**Problem:** After manually fixing backend identity and running `azd provision`, frontend and sandbox Container Apps failed with identical RBAC issue.
+
+**Evidence — SECOND OCCURRENCE:**
+- Backend succeeded (manual RBAC fix from previous session worked)
+- Frontend failed: "ContainerAppOperationError: Failed to provision revision for container app 'ca-frontend-2mta7feoalzyq'. Error details: Operation expired."
+- Sandbox failed: "ContainerAppOperationError: Failed to provision revision for container app 'ca-sandbox-2mta7feoalzyq'. Error details: Operation expired."
+- Both frontend (6216b79f-7f75-4697-87de-6374f03bd4d9) and sandbox (92e01376-0bc6-46ef-aeda-2fbc13dcd46a) identities had ZERO role assignments
+- `azd deploy` subsequently failed: "could not determine container registry endpoint, ensure 'registry' has been set in the docker options or 'AZURE_CONTAINER_REGISTRY_ENDPOINT' environment variable has been set"
+- Azd env was missing ALL Bicep outputs (AZURE_CONTAINER_REGISTRY_ENDPOINT, BACKEND_URL, FRONTEND_URL, COSMOS_ENDPOINT, AI_*_ENDPOINT, SANDBOX_URL) because provision failed mid-way
+
+**Root cause confirmed:**
+- All three Container Apps (backend, frontend, sandbox) have `registries` blocks that reference ACR with `identity: 'system'`
+- Backend and frontend use UNCONDITIONAL registries blocks; sandbox uses conditional `!empty(acrLoginServer) ? [...] : []`
+- Even though placeholder image is public (`mcr.microsoft.com/azuredocs/containerapps-helloworld:latest`), presence of `registries` block causes Azure to attempt ACR authentication
+- Without AcrPull role, authentication fails with 401, Container App provision times out after 20 minutes
+- RBAC module depends on Container App outputs, so it never runs → no role assignments created
+- Bicep outputs never populate azd env because provision fails mid-deployment
+
+**Manual recovery applied (2026-05-22 08:44 UTC):**
+```bash
+# Frontend AcrPull grant
+az role assignment create --assignee 6216b79f-7f75-4697-87de-6374f03bd4d9 \
+  --role 7f951dda-4ed3-4680-a7ca-43fe172d538d \
+  --scope /subscriptions/2883501d-be4e-457b-9377-4867fb27b394/resourceGroups/rg-turbo-voice-agent/providers/Microsoft.ContainerRegistry/registries/acr2mta7feoalzyq
+
+# Sandbox AcrPull grant
+az role assignment create --assignee 92e01376-0bc6-46ef-aeda-2fbc13dcd46a \
+  --role 7f951dda-4ed3-4680-a7ca-43fe172d538d \
+  --scope /subscriptions/2883501d-be4e-457b-9377-4867fb27b394/resourceGroups/rg-turbo-voice-agent/providers/Microsoft.ContainerRegistry/registries/acr2mta7feoalzyq
+
+# Manual env var fix (should be populated by Bicep outputs)
+azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT acr2mta7feoalzyq.azurecr.io
+```
+
+**Sandbox image strategy:**
+- Bicep creates Container App with public placeholder image `mcr.microsoft.com/azuredocs/containerapps-helloworld:latest`
+- `azd deploy` builds and pushes sandbox image with timestamped tag: `turbo-voice-agent/sandbox-{envName}:azd-deploy-{ts}`
+- Postdeploy hook (`infra/scripts/tag-sandbox-latest.sh`) tags latest sandbox image as `turbo-voice-agent/sandbox:latest` via `az acr import`
+- ACI container groups pull from `:latest` tag for predictable reference
+
+**Pattern confirmation:**
+This is the SECOND independent occurrence of the exact same failure mode, validating the diagnosis. The two-phase RBAC Bicep refactor (`.squad/decisions.md` lines 20-76) is now URGENT — must be implemented before next full `azd down && azd up` cycle.
+
+**Next steps for user:**
+1. `azd provision` — should succeed now that RBAC is fixed for all three apps
+2. `azd deploy` — will build & push images, populate remaining azd env vars via postprovision hook
+3. Implement two-phase RBAC Bicep refactor (decision already documented, just needs execution)

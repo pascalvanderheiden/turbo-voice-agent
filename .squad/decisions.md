@@ -5,7 +5,8 @@
 ---
 date: 2026-05-22
 author: verbal
-status: proposed
+status: URGENT
+confidence: HIGH (confirmed by two independent occurrences)
 ---
 
 ## Problem
@@ -18,10 +19,20 @@ status: proposed
 4. RBAC module depends on `backend.outputs.principalId`, but backend is in failed state
 5. Deployment fails before RBAC can execute — catch-22
 
-**Evidence:**
+**Evidence (First Occurrence — 2026-05-22 07:08 UTC):**
 - 88 repeated ACR auth errors: "ACR token exchange endpoint returned error status: 401"
 - Backend identity (e8b91c28-9125-4f2f-a64a-8a536fc8e66e) had ZERO role assignments
 - RBAC module never deployed (no deployment named 'rbac' found)
+
+**Evidence (Second Occurrence — 2026-05-22 08:44 UTC):**
+- After manually fixing backend RBAC, user ran `azd provision` again
+- Backend succeeded (validated manual fix), but frontend and sandbox failed identically
+- Frontend identity (6216b79f-7f75-4697-87de-6374f03bd4d9): ZERO role assignments → Operation expired
+- Sandbox identity (92e01376-0bc6-46ef-aeda-2fbc13dcd46a): ZERO role assignments → Operation expired
+- Azd env missing ALL Bicep outputs (AZURE_CONTAINER_REGISTRY_ENDPOINT, BACKEND_URL, etc.) because provision failed mid-way
+- `azd deploy` failed: "could not determine container registry endpoint"
+
+**Pattern confirmed:** All three Container Apps (backend, frontend, sandbox) exhibit the same failure mode independently, validating the diagnosis. This is a systematic issue, not a one-time anomaly.
 
 ## Solution
 Two-phase RBAC assignment:
@@ -62,12 +73,18 @@ module rbac 'modules/rbac.bicep' = if (deployRbac) {
 Remove ACR Pull assignments from `rbac.bicep` (lines 142-178) since they're now in `rbac-acr-only.bicep`.
 
 ## Status
-**Manual fix applied:** ACR Pull granted to backend identity (`az role assignment create` at 2026-05-22 07:08:14 UTC).
+**Manual fixes applied:**
+1. Backend identity (2026-05-22 07:08 UTC): AcrPull granted to e8b91c28-9125-4f2f-a64a-8a536fc8e66e
+2. Frontend identity (2026-05-22 08:44 UTC): AcrPull granted to 6216b79f-7f75-4697-87de-6374f03bd4d9
+3. Sandbox identity (2026-05-22 08:44 UTC): AcrPull granted to 92e01376-0bc6-46ef-aeda-2fbc13dcd46a
+4. Azd env var fix (2026-05-22 08:44 UTC): `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT acr2mta7feoalzyq.azurecr.io`
+
+**URGENT: Implement two-phase RBAC Bicep refactor BEFORE next full `azd down && azd up` cycle.**
 
 **Next steps:**
-1. Complete current deployment: `azd provision` (should succeed now that RBAC is fixed)
-2. Implement two-phase RBAC Bicep modules for future deployments
-3. Test full `azd down --purge && azd up` cycle
+1. Complete current deployment: `azd provision` → `azd deploy` (should succeed now that RBAC is fixed for all apps)
+2. Implement two-phase RBAC Bicep modules (detailed below) ASAP
+3. Test full `azd down --purge && azd up` cycle to validate fix
 
 ## Related
 - Container App stuck in "Failed" state with no revisions

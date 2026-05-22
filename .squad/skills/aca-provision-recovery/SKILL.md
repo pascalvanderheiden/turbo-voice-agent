@@ -1,5 +1,9 @@
 # Azure Container Apps Provision Recovery
 
+**Confidence:** MEDIUM (validated by 2 independent occurrences on 2026-05-22)  
+**Last Updated:** 2026-05-22 08:44 UTC  
+**Validation:** Successfully diagnosed and recovered from identical failures on backend, frontend, and sandbox Container Apps.
+
 ## When to Use
 - `azd up` or `azd provision` fails with "Operation expired" on Container App
 - Container App stuck in "Failed" provisioning state with no revisions
