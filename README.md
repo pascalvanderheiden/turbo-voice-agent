@@ -46,6 +46,9 @@ Python 3.12+]
     Supervisor --> Specialists[Notes · Brainstorm · Research · Spec · Dev · Marketing · Skills]
     Specialists --> Cosmos[Azure Cosmos DB
 per-user tenant isolation]
+    Specialists -. dev-task .-> Pool[Container Apps
+dynamic session pool
+per-task identifier]
     API --> Azure[Azure Container Apps
 Bicep + azd deployment]
 ```
@@ -54,7 +57,16 @@ Bicep + azd deployment]
 - **Web:** Next.js 15 App Router frontend with React 19, Tailwind CSS v4, shadcn/ui patterns, and Tabler Icons
 - **Mobile:** Expo / React Native iOS client
 - **Auth:** Azure Entra ID on web + backend JWT validation (`AUTH_DISABLED=true` for local development)
-- **Infra:** Azure Container Apps, Azure AI services, Azure Files, and Cosmos DB provisioned through Bicep
+- **Sandbox:** Per-task code execution via an Azure Container Apps **dynamic session pool** (`sp-sandbox-*`). The backend's managed identity calls the pool's management endpoint with `?identifier={taskId}` — one Hyper-V-isolated session per dev-task. Local dev falls back to a docker-compose `sandbox` container when `SESSION_POOL_MANAGEMENT_ENDPOINT` is unset.
+- **Infra:** Azure Container Apps, Azure AI services, Azure Files, Cosmos DB, and the session pool provisioned through Bicep
+
+### How sandbox execution works
+
+1. The user starts a dev-task. The backend generates a `taskId` (UUID) and uses it as the session **identifier**.
+2. `SessionSandboxClient` calls `POST {management-endpoint}/tasks?identifier={taskId}&api-version=2025-02-02-preview` with a bearer token from `DefaultAzureCredential` (scope `https://dynamicsessions.io/.default`). The pool allocates a prewarmed sandbox container on first request (cold start <2s).
+3. On the first call only, the backend attaches `X-GH-Token: <user PAT>` so the container can `gh auth login --with-token` and clear the secret from memory.
+4. Subsequent `/tasks`, `/files`, SSE-stream calls reuse the same identifier and hit the same sandbox until the pool's `cooldownPeriodInSeconds` elapses.
+5. On user cancel / task completion / disconnect, the backend calls `POST /.management/stopSession?identifier={taskId}` to release the session early.
 
 ## Prerequisites
 

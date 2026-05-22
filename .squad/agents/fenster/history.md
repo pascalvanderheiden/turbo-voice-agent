@@ -81,3 +81,35 @@ Refactored ~25 httpx call sites in `dev_agent.py`, `routes/dev.py`, `routes/sand
 - backend/tests/test_sandbox_disconnect.py — NEW (3 tests)
 - sandbox/sync-skills.sh — drop ACI_IDENTITY_CLIENT_ID
 - openspec/changes/sandbox-dynamic-sessions/tasks.md — 4.1-4.5, 6.1-6.3 checked
+
+## 2025-11-25 — Phase 8: structured logging + docs refresh
+
+**Scope:** Observability and documentation for the dynamic-sessions sandbox. Tasks 8.1–8.5.
+
+**Changes:**
+- `backend/app/services/session_sandbox_client.py`:
+  - Renamed module logger to `log` (kept `logger` alias for backwards compat).
+  - Added `_allocated: set[str]` to track first-request-per-identifier so we can emit `sandbox.session.allocated` once per session.
+  - `request()` now measures latency, emits structured DEBUG `sandbox.session.request` on every call, WARNING `sandbox.session.error` on retry + on any final 4xx/5xx, and INFO `sandbox.session.allocated` on the first <400 response per identifier.
+  - `stop_session()` gained `reason: str = "complete"` kwarg, emits INFO `sandbox.session.stopped` with reason field. Identifier dropped from `_allocated` so re-use re-emits.
+  - `SandboxClient` Protocol and `LocalSandboxClient.stop_session()` updated to accept the new kwarg.
+- `AGENTS.md` — NEW (replaced empty stub). Short agent-facing companion to `.github/copilot-instructions.md` covering architecture, sandbox flow, observability event table, troubleshooting pointer.
+- `README.md` — added sandbox bullet + "How sandbox execution works" subsection + extended Mermaid diagram with session pool node. No ACI references remained.
+- `infra/README.md` — added Troubleshooting section: 401/403 RBAC propagation, 429 concurrency cap, probe failures (skill-sync marker), cold start >5s.
+- `openspec/changes/sandbox-dynamic-sessions/tasks.md` — 8.1–8.5 checked.
+
+**Decisions logged:** `.squad/decisions/inbox/fenster-phase8.md`
+- App Insights SDK wiring deferred; using structured-log fallback with `event` prefix `sandbox.`
+- "Allocated" event triggered on first successful request (no explicit allocate API)
+- `stop_session(reason=...)` kwarg added
+
+**Verification:**
+- `pytest tests/test_session_sandbox_client.py` — 19/19 pass
+- `pytest -k "sandbox or session"` — 31/31 pass (+5 skipped, unrelated)
+- `ruff check .` + `ruff format .` — clean on touched files
+- Pre-existing unrelated failure: `tests/test_notes_api.py::test_list_notes` (401 vs 200, auth issue, predates Phase 8)
+
+**Learnings:**
+- Backend has no App Insights SDK imports (verified by grep). The structured-log fallback is the cheapest forward-compatible path; a future opencensus handler can filter `record.event.startswith("sandbox.")` and call `track_event`.
+- The session pool has no explicit "allocate" call — first request is the allocation. Tracking `_allocated` in the client gives us a one-shot signal per session.
+- Identifiers (dev-task UUIDs) are safe to log; tokens/PATs/response bodies are not. The hygiene rule is enforced by only logging fields explicitly listed in the event table.

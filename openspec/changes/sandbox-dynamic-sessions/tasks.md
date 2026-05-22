@@ -62,11 +62,11 @@
 
 ## 8. Observability & docs
 
-- [ ] 8.1 Add structured logging in `SessionSandboxClient` for: allocation latency, request latency, identifier, status code, retry count
-- [ ] 8.2 Emit App Insights custom event `sandbox.session.allocated` / `sandbox.session.stopped` for dashboarding
-- [ ] 8.3 Update `AGENTS.md` and `README.md` to describe the new architecture and remove ACI references
-- [ ] 8.4 Add a short troubleshooting section: 401 from pool (RBAC propagation), 429 (concurrency cap), probe failures
-- [ ] 8.5 Update `docs/architecture.md` (or equivalent) diagram to show session pool instead of ACI/Container App sandbox
+- [x] 8.1 Add structured logging in `SessionSandboxClient` for: allocation latency, request latency, identifier, status code, retry count
+- [x] 8.2 Emit App Insights custom event `sandbox.session.allocated` / `sandbox.session.stopped` for dashboarding
+- [x] 8.3 Update `AGENTS.md` and `README.md` to describe the new architecture and remove ACI references
+- [x] 8.4 Add a short troubleshooting section: 401 from pool (RBAC propagation), 429 (concurrency cap), probe failures
+- [x] 8.5 Update `docs/architecture.md` (or equivalent) diagram to show session pool instead of ACI/Container App sandbox
 
 ## 9. Final verification
 

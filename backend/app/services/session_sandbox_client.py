@@ -22,11 +22,20 @@ import httpx
 from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import DefaultAzureCredential
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+# Backwards-compatible alias — earlier code in this module referenced ``logger``.
+logger = log
 
 SESSION_API_VERSION = "2025-02-02-preview"
 SESSION_SCOPE = "https://dynamicsessions.io/.default"
 TOKEN_REFRESH_BUFFER_SECONDS = 60
+
+# Prefix used for log records that should be picked up as App Insights custom
+# events. The backend does not currently wire opencensus / azure-monitor into
+# its lifespan, so we surface custom-event semantics as structured log records
+# with this prefix in ``event``. A future App Insights handler can filter on
+# ``record.event.startswith("sandbox.")`` and re-emit as ``track_event``.
+APPINSIGHTS_EVENT_PREFIX = "sandbox."
 
 # Local-dev fallback: when SESSION_POOL_MANAGEMENT_ENDPOINT is unset, sandbox
 # calls are routed at this base URL (the docker-compose ``sandbox`` service).
@@ -60,7 +69,7 @@ class SandboxClient(Protocol):
     ) -> Any:  # AsyncContextManager[httpx.Response]
         ...
 
-    async def stop_session(self, identifier: str) -> None: ...
+    async def stop_session(self, identifier: str, *, reason: str = ...) -> None: ...
 
 
 class SessionSandboxClient:
@@ -93,6 +102,10 @@ class SessionSandboxClient:
         self._endpoint = resolved.rstrip("/")
         self._credential: TokenCredential = credential or DefaultAzureCredential()
         self._token: AccessToken | None = None
+        # Tracks identifiers we've already emitted ``sandbox.session.allocated``
+        # for. The session pool itself allocates implicitly on first request, so
+        # we treat the first successful response as the allocation event.
+        self._allocated: set[str] = set()
 
     # ── token cache ────────────────────────────────────────────────────
 
@@ -162,25 +175,76 @@ class SessionSandboxClient:
         caller_headers = kwargs.pop("headers", None)
         params = self._merge_params(identifier, caller_params)
 
+        method_upper = method.upper()
         async with httpx.AsyncClient() as client:
             response: httpx.Response | None = None
+            retry_count = 0
+            t_start = time.monotonic()
             for attempt in (0, 1):
                 token = self._get_token(force_refresh=attempt == 1)
                 headers = self._merge_headers(token, caller_headers)
                 response = await client.request(
-                    method, url, params=params, headers=headers, **kwargs
+                    method_upper, url, params=params, headers=headers, **kwargs
                 )
                 if response.status_code in (401, 403) and attempt == 0:
-                    logger.debug(
-                        "Session pool returned %s for %s %s — refreshing token and retrying",
-                        response.status_code,
-                        method,
-                        path,
+                    retry_count = 1
+                    log.warning(
+                        "sandbox.session.error",
+                        extra={
+                            "event": "sandbox.session.error",
+                            "identifier": identifier,
+                            "status_code": response.status_code,
+                            "error_class": "auth_retry",
+                            "method": method_upper,
+                            "path": path,
+                        },
                     )
                     continue
-                return response
-            # Loop exits only via return above; this is for type-checkers.
+                break
+
             assert response is not None
+            latency_ms = int((time.monotonic() - t_start) * 1000)
+
+            # First successful response per identifier = allocation event.
+            if response.status_code < 400 and identifier not in self._allocated:
+                self._allocated.add(identifier)
+                log.info(
+                    "sandbox.session.allocated",
+                    extra={
+                        "event": "sandbox.session.allocated",
+                        "identifier": identifier,
+                        "latency_ms": latency_ms,
+                        "status_code": response.status_code,
+                        "retry_count": retry_count,
+                    },
+                )
+
+            log.debug(
+                "sandbox.session.request",
+                extra={
+                    "event": "sandbox.session.request",
+                    "identifier": identifier,
+                    "method": method_upper,
+                    "path": path,
+                    "status_code": response.status_code,
+                    "latency_ms": latency_ms,
+                    "retry_count": retry_count,
+                },
+            )
+
+            if response.status_code >= 400:
+                log.warning(
+                    "sandbox.session.error",
+                    extra={
+                        "event": "sandbox.session.error",
+                        "identifier": identifier,
+                        "status_code": response.status_code,
+                        "error_class": f"http_{response.status_code}",
+                        "method": method_upper,
+                        "path": path,
+                    },
+                )
+
             return response
 
     async def stream(
@@ -268,17 +332,30 @@ class SessionSandboxClient:
                     await stream_ctx.__aexit__(None, None, None)
                     raise
 
-    async def stop_session(self, identifier: str) -> None:
+    async def stop_session(self, identifier: str, *, reason: str = "complete") -> None:
         """Explicitly stop a session by identifier.
 
         Tolerates a 404 (session already gone after cooldown or prior stop). Any
-        other non-success status is raised via ``raise_for_status()``.
+        other non-success status is raised via ``raise_for_status()``. ``reason``
+        is propagated to the ``sandbox.session.stopped`` event for dashboarding
+        (``cancel`` | ``complete`` | ``disconnect``).
         """
         response = await self.request("POST", "/.management/stopSession", identifier=identifier)
         if response.status_code == 404:
-            logger.debug("stop_session: session %s already gone (404, tolerated)", identifier)
-            return
-        response.raise_for_status()
+            log.debug("stop_session: session %s already gone (404, tolerated)", identifier)
+        else:
+            response.raise_for_status()
+        # Drop allocation tracking so a future re-use re-emits ``allocated``.
+        self._allocated.discard(identifier)
+        log.info(
+            "sandbox.session.stopped",
+            extra={
+                "event": "sandbox.session.stopped",
+                "identifier": identifier,
+                "status_code": response.status_code,
+                "reason": reason,
+            },
+        )
 
 
 class LocalSandboxClient:
@@ -338,7 +415,12 @@ class LocalSandboxClient:
             async with client.stream(method, url, **kwargs) as response:
                 yield response
 
-    async def stop_session(self, identifier: str) -> None:  # noqa: ARG002 — no-op locally
+    async def stop_session(
+        self,
+        identifier: str,  # noqa: ARG002 — no-op locally
+        *,
+        reason: str = "complete",  # noqa: ARG002 — no-op locally
+    ) -> None:
         """No-op in local-dev mode: the shared container is long-running.
 
         Per-task cleanup is handled by :meth:`request` calls to
