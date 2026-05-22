@@ -1,13 +1,13 @@
 ## 1. Infrastructure: session pool
 
-- [ ] 1.1 Create `infra/modules/session-pool.bicep` defining `Microsoft.App/sessionPools` with `containerType: CustomContainer`, ACR image reference, managed identity, container probes, and parameters for capacity/cooldown/cpu/memory
-- [ ] 1.2 Add Bicep parameters `sessionPoolMaxConcurrent`, `sessionPoolReadyInstances`, `sessionPoolCooldownSeconds`, `sessionPoolCpu`, `sessionPoolMemory` with documented defaults
-- [ ] 1.3 Wire the module into `main.bicep`, passing the existing `cae-*` environment ID and ACR-published sandbox image
-- [ ] 1.4 Create `infra/modules/session-pool-role.bicep` assigning `Azure ContainerApps Session Executor` on the pool to the backend container app's managed identity
-- [ ] 1.5 Add Bicep outputs `sessionPoolManagementEndpoint` and `sessionPoolName`; surface as `SESSION_POOL_MANAGEMENT_ENDPOINT` and `SESSION_POOL_NAME` env vars on the backend container app
-- [ ] 1.6 Remove `infra/modules/container-app-sandbox.bicep`, `aci-network.bicep`, `aci-identity.bicep`, `aci-backend-role.bicep` and all references in `main.bicep`
-- [ ] 1.7 Remove ACI parameters (`aciSandboxCpu`, `aciSandboxMemory`, subnet ID, identity ID) from `main.bicep`, `main.parameters.json`, and any `collect-deployment-params.sh`
-- [ ] 1.8 Verify Bicep builds cleanly: `az bicep build --file infra/main.bicep`
+- [x] 1.1 Create `infra/modules/session-pool.bicep` defining `Microsoft.App/sessionPools` with `containerType: CustomContainer`, ACR image reference, managed identity, container probes, and parameters for capacity/cooldown/cpu/memory
+- [x] 1.2 Add Bicep parameters `sessionPoolMaxConcurrent`, `sessionPoolReadyInstances`, `sessionPoolCooldownSeconds`, `sessionPoolCpu`, `sessionPoolMemory` with documented defaults
+- [x] 1.3 Wire the module into `main.bicep`, passing the existing `cae-*` environment ID and ACR-published sandbox image
+- [x] 1.4 Create `infra/modules/session-pool-role.bicep` assigning `Azure ContainerApps Session Executor` on the pool to the backend container app's managed identity
+- [x] 1.5 Add Bicep outputs `sessionPoolManagementEndpoint` and `sessionPoolName`; surface as `SESSION_POOL_MANAGEMENT_ENDPOINT` and `SESSION_POOL_NAME` env vars on the backend container app
+- [x] 1.6 Remove `infra/modules/container-app-sandbox.bicep`, `aci-network.bicep`, `aci-identity.bicep`, `aci-backend-role.bicep` and all references in `main.bicep`
+- [x] 1.7 Remove ACI parameters (`aciSandboxCpu`, `aciSandboxMemory`, subnet ID, identity ID) from `main.bicep`, `main.parameters.json`, and any `collect-deployment-params.sh`
+- [x] 1.8 Verify Bicep builds cleanly: `az bicep build --file infra/main.bicep`
 
 ## 2. Backend: SessionSandboxClient
 

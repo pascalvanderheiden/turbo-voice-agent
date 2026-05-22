@@ -246,7 +246,13 @@ module backend 'modules/container-app-backend.bicep' = {
 // Container App. The pool pulls the existing sandbox image from ACR using
 // its own system-assigned managed identity (AcrPull role assignment is
 // created inside session-pool.bicep with a deterministic guid() name).
+//
+// NOTE: backendFqdn is computed from the predictable CAE-default-domain
+// pattern rather than backend.outputs.fqdn to avoid a Bicep cycle
+// (backend module also reads sessionPool outputs for env vars).
 // ──────────────────────────────────────────────
+var backendFqdnComputed = customDomainName != '' ? customDomainName : 'ca-backend-${resourceToken}.${cae.outputs.defaultDomain}'
+
 module sessionPool 'modules/session-pool.bicep' = {
   name: 'deploy-session-pool'
   scope: rg
@@ -257,7 +263,7 @@ module sessionPool 'modules/session-pool.bicep' = {
     image: '${acr.outputs.loginServer}/turbo-voice-agent/sandbox:${sandboxImageTag}'
     acrLoginServer: acr.outputs.loginServer
     acrId: acr.outputs.id
-    backendFqdn: backend.outputs.fqdn
+    backendFqdn: backendFqdnComputed
     storageAccountName: storage.outputs.name
     maxConcurrentSessions: sessionPoolMaxConcurrent
     readySessionInstances: sessionPoolReadyInstances

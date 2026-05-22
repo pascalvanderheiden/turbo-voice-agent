@@ -50,9 +50,12 @@ services:
       remoteBuild: true
 
   sandbox:
-    # Kept for Container App fallback (USE_ACI_SANDBOX=false).
-    # When ACI mode is enabled, this image is still built and pushed to ACR
-    # for use by dynamically provisioned ACI container groups.
+    # Builds & pushes the sandbox image to ACR. The image is pulled by the
+    # Azure Container Apps dynamic session pool (sp-sandbox-*) — see
+    # infra/modules/session-pool.bicep. NOTE: azd's `containerapp` host still
+    # expects a Container App target; the image push to ACR is what we depend
+    # on. tag-sandbox-latest.sh promotes the pushed image to `:latest` so the
+    # pool's `${ACR}/turbo-voice-agent/sandbox:latest` reference resolves.
     host: containerapp
     project: ./sandbox
     language: js

@@ -69,8 +69,10 @@ resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
       readySessionInstances: readySessionInstances
     }
     dynamicPoolConfiguration: {
-      executionType: 'Timed'
-      cooldownPeriodInSeconds: cooldownPeriodInSeconds
+      lifecycleConfiguration: {
+        lifecycleType: 'Timed'
+        cooldownPeriodInSeconds: cooldownPeriodInSeconds
+      }
     }
     customContainerTemplate: {
       containers: [
@@ -119,7 +121,7 @@ resource sessionPool 'Microsoft.App/sessionPools@2025-02-02-preview' = {
         targetPort: targetPort
       }
       registryCredentials: {
-        registry: acrLoginServer
+        server: acrLoginServer
         identity: 'system'
       }
     }

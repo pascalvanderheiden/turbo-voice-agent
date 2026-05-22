@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Post-deploy hook: tag the sandbox image as "turbo-voice-agent/sandbox:latest"
-# so ACI container groups can pull a stable reference.
+# so the Container Apps dynamic session pool can pull a stable reference.
 #
 # azd pushes images with timestamped tags like:
 #   turbo-voice-agent/sandbox-{envName}:azd-deploy-{ts}
-# ACI needs a predictable name: turbo-voice-agent/sandbox:latest
+# The session pool (sp-sandbox-*) is configured to pull:
+#   {ACR}/turbo-voice-agent/sandbox:latest
 
 set -euo pipefail
 
