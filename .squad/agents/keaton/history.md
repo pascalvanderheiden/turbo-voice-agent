@@ -21,3 +21,5 @@ Architecture: SupervisorAgent routes to 12 specialist agents. ACI sandbox runs C
 ## Learnings
 - 2026-05-22: Doc-refresh pattern for `.github/copilot-instructions.md` — file is AI-agent guidance, not full docs. Keep ~120–180 lines, preserve existing structure, surgical edits where reality drifted. Validate with grep sweep for stale terms (`ACI`, `SANDBOX_URL`, etc.) before commit. Always verify file paths actually exist (`grep -n`, `ls`) before referencing them.
 - 2026-05-22: OSS readiness for instruction files — call out OPTIONAL deployment knobs explicitly (custom domain, cert) and mention the fallback path (ACA default FQDN with dynamic redirect URI). OSS readers don't share the original deployer's setup; explicit defaults beat implicit ones.
+
+- **2026-05-22 (Scribe stamp):** `.github/copilot-instructions.md` refresh committed as `4ea10d4`. Aligned with sandbox-dynamic-sessions Phases 1–3 + 5. Phase 4/6/7/8/9 still pending; doc may need a second pass after Phase 7 (env/config) lands.

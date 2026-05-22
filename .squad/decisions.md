@@ -622,6 +622,20 @@ Cosmetic cleanup belongs in the `open-source-project` openspec change (NOT in `s
 **Why:** User flagged concern that login may not work when others deploy to their own tenant + domain. Audit confirms the architecture already supports this; only docs/examples need genericizing.
 
 
+### 2026-05-22: Unified SandboxClient abstraction (Phase 3)
+**By:** Fenster (for Pascal)
+**What:** All sandbox HTTP traffic from `dev_agent.py` and the route layer now routes through a single `SandboxClient` Protocol. Two implementations live in `app/services/session_sandbox_client.py`:
+- `SessionSandboxClient` — Azure Container Apps dynamic sessions (per-task isolation via `identifier`)
+- `LocalSandboxClient` — docker-compose `http://sandbox:3000` (identifier ignored)
+
+Selected at runtime by `get_sandbox_client()` singleton, which checks `SESSION_POOL_MANAGEMENT_ENDPOINT` env var. **No `USE_*` feature flag.** Code never branches on which sandbox runtime is active.
+
+**Why:** Phase 2 introduced the session client but it wasn't wired in. Phase 3 makes the abstraction load-bearing so Phase 4 can delete ACI cleanly without further per-callsite churn. The unified surface also makes the local-dev story honest — same code path, different transport.
+
+**Schema impact:** `SandboxState.containerAppUrl` → `sessionIdentifier`. Lazy upgrade: read tolerates legacy `containerAppUrl` field, write never emits it. No batch migration needed.
+
+**ACI status:** `_provision_aci_sandbox`, `_start_aci_provisioning`, `_finish_aci_provisioning` are now no-op shims preserving their call sites. `_teardown_aci_sandbox` redirects to `client.stop_session()`. Phase 4 deletes the shims and `aci_sandbox_service.py` entirely.
+
 ## Governance
 
 - All meaningful changes require team consensus

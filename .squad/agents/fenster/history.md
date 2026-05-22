@@ -48,3 +48,5 @@ Refactored ~25 httpx call sites in `dev_agent.py`, `routes/dev.py`, `routes/sand
 - Drop a shared `httpx.AsyncClient(...)` context manager when refactoring to a client method — the indentation collapse breaks the body indent by 4 spaces. Always re-check ruff/AST after such edits.
 - For admin endpoints with no dev-task identifier (e.g., `/health`, `/tasks` listing in `routes/sandbox.py`), use a synthetic `"admin"` identifier. In local-dev `LocalSandboxClient` ignores it; in session-pool mode it allocates a dedicated admin session.
 - `SandboxClient.stream_response` is an `@asynccontextmanager` yielding `httpx.Response` so consumers can call `aiter_lines()` — critical for SSE proxies and `_sandbox_exec` streaming.
+
+- **2026-05-22 (Scribe stamp):** Phase 3 refactor committed as `cfd9318`. Sandbox-dynamic-sessions status: Phases 1, 2, 3, 5 ✅ complete. Phases 4 (delete ACI), 6 (infra wiring), 7 (env/config docs), 8 (validation), 9 (archive) remain.
