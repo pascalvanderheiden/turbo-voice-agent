@@ -1,0 +1,196 @@
+"""SessionSandboxClient — httpx wrapper for Azure Container Apps dynamic session pools.
+
+Routes sandbox HTTP traffic through a session-pool management endpoint, authenticated
+with the backend's managed identity (``DefaultAzureCredential``). Caller paths are
+forwarded verbatim with ``?identifier={taskId}&api-version=2025-02-02-preview`` appended.
+
+This module is Phase 2 of the ``sandbox-dynamic-sessions`` OpenSpec change: it adds
+the new client without touching the existing ACI/shared-CA implementations. Wiring
+into ``sandbox_service.py`` and removal of the old code happen in later phases.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+from azure.core.credentials import AccessToken, TokenCredential
+from azure.identity import DefaultAzureCredential
+
+logger = logging.getLogger(__name__)
+
+SESSION_API_VERSION = "2025-02-02-preview"
+SESSION_SCOPE = "https://dynamicsessions.io/.default"
+TOKEN_REFRESH_BUFFER_SECONDS = 60
+
+
+class SessionSandboxClient:
+    """Async HTTP client for Container Apps dynamic-session pools.
+
+    Wraps :class:`httpx.AsyncClient`, prepends the pool management endpoint, injects
+    the Bearer token from ``DefaultAzureCredential``, and appends ``identifier`` +
+    ``api-version`` query params on every call. Callers pass logical paths (e.g.
+    ``/tasks``, ``/files/foo.txt``) unchanged — they are forwarded to the session
+    container's HTTP port by the pool.
+
+    Construct with explicit ``endpoint`` and ``credential`` for tests; production
+    code constructs with no args (reads ``SESSION_POOL_MANAGEMENT_ENDPOINT`` from
+    the environment and uses ``DefaultAzureCredential``).
+    """
+
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        credential: TokenCredential | None = None,
+    ) -> None:
+        resolved = (
+            endpoint if endpoint is not None else os.getenv("SESSION_POOL_MANAGEMENT_ENDPOINT", "")
+        )
+        if not resolved:
+            raise RuntimeError(
+                "SESSION_POOL_MANAGEMENT_ENDPOINT is not configured; "
+                "SessionSandboxClient cannot be initialised."
+            )
+        self._endpoint = resolved.rstrip("/")
+        self._credential: TokenCredential = credential or DefaultAzureCredential()
+        self._token: AccessToken | None = None
+
+    # ── token cache ────────────────────────────────────────────────────
+
+    def _token_is_fresh(self) -> bool:
+        return (
+            self._token is not None
+            and self._token.expires_on - TOKEN_REFRESH_BUFFER_SECONDS > time.time()
+        )
+
+    def _get_token(self, *, force_refresh: bool = False) -> str:
+        """Return a cached bearer token, refreshing if expired or forced."""
+        if force_refresh or not self._token_is_fresh():
+            self._token = self._credential.get_token(SESSION_SCOPE)
+        assert self._token is not None  # for type checkers
+        return self._token.token
+
+    # ── URL / param / header helpers ──────────────────────────────────
+
+    def _build_url(self, path: str) -> str:
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{self._endpoint}{path}"
+
+    @staticmethod
+    def _merge_params(identifier: str, extra: dict[str, Any] | None) -> dict[str, Any]:
+        params: dict[str, Any] = dict(extra or {})
+        # The session-pool routing params are non-negotiable — never let callers
+        # override them.
+        params["identifier"] = identifier
+        params["api-version"] = SESSION_API_VERSION
+        return params
+
+    @staticmethod
+    def _merge_headers(token: str, extra: dict[str, str] | None) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if extra:
+            for k, v in extra.items():
+                if k.lower() == "authorization":
+                    continue
+                headers[k] = v
+        headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    # ── public API ─────────────────────────────────────────────────────
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        identifier: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Send a single request, with auth + identifier query-param injection.
+
+        On a 401/403 response the cached token is force-refreshed and the request
+        is retried exactly once. A second auth failure is returned to the caller
+        unchanged (status_code 401/403 on the response).
+        """
+        url = self._build_url(path)
+        caller_params = kwargs.pop("params", None)
+        caller_headers = kwargs.pop("headers", None)
+        params = self._merge_params(identifier, caller_params)
+
+        async with httpx.AsyncClient() as client:
+            response: httpx.Response | None = None
+            for attempt in (0, 1):
+                token = self._get_token(force_refresh=attempt == 1)
+                headers = self._merge_headers(token, caller_headers)
+                response = await client.request(
+                    method, url, params=params, headers=headers, **kwargs
+                )
+                if response.status_code in (401, 403) and attempt == 0:
+                    logger.debug(
+                        "Session pool returned %s for %s %s — refreshing token and retrying",
+                        response.status_code,
+                        method,
+                        path,
+                    )
+                    continue
+                return response
+            # Loop exits only via return above; this is for type-checkers.
+            assert response is not None
+            return response
+
+    async def stream(
+        self,
+        path: str,
+        *,
+        identifier: str,
+        method: str = "GET",
+        **kwargs: Any,
+    ) -> AsyncIterator[bytes]:
+        """Stream a response (e.g. SSE) from the session pool.
+
+        Yields raw chunks as they arrive. Sets ``Accept: text/event-stream`` by
+        default; callers may override via ``headers=``. Auth retry semantics match
+        :meth:`request` (single retry on 401/403 with token refresh).
+        """
+        url = self._build_url(path)
+        caller_params = kwargs.pop("params", None)
+        caller_headers = kwargs.pop("headers", None)
+        params = self._merge_params(identifier, caller_params)
+
+        sse_defaults = {"Accept": "text/event-stream"}
+        merged_caller_headers = {**sse_defaults, **(caller_headers or {})}
+
+        async with httpx.AsyncClient() as client:
+            for attempt in (0, 1):
+                token = self._get_token(force_refresh=attempt == 1)
+                headers = self._merge_headers(token, merged_caller_headers)
+                async with client.stream(
+                    method, url, params=params, headers=headers, **kwargs
+                ) as response:
+                    if response.status_code in (401, 403) and attempt == 0:
+                        logger.debug(
+                            "Session pool stream returned %s — refreshing token and retrying",
+                            response.status_code,
+                        )
+                        continue
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+                    return
+
+    async def stop_session(self, identifier: str) -> None:
+        """Explicitly stop a session by identifier.
+
+        Tolerates a 404 (session already gone after cooldown or prior stop). Any
+        other non-success status is raised via ``raise_for_status()``.
+        """
+        response = await self.request("POST", "/.management/stopSession", identifier=identifier)
+        if response.status_code == 404:
+            logger.debug("stop_session: session %s already gone (404, tolerated)", identifier)
+            return
+        response.raise_for_status()

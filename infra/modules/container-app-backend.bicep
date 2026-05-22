@@ -44,26 +44,11 @@ param frontendUrl string = ''
 @description('Comma-separated allowed CORS origins')
 param allowedOrigins string = ''
 
-@description('Sandbox Container App FQDN')
-param sandboxFqdn string = ''
+@description('Session pool management endpoint (set as SESSION_POOL_MANAGEMENT_ENDPOINT)')
+param sessionPoolManagementEndpoint string = ''
 
-@description('Enable per-task ACI sandbox isolation')
-param enableAciSandbox bool = false
-
-@description('ACI sandbox resource group name')
-param aciResourceGroup string = ''
-
-@description('ACI sandbox subnet ID')
-param aciSubnetId string = ''
-
-@description('ACI user-assigned identity resource ID')
-param aciIdentityId string = ''
-
-@description('ACI user-assigned identity client ID')
-param aciIdentityClientId string = ''
-
-@description('ACR login server for ACI image pull')
-param aciAcrLoginServer string = ''
+@description('Session pool resource name (set as SESSION_POOL_NAME)')
+param sessionPoolName string = ''
 
 resource backend 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
@@ -133,18 +118,11 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TODO_OAUTH_REDIRECT_URI', value: todoOAuthRedirectUri }
             { name: 'FRONTEND_URL', value: frontendUrl }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
-            { name: 'SANDBOX_URL', value: sandboxFqdn != '' ? 'https://${sandboxFqdn}' : '' }
-            { name: 'USE_ACI_SANDBOX', value: enableAciSandbox ? 'true' : 'false' }
+            { name: 'SANDBOX_RUNTIME', value: 'session-pool' }
+            { name: 'SESSION_POOL_MANAGEMENT_ENDPOINT', value: sessionPoolManagementEndpoint }
+            { name: 'SESSION_POOL_NAME', value: sessionPoolName }
             { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'AZURE_LOCATION', value: location }
-            { name: 'ACI_RESOURCE_GROUP', value: aciResourceGroup }
-            { name: 'ACI_SUBNET_ID', value: '' } // Public IP — CAE managed VNet can't peer to ACI VNet
-            { name: 'ACI_IDENTITY_ID', value: aciIdentityId }
-            { name: 'ACI_IDENTITY_CLIENT_ID', value: aciIdentityClientId }
-            { name: 'ACI_ACR_LOGIN_SERVER', value: aciAcrLoginServer }
-            { name: 'ACI_SANDBOX_IMAGE', value: aciAcrLoginServer != '' ? '${aciAcrLoginServer}/turbo-voice-agent/sandbox:latest' : '' }
-            { name: 'ACI_SANDBOX_CPU', value: '2.0' }
-            { name: 'ACI_SANDBOX_MEMORY', value: '4' }
           ], !empty(entraClientSecret) ? [
             { name: 'ENTRA_CLIENT_SECRET', secretRef: 'entra-client-secret' }
           ] : [])

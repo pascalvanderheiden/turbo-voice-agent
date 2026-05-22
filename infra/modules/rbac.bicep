@@ -22,9 +22,6 @@ param aiWestUsName string
 @description('AI Foundry Central US account name')
 param aiCentralUsName string
 
-@description('Sandbox Container App managed identity principal ID')
-param sandboxPrincipalId string = ''
-
 @description('Principal ID of the deployer user for data access (optional)')
 param deployerPrincipalId string = ''
 
@@ -160,33 +157,6 @@ resource acrFrontendRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   properties: {
     principalId: frontendPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPull)
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// ──────────────────────────────────────────────
-// ACR Pull — Sandbox
-// ──────────────────────────────────────────────
-resource acrSandboxRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(sandboxPrincipalId)) {
-  name: guid(acr.id, sandboxPrincipalId, acrPull)
-  scope: acr
-  properties: {
-    principalId: sandboxPrincipalId
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPull)
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// ──────────────────────────────────────────────
-// Storage Blob Data Reader — Sandbox (for skill sync from Blob Storage)
-// ──────────────────────────────────────────────
-var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
-resource sandboxBlobReaderRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(sandboxPrincipalId)) {
-  name: guid(storageAccount.id, sandboxPrincipalId, storageBlobDataReader)
-  scope: storageAccount
-  properties: {
-    principalId: sandboxPrincipalId
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
     principalType: 'ServicePrincipal'
   }
 }

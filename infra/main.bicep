@@ -6,6 +6,9 @@ param location string = 'eastus2'
 @description('Resource group name')
 param resourceGroupName string = 'rg-turbo-voice-agent'
 
+@description('Azure Developer CLI environment name')
+param azdEnvironmentName string = ''
+
 @description('Unique suffix for globally unique resource names')
 param resourceToken string = uniqueString(subscription().id, resourceGroupName)
 
@@ -43,8 +46,26 @@ param deployerPrincipalId string = ''
 @description('Deploy RBAC role assignments (requires User Access Administrator or Owner role)')
 param deployRbac bool = true
 
-@description('Enable per-task ACI sandbox isolation (creates VNet, subnet, managed identity)')
-param enableAciSandbox bool = true
+// ──────────────────────────────────────────────
+// Session Pool parameters (custom-container dynamic sessions)
+// ──────────────────────────────────────────────
+@description('Maximum number of concurrent sessions the sandbox pool will allocate')
+param sessionPoolMaxConcurrent int = 30
+
+@description('Number of prewarmed/ready session instances kept in the pool at all times')
+param sessionPoolReadyInstances int = 1
+
+@description('Cooldown period in seconds before an idle session is destroyed')
+param sessionPoolCooldownSeconds int = 300
+
+@description('CPU cores per session container')
+param sessionPoolCpu string = '1.0'
+
+@description('Memory per session container (e.g. 2Gi, 4Gi)')
+param sessionPoolMemory string = '2Gi'
+
+@description('Sandbox image tag in ACR (defaults to :latest)')
+param sandboxImageTag string = 'latest'
 
 // ──────────────────────────────────────────────
 // Resource Group
@@ -52,6 +73,14 @@ param enableAciSandbox bool = true
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
   location: location
+  tags: union(
+    {
+      'azd-template': 'turbo-voice-agent'
+    },
+    azdEnvironmentName != '' ? {
+      'azd-env-name': azdEnvironmentName
+    } : {}
+  )
 }
 
 // ──────────────────────────────────────────────
@@ -185,57 +214,6 @@ module cae 'modules/container-apps-env.bicep' = {
 }
 
 // ──────────────────────────────────────────────
-// ACI Sandbox Identity (user-assigned, shared by all ACI instances)
-// ──────────────────────────────────────────────
-module aciIdentity 'modules/aci-identity.bicep' = if (enableAciSandbox) {
-  name: 'aci-identity'
-  scope: rg
-  params: {
-    name: 'id-aci-sandbox-${resourceToken}'
-    location: location
-    acrId: acr.outputs.id
-    storageAccountId: storage.outputs.id
-  }
-}
-
-// ──────────────────────────────────────────────
-// ACI Sandbox Network (standalone VNet, separate from CAE)
-// ──────────────────────────────────────────────
-module aciNetwork 'modules/aci-network.bicep' = if (enableAciSandbox) {
-  name: 'aci-network'
-  scope: rg
-  params: {
-    name: 'vnet-aci-sandbox-${resourceToken}'
-    location: location
-  }
-}
-
-// ──────────────────────────────────────────────
-// VNet Peering — CAE ↔ ACI Sandbox (bidirectional)
-// ──────────────────────────────────────────────
-module peerCaeToAci 'modules/vnet-peering.bicep' = if (enableAciSandbox) {
-  name: 'peer-cae-to-aci'
-  scope: rg
-  params: {
-    localVnetName: 'vnet-cae-${resourceToken}'
-    remoteVnetId: enableAciSandbox ? aciNetwork.outputs.vnetId : ''
-    peeringName: 'peer-cae-to-aci'
-  }
-  dependsOn: [vnetCae, aciNetwork]
-}
-
-module peerAciToCae 'modules/vnet-peering.bicep' = if (enableAciSandbox) {
-  name: 'peer-aci-to-cae'
-  scope: rg
-  params: {
-    localVnetName: 'vnet-aci-sandbox-${resourceToken}'
-    remoteVnetId: vnetCae.outputs.vnetId
-    peeringName: 'peer-aci-to-cae'
-  }
-  dependsOn: [vnetCae, aciNetwork]
-}
-
-// ──────────────────────────────────────────────
 // Container App — Backend
 // ──────────────────────────────────────────────
 module backend 'modules/container-app-backend.bicep' = {
@@ -257,40 +235,49 @@ module backend 'modules/container-app-backend.bicep' = {
     todoOAuthRedirectUri: customDomainName != '' ? 'https://${customDomainName}/api/auth/callback/microsoft-todo' : 'https://ca-backend-${resourceToken}.${cae.outputs.defaultDomain}/api/auth/callback/microsoft-todo'
     frontendUrl: customDomainName != '' ? 'https://${customDomainName}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
     allowedOrigins: customDomainName != '' ? 'https://${customDomainName},https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}' : 'https://ca-frontend-${resourceToken}.${cae.outputs.defaultDomain}'
-    sandboxFqdn: 'ca-sandbox-${resourceToken}.internal.${cae.outputs.defaultDomain}'
-    enableAciSandbox: enableAciSandbox
-    aciResourceGroup: rg.name
-    aciSubnetId: enableAciSandbox ? aciNetwork.outputs.subnetId : ''
-    aciIdentityId: enableAciSandbox ? aciIdentity.outputs.id : ''
-    aciIdentityClientId: enableAciSandbox ? aciIdentity.outputs.clientId : ''
-    aciAcrLoginServer: acr.outputs.loginServer
+    sessionPoolManagementEndpoint: sessionPool.outputs.sessionPoolManagementEndpoint
+    sessionPoolName: sessionPool.outputs.sessionPoolName
   }
 }
 
 // ──────────────────────────────────────────────
-// RBAC — Backend identity needs ACI write access to create/delete sandbox containers
+// Sandbox — Container Apps Dynamic Session Pool
+// Replaces the deleted ACI per-task containers and shared `ca-sandbox-*`
+// Container App. The pool pulls the existing sandbox image from ACR using
+// its own system-assigned managed identity (AcrPull role assignment is
+// created inside session-pool.bicep with a deterministic guid() name).
 // ──────────────────────────────────────────────
-module backendAciRole 'modules/aci-backend-role.bicep' = if (enableAciSandbox) {
-  name: 'backend-aci-role'
+module sessionPool 'modules/session-pool.bicep' = {
+  name: 'deploy-session-pool'
   scope: rg
   params: {
-    principalId: backend.outputs.principalId
-  }
-}
-
-// ──────────────────────────────────────────────
-// Container App — Sandbox (GitHub Copilot CLI)
-// ──────────────────────────────────────────────
-module sandbox 'modules/container-app-sandbox.bicep' = {
-  name: 'deploy-ca-sandbox'
-  scope: rg
-  params: {
-    name: 'ca-sandbox-${resourceToken}'
+    name: 'sp-sandbox-${resourceToken}'
     location: location
     containerAppsEnvId: cae.outputs.id
+    image: '${acr.outputs.loginServer}/turbo-voice-agent/sandbox:${sandboxImageTag}'
+    acrLoginServer: acr.outputs.loginServer
+    acrId: acr.outputs.id
     backendFqdn: backend.outputs.fqdn
     storageAccountName: storage.outputs.name
-    acrLoginServer: acr.outputs.loginServer
+    maxConcurrentSessions: sessionPoolMaxConcurrent
+    readySessionInstances: sessionPoolReadyInstances
+    cooldownPeriodInSeconds: sessionPoolCooldownSeconds
+    cpu: sessionPoolCpu
+    memory: sessionPoolMemory
+  }
+}
+
+// ──────────────────────────────────────────────
+// RBAC — Backend identity → Session Pool (Azure ContainerApps Session Executor)
+// Deterministic guid() name — never use random GUIDs here (see
+// .squad/skills/aca-provision-recovery/SKILL.md collision pattern).
+// ──────────────────────────────────────────────
+module sessionPoolRole 'modules/session-pool-role.bicep' = if (deployRbac) {
+  name: 'session-pool-role'
+  scope: rg
+  params: {
+    sessionPoolName: sessionPool.outputs.name
+    principalId: backend.outputs.principalId
   }
 }
 
@@ -328,7 +315,6 @@ module rbac 'modules/rbac.bicep' = if (deployRbac) {
     aiEastUs2Name: aiEastUs2.outputs.name
     aiWestUsName: aiWestUs.outputs.name
     aiCentralUsName: aiCentralUs.outputs.name
-    sandboxPrincipalId: sandbox.outputs.principalId
     deployerPrincipalId: deployerPrincipalId
   }
 }
@@ -345,4 +331,5 @@ output COSMOS_ENDPOINT string = cosmos.outputs.endpoint
 output AI_EASTUS2_ENDPOINT string = aiEastUs2.outputs.endpoint
 output AI_WESTUS_ENDPOINT string = aiWestUs.outputs.endpoint
 output AI_CENTRALUS_ENDPOINT string = aiCentralUs.outputs.endpoint
-output SANDBOX_URL string = 'https://${sandbox.outputs.fqdn}'
+output SESSION_POOL_MANAGEMENT_ENDPOINT string = sessionPool.outputs.sessionPoolManagementEndpoint
+output SESSION_POOL_NAME string = sessionPool.outputs.sessionPoolName

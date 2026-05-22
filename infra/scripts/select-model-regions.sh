@@ -160,6 +160,98 @@ except Exception:
 }
 
 # ──────────────────────────────────────────────────────────────────
+# Helper: check if the selected resource group already has this model
+# deployed in the region with sufficient capacity. Existing deployments
+# consume quota, so free-quota checks alone falsely reject reruns.
+# ──────────────────────────────────────────────────────────────────
+has_existing_deployment_for_model() {
+    local region=$1
+    local model_name=$2
+    local required_capacity=$3
+    local resource_group
+    resource_group=$(get_azd_env AZURE_RESOURCE_GROUP)
+    resource_group=${resource_group:-rg-turbo-voice-agent}
+
+    local accounts
+    accounts=$(az cognitiveservices account list \
+        -g "$resource_group" \
+        --query "[?location=='$region'].name" \
+        -o tsv 2>/dev/null || true)
+
+    if [ -z "$accounts" ]; then
+        return 1
+    fi
+
+    while IFS= read -r account; do
+        [ -z "$account" ] && continue
+
+        local deployments
+        deployments=$(az cognitiveservices account deployment list \
+            -g "$resource_group" \
+            -n "$account" \
+            -o json 2>/dev/null || echo "[]")
+
+        if echo "$deployments" | python3 -c "
+import json
+import sys
+
+model_name = '$model_name'
+required_capacity = int('$required_capacity')
+
+try:
+    deployments = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+for deployment in deployments:
+    properties = deployment.get('properties') or {}
+    model = properties.get('model') or {}
+    sku = deployment.get('sku') or {}
+    if (
+        model.get('name') == model_name
+        and properties.get('provisioningState') == 'Succeeded'
+        and int(sku.get('capacity') or 0) >= required_capacity
+    ):
+        sys.exit(0)
+
+sys.exit(1)
+"; then
+            return 0
+        fi
+    done <<< "$accounts"
+
+    return 1
+}
+
+# ──────────────────────────────────────────────────────────────────
+# Helper: validate a region for one model. A region is valid when either:
+# - the model is already deployed there in this azd resource group, or
+# - the model is available and enough free quota exists for a new deployment.
+# ──────────────────────────────────────────────────────────────────
+region_satisfies_model_requirement() {
+    local region=$1
+    local model_name=$2
+    local required_capacity=$3
+
+    if has_existing_deployment_for_model "$region" "$model_name" "$required_capacity"; then
+        return 0
+    fi
+
+    if ! is_model_available "$region" "$model_name"; then
+        return 1
+    fi
+
+    local quota_info
+    quota_info=$(get_quota_info "$region" "$model_name")
+    if [ -n "$quota_info" ]; then
+        has_quota_for_model "$region" "$model_name" "$required_capacity"
+        return
+    fi
+
+    return 0
+}
+
+# ──────────────────────────────────────────────────────────────────
 # Helper: get quota info for a model in a region (for verbose output)
 # Returns JSON with {available, limit, current} or empty if quota dimension not found
 # ──────────────────────────────────────────────────────────────────
@@ -220,20 +312,9 @@ find_available_regions() {
             local model="${models[$i]}"
             local required="${capacities[$i]}"
             
-            # Check model availability (model list + quota dimension exists)
-            if ! is_model_available "$region" "$model"; then
+            if ! region_satisfies_model_requirement "$region" "$model" "$required"; then
                 all_ok=false
                 continue
-            fi
-            
-            # If Azure exposes a quota dimension for this model, enforce it.
-            # If not, rely on model-list availability; azd preflight also omits warnings for those models.
-            local quota_info
-            quota_info=$(get_quota_info "$region" "$model")
-            if [ -n "$quota_info" ]; then
-                if ! has_quota_for_model "$region" "$model" "$required"; then
-                    all_ok=false
-                fi
             fi
         done
         
@@ -355,7 +436,7 @@ main() {
     if [ -n "$PRIMARY_LOC" ]; then
         local primary_valid=true
         for i in "${!PRIMARY_MODELS[@]}"; do
-            if ! has_quota_for_model "$PRIMARY_LOC" "${PRIMARY_MODELS[$i]}" "${PRIMARY_CAPACITY[$i]}"; then
+            if ! region_satisfies_model_requirement "$PRIMARY_LOC" "${PRIMARY_MODELS[$i]}" "${PRIMARY_CAPACITY[$i]}"; then
                 echo "⚠️  Warning: Previously selected PRIMARY region ($PRIMARY_LOC) no longer has quota for ${PRIMARY_MODELS[$i]}" >&2
                 echo "   Clearing AZURE_OPENAI_LOCATION_PRIMARY — you will be re-prompted" >&2
                 echo "" >&2
@@ -369,7 +450,7 @@ main() {
     if [ -n "$VOICE_LOC" ]; then
         local voice_valid=true
         for i in "${!VOICE_MODELS[@]}"; do
-            if ! has_quota_for_model "$VOICE_LOC" "${VOICE_MODELS[$i]}" "${VOICE_CAPACITY[$i]}"; then
+            if ! region_satisfies_model_requirement "$VOICE_LOC" "${VOICE_MODELS[$i]}" "${VOICE_CAPACITY[$i]}"; then
                 echo "⚠️  Warning: Previously selected VOICE region ($VOICE_LOC) no longer has quota for ${VOICE_MODELS[$i]}" >&2
                 echo "   Clearing AZURE_OPENAI_LOCATION_VOICE — you will be re-prompted" >&2
                 echo "" >&2
@@ -383,7 +464,7 @@ main() {
     if [ -n "$RESEARCH_LOC" ]; then
         local research_valid=true
         for i in "${!RESEARCH_MODELS[@]}"; do
-            if ! has_quota_for_model "$RESEARCH_LOC" "${RESEARCH_MODELS[$i]}" "${RESEARCH_CAPACITY[$i]}"; then
+            if ! region_satisfies_model_requirement "$RESEARCH_LOC" "${RESEARCH_MODELS[$i]}" "${RESEARCH_CAPACITY[$i]}"; then
                 echo "⚠️  Warning: Previously selected RESEARCH region ($RESEARCH_LOC) no longer has quota for ${RESEARCH_MODELS[$i]}" >&2
                 echo "   Clearing AZURE_OPENAI_LOCATION_RESEARCH — you will be re-prompted" >&2
                 echo "" >&2

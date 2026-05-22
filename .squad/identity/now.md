@@ -1,9 +1,12 @@
----
-updated_at: 2026-03-25T16:58:52Z
-focus_area: ACI sandbox stabilization & skills management
-active_issues: []
----
+# Current Focus
 
-# What We're Focused On
+**Change in progress:** `sandbox-dynamic-sessions` (openspec)
 
-Stabilizing the ACI sandbox pipeline for slides generation and fixing marketplace skills management. Recent work: SINGLE_TASK_MODE shutdown fix, sandbox image tagging, deck name sanitization, marketplace skill download paths, clean skills stage output.
+Replacing the dual ACI + shared Container App sandbox runtime with **Azure Container Apps dynamic session pools** (custom-container type). This also kills the broken `ca-sandbox-*` Container App that caused the recurring `Operation expired` provisioning failures.
+
+**Phase status (48 tasks):**
+- Phase 1 (Bicep infra, 1.1–1.8) — IN PROGRESS (Verbal)
+- Phase 2 (SessionSandboxClient, 2.1–2.6) — IN PROGRESS (Fenster)
+- Phases 3–9 — queued
+
+**Anti-goal:** Do NOT re-introduce the manual AcrPull/RBAC fixes. New `session-pool-role.bicep` owns RBAC for the pool deterministically.
