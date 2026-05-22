@@ -352,3 +352,15 @@ Cross-references: `.squad/skills/aca-provision-recovery/SKILL.md`, decisions.md 
 - `node --check server.js` catches syntax errors fast.
 - Run `PORT=3099 node server.js` directly with deps installed — exercises express routes and middleware without container. Validated all four scenarios (health/ready-before/ready-after/header-fires).
 - `docker info` returning non-zero is the signal that Docker daemon is down even if `docker` binary exists (e.g., on macOS without Docker Desktop running).
+
+## 2026-05-22 — Phase 7 prep (sandbox-dynamic-sessions)
+
+**Done:**
+- Removed `sandbox` service from `azure.yaml` (no Container App exists post-Phase-1; `host: containerapp` was causing 20-min hangs).
+- Created `infra/scripts/build-sandbox-image.sh` — `az acr build` directly to `turbo-voice-agent/sandbox:latest`, called from `postprovision` + `postdeploy` hooks. Replaces `tag-sandbox-latest.sh` (deleted).
+- Created `scripts/cleanup-aci-orphans.sh` — idempotent safety net for users upgrading from ACI-era deployments. Reads RG from `azd env get-values`, supports `--yes` for CI.
+- Created `infra/README.md` with upgrade notes pointing at the cleanup script.
+- `az bicep build` clean.
+- Checked off 7.1 + 7.2 in tasks.md; flagged 7.3 + 7.4 as awaiting Phase 4 + 6 (validation wave).
+
+**Pattern reinforced:** sandbox image tag must stay synced between Bicep (`main.bicep:263`) and the build script. Both now reference `turbo-voice-agent/sandbox:latest`. If the Bicep param `sandboxImageTag` changes from `latest`, `build-sandbox-image.sh` must follow.

@@ -49,20 +49,15 @@ services:
       context: .
       remoteBuild: true
 
-  sandbox:
-    # Builds & pushes the sandbox image to ACR. The image is pulled by the
-    # Azure Container Apps dynamic session pool (sp-sandbox-*) — see
-    # infra/modules/session-pool.bicep. NOTE: azd's `containerapp` host still
-    # expects a Container App target; the image push to ACR is what we depend
-    # on. tag-sandbox-latest.sh promotes the pushed image to `:latest` so the
-    # pool's `${ACR}/turbo-voice-agent/sandbox:latest` reference resolves.
-    host: containerapp
-    project: ./sandbox
-    language: js
-    docker:
-      path: ./Dockerfile
-      context: .
-      remoteBuild: true
+# NOTE: The sandbox image is NOT an azd service.
+# - There is no Container App for the sandbox; the Azure Container Apps dynamic
+#   session pool (sp-sandbox-*, see infra/modules/session-pool.bicep) pulls the
+#   image directly from ACR at session-allocate time.
+# - The image is built and pushed to ACR by `infra/scripts/build-sandbox-image.sh`
+#   via the `postprovision` hook below, producing the tag
+#   `${ACR}/turbo-voice-agent/sandbox:latest` that the pool references.
+# - Declaring `host: containerapp` here previously caused 20-minute "Operation
+#   expired" failures because azd looked for a non-existent ca-sandbox-* revision.
 
 hooks:
   preprovision:
@@ -89,6 +84,7 @@ hooks:
         echo "Backend URL: ${BACKEND_URL}"
         echo "Frontend URL: ${FRONTEND_URL}"
         FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh
+        bash infra/scripts/build-sandbox-image.sh
     windows:
       shell: pwsh
       run: |
@@ -96,7 +92,8 @@ hooks:
         Write-Host "Backend URL: $env:BACKEND_URL"
         Write-Host "Frontend URL: $env:FRONTEND_URL"
         bash infra/scripts/setup-entra-app.sh
+        bash infra/scripts/build-sandbox-image.sh
 
   postdeploy:
     shell: sh
-    run: bash infra/scripts/tag-sandbox-latest.sh
+    run: bash infra/scripts/build-sandbox-image.sh

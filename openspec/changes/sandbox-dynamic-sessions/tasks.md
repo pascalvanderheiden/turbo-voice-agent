@@ -51,10 +51,14 @@
 
 ## 7. Deployment & migration
 
-- [ ] 7.1 Add `scripts/cleanup-aci-orphans.sh` (one-shot, idempotent) that deletes leftover `sandbox-*` ACI container groups in the resource group
-- [ ] 7.2 Document a single `azd up` cycle in `README.md` / `docs/` covering: pool provisioning, role assignment, ACI/Container App cleanup
-- [ ] 7.3 Run `azd up` in a dev subscription; verify pool exists, backend env has `SESSION_POOL_MANAGEMENT_ENDPOINT`, role assignment present
-- [ ] 7.4 Run end-to-end smoke test: trigger a dev-task → confirm session allocation (<2s), `/tasks` accepted, SSE streamed, task completes, session destroyed after cooldown
+- [x] 7.1 Add `scripts/cleanup-aci-orphans.sh` (one-shot, idempotent) that deletes leftover `sandbox-*` ACI container groups in the resource group
+- [x] 7.2 Document a single `azd up` cycle in `README.md` / `docs/` covering: pool provisioning, role assignment, ACI/Container App cleanup
+- [ ] 7.3 Run `azd up` in a dev subscription; verify pool exists, backend env has `SESSION_POOL_MANAGEMENT_ENDPOINT`, role assignment present _(awaits Phase 4 + 6 — validation wave)_
+- [ ] 7.4 Run end-to-end smoke test: trigger a dev-task → confirm session allocation (<2s), `/tasks` accepted, SSE streamed, task completes, session destroyed after cooldown _(awaits Phase 4 + 6 — validation wave)_
+
+**Phase 7 prep also done (out-of-band, not in original task list):**
+- [x] Fix `azure.yaml` sandbox service: removed broken `host: containerapp` entry (no Container App exists). Sandbox image now built directly to ACR as `turbo-voice-agent/sandbox:latest` via `infra/scripts/build-sandbox-image.sh` (azd `postprovision` + `postdeploy` hook). Replaces the older `tag-sandbox-latest.sh` push-then-retag dance. Image tag matches `infra/main.bicep:263`.
+- [x] `az bicep build --file infra/main.bicep` clean after changes.
 
 ## 8. Observability & docs
 
