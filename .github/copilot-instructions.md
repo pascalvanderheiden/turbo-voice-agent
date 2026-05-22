@@ -18,7 +18,8 @@ Client (Web/iOS) → WebSocket → FastAPI → Voice Live API (speech-to-speech)
 - **Web frontend**: Next.js 15 (App Router), React 19, Tailwind CSS v4, shadcn/ui (new-york style), Tabler Icons
 - **Mobile**: React Native 0.82+ / Expo SDK 52+ (New Architecture mandatory, iOS only)
 - **Auth**: Azure Entra ID (JWT validation on backend, MSAL on frontend). `AUTH_DISABLED=true` for local dev
-- **Infrastructure**: Bicep IaC, Azure Container Apps, deployed via `azd up`
+- **Sandbox**: Azure Container Apps **dynamic session pool** (Hyper-V isolated, prewarmed) — per-task ephemeral code execution for the Copilot CLI dev-task pipeline
+- **Infrastructure**: Bicep IaC, Azure Container Apps, deployed via `azd up`. Anyone with an Azure subscription can deploy a full instance to their own tenant.
 
 ## Build, Test, and Lint
 
@@ -34,6 +35,9 @@ pytest
 
 # Run a single test
 pytest tests/test_notes_service.py::test_create_note -v
+
+# Sandbox client tests (respx-mocked HTTP against the session pool)
+pytest tests/test_session_sandbox_client.py -v
 
 # Lint
 ruff check .
@@ -82,6 +86,7 @@ azd auth login && azd up                # Deploy to Azure
 - **Module-level DI**: Services initialized in `main.py` lifespan, stored as module globals, accessed via `_get_service()` helpers in route modules. Not a DI container.
 - **Agent architecture**: 9 specialist agents + 1 SupervisorAgent. Each agent exposes `tool_definitions` (list of function schemas). Supervisor routes function calls by matching function name to agent's `handle_function_call()`.
 - **Cosmos DB dual auth**: `DefaultAzureCredential` in production (managed identity, no API keys). Emulator detected by `localhost`/`127.0.0.1` in endpoint → uses pre-shared key.
+- **Sandbox execution**: Per-task isolation via `SessionSandboxClient` (`backend/app/services/session_sandbox_client.py`) against an Azure Container Apps dynamic session pool, keyed by `taskId` as the session identifier. Local dev falls back to the docker-compose `sandbox` service (`http://sandbox:3000`) when `SESSION_POOL_MANAGEMENT_ENDPOINT` is unset.
 - **Ruff config**: line-length=100, rules E/F/I/UP, target py312. Type hints on all public functions.
 
 ### Frontend patterns
@@ -95,7 +100,7 @@ azd auth login && azd up                # Deploy to Azure
 
 - WebSocket endpoint `/ws/voice` proxies audio between client and Azure Voice Live API.
 - Token passed as query param for WebSocket auth.
-- Function calling during voice sessions: Voice Live triggers tool calls → `function_handler.py` executes → result injected into voice stream.
+- Function calling during voice sessions: Voice Live triggers tool calls → `backend/app/voice/function_handler.py` executes → result injected into voice stream.
 - Long-running tools (research, spec generation, video) run as background tasks via `background_tasks.py`.
 - Supports EN and NL language configs via `get_voice_config(lang=)`.
 
@@ -103,7 +108,8 @@ azd auth login && azd up                # Deploy to Azure
 
 - Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`
 - Always include `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` on AI-assisted commits
-- Use OpenSpec workflow (in `openspec/`) for new features — propose → explore → implement → archive
+- OpenSpec proposals (in `openspec/changes/`) are the source of truth for non-trivial changes — propose → explore → implement → archive
+- AI-assisted development uses Squad (`.squad/`) for multi-agent orchestration with persistent per-agent histories. Optional — vanilla Copilot works fine without it.
 
 ### Branding
 
@@ -119,7 +125,9 @@ GitHub Actions workflow (`.github/workflows/deploy.yml`) triggers on push to `ma
 - **`infra/` or `azure.yaml` changed** → `azd provision` + `azd deploy` (full infrastructure update)
 - **Manual trigger (`workflow_dispatch`)** → full provision + deploy
 
-Uses OIDC federated credentials (no stored secrets). Requires GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ENV_NAME`, `AZURE_LOCATION`, plus Bicep parameters (`ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `CUSTOM_DOMAIN_NAME`, `EXISTING_CERT_NAME`, `DEPLOYER_PRINCIPAL_ID`).
+Uses OIDC federated credentials (no stored secrets). Required GitHub repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ENV_NAME`, `AZURE_LOCATION`, plus Bicep parameters `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `DEPLOYER_PRINCIPAL_ID`.
+
+`CUSTOM_DOMAIN_NAME` and `EXISTING_CERT_NAME` are **optional** — leave them empty and the deployment uses the Container Apps default FQDN. Auth still works: the Entra redirect URI is computed dynamically from the frontend's resolved hostname (see `infra/modules/container-app-frontend.bicep`), so no custom domain is required to deploy your own instance.
 
 ## Environment Setup
 
@@ -128,3 +136,5 @@ Backend needs `backend/.env` (copy from `.env.example`). Key vars: `COSMOS_ENDPO
 Frontend needs `frontend/.env.local` with `NEXT_PUBLIC_API_URL=http://localhost:8000`.
 
 Cosmos DB emulator runs via `docker compose up -d` on port 8081. Production uses managed identity — all `*_API_KEY` vars are omitted.
+
+For sandbox dev-tasks: `docker compose up -d` also starts a local `sandbox` container (port 3000 inside the compose network, 4000 on host) that the backend reaches at `http://sandbox:3000` when `SESSION_POOL_MANAGEMENT_ENDPOINT` is unset. In Azure, the backend talks to the dynamic session pool via `SESSION_POOL_MANAGEMENT_ENDPOINT` + `SESSION_POOL_NAME`.
