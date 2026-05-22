@@ -50,3 +50,34 @@ Refactored ~25 httpx call sites in `dev_agent.py`, `routes/dev.py`, `routes/sand
 - `SandboxClient.stream_response` is an `@asynccontextmanager` yielding `httpx.Response` so consumers can call `aiter_lines()` — critical for SSE proxies and `_sandbox_exec` streaming.
 
 - **2026-05-22 (Scribe stamp):** Phase 3 refactor committed as `cfd9318`. Sandbox-dynamic-sessions status: Phases 1, 2, 3, 5 ✅ complete. Phases 4 (delete ACI), 6 (infra wiring), 7 (env/config docs), 8 (validation), 9 (archive) remain.
+
+## 2026-05-22 — sandbox-dynamic-sessions Phase 4 + Phase 6
+
+**Phase 4 — ACI removal (commit 88558ab):**
+- Deleted `backend/app/services/aci_sandbox_service.py` (353 lines) and `backend/tests/test_aci_sandbox_service.py`.
+- Removed ACI orphan-cleanup background task and `USE_ACI_SANDBOX` branches from `main.py` lifespan; the dynamic-session pool needs no orphan cleanup (pool cooldown handles it).
+- Stripped `_provision_aci_sandbox` / `_start_aci_provisioning` / `_finish_aci_provisioning` shims and all their call sites from `dev_agent.py`. Renamed `_teardown_aci_sandbox` → `_teardown_sandbox_session` since it now exclusively calls `client.stop_session`.
+- Dropped `ACI_IDENTITY_CLIENT_ID` branch from `sandbox/sync-skills.sh` — the session pool uses system-assigned managed identity exclusively.
+- No env vars to remove from `.env.example` (none of `USE_ACI_SANDBOX`, `ACI_*` were ever documented there).
+
+**Phase 6 — X-GH-Token + disconnect (commit fbaa199):**
+- Replaced the body-based `payload["ghToken"]` injection in `_sandbox_exec` with header-based `X-GH-Token` on the FIRST sandbox request per dev-task. Track via module-level `_gh_token_sent: set[str]`; cleared by `cancel_sandbox_task_for` and `_teardown_sandbox_session`.
+- Extended `DELETE /api/me/connections/github-sandbox`: enumerate the user's dev-tasks in `{running, provisioning, pending}` and call `client.stop_session(task_id)` for each before clearing the PAT. Response now includes `stoppedSessions` count.
+- Exposed `dev_service` on `app.state` so the disconnect route can iterate the user's tasks.
+
+**Test posture:** All 43 sandbox-related tests pass (8 new in Phase 6). The pre-existing 18 Entra auth failures are untouched and unrelated.
+
+**Surprises / decisions:**
+- The sandbox container still accepts `ghToken` in the POST `/tasks` body (Phase 5 leaves that path for backwards compat), but I removed the body injection from the backend per the spec — header is the sole bootstrap path now.
+- `_sandbox_exec` is the natural choke point for first-call header injection because the cleanup stage in every pipeline (`_run_mockup_pipeline`, `_run_sequential_pipeline`, `_run_slides_pipeline`) is the first sandbox HTTP call for the dev-task. No other entry point precedes it.
+- Used in-memory `_gh_token_sent` set (not a Cosmos field) per the spec's allowance — sessions are ephemeral, the middleware is idempotent, and process restarts trigger an acceptable re-bootstrap.
+
+**Files touched:**
+- backend/app/agents/dev_agent.py — header injection, tracker, renamed teardown helper
+- backend/app/main.py — drop ACI lifespan block, expose dev_service
+- backend/app/routes/user.py — disconnect_sandbox stops active sessions
+- backend/app/services/session_sandbox_client.py — docstring updated for X-GH-Token contract
+- backend/tests/test_dev_agent_gh_token.py — NEW (5 tests)
+- backend/tests/test_sandbox_disconnect.py — NEW (3 tests)
+- sandbox/sync-skills.sh — drop ACI_IDENTITY_CLIENT_ID
+- openspec/changes/sandbox-dynamic-sessions/tasks.md — 4.1-4.5, 6.1-6.3 checked

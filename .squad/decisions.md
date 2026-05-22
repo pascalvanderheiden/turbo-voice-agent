@@ -636,6 +636,47 @@ Selected at runtime by `get_sandbox_client()` singleton, which checks `SESSION_P
 
 **ACI status:** `_provision_aci_sandbox`, `_start_aci_provisioning`, `_finish_aci_provisioning` are now no-op shims preserving their call sites. `_teardown_aci_sandbox` redirects to `client.stop_session()`. Phase 4 deletes the shims and `aci_sandbox_service.py` entirely.
 
+### 2026-05-22: ACI sandbox path fully deleted (Phase 4)
+**By:** Fenster
+**What:** `backend/app/services/aci_sandbox_service.py`, the matching test module, the `USE_ACI_SANDBOX` env branch in `main.py` lifespan, the ACI orphan-cleanup background task, all `_provision_aci_sandbox` / `_start_aci_provisioning` / `_finish_aci_provisioning` shims and call sites in `dev_agent.py`, and the `ACI_IDENTITY_CLIENT_ID` branch in `sandbox/sync-skills.sh` are gone. The teardown helper that releases a per-task session is now named `_teardown_sandbox_session` to reflect its session-pool semantics.
+**Why:** Phase 4 of OpenSpec change `sandbox-dynamic-sessions`. With the dynamic session pool in production (Phase 1+) and all callers on `SandboxClient` (Phase 3), the ACI code path was dead weight.
+**Commit:** `88558ab`.
+
+### 2026-05-22: Sandbox X-GH-Token is header-only on first call per dev-task (Phase 6)
+**By:** Fenster
+**What:** The sandbox dev pipeline no longer injects `ghToken` in the POST `/tasks` body. Instead, the backend attaches `X-GH-Token: <user_pat>` as an HTTP header on the FIRST `_sandbox_exec` call per dev-task (always the cleanup stage), and the sandbox container's Phase-5 middleware bootstraps `gh auth login --with-token` once. Tracked in memory via `_gh_token_sent: set[str]`; cleared by `cancel_sandbox_task_for` and `_teardown_sandbox_session`.
+**Why:** Phase 6 of OpenSpec change `sandbox-dynamic-sessions`. The body-based path leaked the PAT on every request; the header-on-first-call pattern matches the session-lifetime semantics of the Container Apps dynamic session pool.
+**Commit:** `fbaa199`.
+
+### 2026-05-22: GitHub disconnect releases per-task sandbox sessions (Phase 6)
+**By:** Fenster
+**What:** `DELETE /api/me/connections/github-sandbox` now enumerates the calling user's dev-tasks in `{running, provisioning, pending}` and calls `SandboxClient.stop_session(task_id)` on each before clearing the stored PAT. Response body now includes `stoppedSessions` count. `app.state.dev_service` was added so the route handler can resolve the user's tasks without going through `dev_agent`.
+**Why:** Phase 6 of OpenSpec change `sandbox-dynamic-sessions`. When a user disconnects GitHub, their in-flight sandbox seats must be released eagerly so the next run re-bootstraps gh-auth with the new (or absent) PAT.
+**Commit:** `fbaa199`.
+
+### 2026-05-22: Sandbox readiness marker file pattern (Phase 5)
+**By:** Verbal
+**What:** The sandbox container signals "skills synced" to the Container Apps session pool's Startup probe via a marker file at `/tmp/sandbox-state/skills-synced`. `entrypoint.sh` writes it after `sync-skills.sh` returns (regardless of success). `GET /ready` returns 200 iff the marker exists, else 503.
+**Why:** Pool Startup probe polls `/ready` (5s × 30 attempts = 150s max). Marker file is the cleanest way to decouple the bash sync script from the Node server's readiness state without IPC. Writing the marker unconditionally even on blob-storage failure is intentional — spec requires `/ready` to succeed so the pool doesn't stall; users can retry via `POST /skills/sync`.
+
+### 2026-05-22: X-GH-Token middleware contract (Phase 5)
+**By:** Verbal
+**What:** `server.js` adds an Express middleware that reads `X-GH-Token` from every request. First valid header value triggers `gh auth login --with-token` via stdin; in-process flag `ghAuthenticated` prevents repeat attempts on success. Header is stripped from `req.headers` after read. Token is never logged.
+**Why:** Backend (Phase 6) injects the user's GitHub PAT as a per-session header instead of an ACI env var. The middleware must (1) auth idempotently, (2) handle concurrent first-requests (Promise guard), (3) never leak the token. On failure we log stderr (token-free) and allow the request to proceed — many sandbox endpoints don't need gh.
+
+### 2026-05-22T14:00Z: azure.yaml sandbox host fix — hook-based ACR build (Phase 7 prep)
+**By:** Pascal (via Verbal)
+**What:** Removed the `sandbox` service from `azure.yaml` entirely. The image is now built directly into ACR by `infra/scripts/build-sandbox-image.sh` (azd `postprovision` + `postdeploy` hook) using `az acr build`, producing `${ACR}/turbo-voice-agent/sandbox:latest` — the exact tag the dynamic session pool references (`infra/main.bicep:263`).
+
+**Options considered:**
+- (a) `host: containerregistry` — azd does not document this as a stable host; risk of breakage.
+- (b) **Chosen** — drop service entry, build via hook. Eliminates the misleading `host: containerapp` (the `ca-sandbox-*` Container App was deleted in Phase 1 and was the historical cause of 20-min "Operation expired" failures). Also replaces the older `tag-sandbox-latest.sh` push-then-retag dance with a single direct build.
+
+**Why:** Phase 1 deleted the sandbox Container App. With no target, azd's `containerapp` host had nothing to update and re-introduced the deployment hang we were trying to escape. The session pool consumes the image directly from ACR; we only need a build/push, not a CA revision.
+
+**Validation:** `az bicep build --file infra/main.bicep` clean. `bash -n` on both new scripts passes. Tag matches Bicep reference. Full `azd up` validation deferred to Pascal (Phase 9 wave).
+**Commit:** `7861afd`.
+
 ## Governance
 
 - All meaningful changes require team consensus
