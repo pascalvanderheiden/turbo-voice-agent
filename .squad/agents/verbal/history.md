@@ -275,3 +275,47 @@ This is the SECOND independent occurrence of the exact same failure mode, valida
 1. `azd provision` — should succeed now that RBAC is fixed for all three apps
 2. `azd deploy` — will build & push images, populate remaining azd env vars via postprovision hook
 3. Implement two-phase RBAC Bicep refactor (decision already documented, just needs execution)
+
+### Container App RBAC Collision — Manual Fix Side Effect (2026-05-22 09:15 UTC)
+
+**Problem:** After manually fixing RBAC in previous two sessions, `azd provision` failed with "RoleAssignmentExists" errors on all three Container Apps.
+
+**Root cause:** Manual `az role assignment create` uses RANDOM GUIDs for role assignment names (Azure CLI default). Bicep `rbac.bicep` module uses DETERMINISTIC names via `guid(scope, principalId, roleDefId)`. Azure RBAC enforces uniqueness on (principal, role, scope) triple — so Bicep's attempt to create an assignment with its deterministic name fails because an assignment for the same triple ALREADY exists under a different name (the random GUID from manual fix).
+
+**Error details:**
+```
+RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is adfdc86b110c47f09986e14888ff879b.
+RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is 4e7e6a5b54384a649b8ffbd38d63927e.
+RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is 7b86777c10a04b3bbce5b947b2255375.
+```
+
+**Evidence:** Listed ACR AcrPull role assignments:
+- `adfdc86b-110c-47f0-9986-e14888ff879b` → backend (principal e8b91c28-9125-4f2f-a64a-8a536fc8e66e)
+- `4e7e6a5b-5438-4a64-9b8f-fbd38d63927e` → frontend (principal 6216b79f-7f75-4697-87de-6374f03bd4d9)
+- `7b86777c-10a0-4b3b-bce5-b947b2255375` → sandbox (principal 92e01376-0bc6-46ef-aeda-2fbc13dcd46a)
+- 1 additional assignment (ade2c0be... for principal 777b2d79...) NOT in error message — likely a successfully deployed Bicep assignment
+
+**Recovery applied (2026-05-22 09:15 UTC):**
+```bash
+# Delete the three manual role assignments by their IDs
+az role assignment delete --ids \
+  /subscriptions/2883501d-be4e-457b-9377-4867fb27b394/resourceGroups/rg-turbo-voice-agent/providers/Microsoft.ContainerRegistry/registries/acr2mta7feoalzyq/providers/Microsoft.Authorization/roleAssignments/adfdc86b-110c-47f0-9986-e14888ff879b \
+  /subscriptions/2883501d-be4e-457b-9377-4867fb27b394/resourceGroups/rg-turbo-voice-agent/providers/Microsoft.ContainerRegistry/registries/acr2mta7feoalzyq/providers/Microsoft.Authorization/roleAssignments/4e7e6a5b-5438-4a64-9b8f-fbd38d63927e \
+  /subscriptions/2883501d-be4e-457b-9377-4867fb27b394/resourceGroups/rg-turbo-voice-agent/providers/Microsoft.ContainerRegistry/registries/acr2mta7feoalzyq/providers/Microsoft.Authorization/roleAssignments/7b86777c-10a0-4b3b-bce5-b947b2255375
+```
+
+**Post-deletion state:**
+- Only 1 AcrPull assignment remains on ACR (the 4th assignment not involved in the collision)
+- All three Container Apps remain "Succeeded" provisioning state with running revisions
+- ⚠️ Container Apps temporarily have NO ACR Pull access until `azd provision` recreates assignments with deterministic names
+
+**Critical learning:** Manual `az role assignment create` will COLLIDE with subsequent Bicep deployments if Bicep uses deterministic GUID naming. Two solutions:
+1. **Preferred for manual fixes:** Always specify `--name` with deterministic GUID: `--name "$(az rest --method POST --uri 'https://management.azure.com/subscriptions/{sub}/providers/Microsoft.Resources/calculateTemplateHash?api-version=2020-06-01' --body "{'template': '{\"scope\":\"<scope>\",\"principalId\":\"<principal>\",\"roleDefId\":\"<role>\"}'}' --query hash -o tsv)"`
+2. **Simpler for recovery:** Delete manual assignments before re-running `azd provision` (Bicep recreates them with correct names)
+
+**Skill update:** Added "Side effects" warning to `.squad/skills/aca-provision-recovery/SKILL.md` documenting this collision pattern.
+
+**Next steps for user:**
+1. `azd provision` — Bicep recreates the three AcrPull assignments with deterministic names (plus any other RBAC: Cosmos, Storage, AI Foundry)
+2. `azd deploy` — builds and pushes actual application images
+3. Implement two-phase RBAC Bicep refactor (URGENT — failure cycle repeats on next `azd down → azd up`)

@@ -1,8 +1,8 @@
 # Azure Container Apps Provision Recovery
 
-**Confidence:** MEDIUM (validated by 2 independent occurrences on 2026-05-22)  
-**Last Updated:** 2026-05-22 08:44 UTC  
-**Validation:** Successfully diagnosed and recovered from identical failures on backend, frontend, and sandbox Container Apps.
+**Confidence:** HIGH (validated by 3 consecutive recovery sessions on 2026-05-22)  
+**Last Updated:** 2026-05-22 09:15 UTC  
+**Validation:** Successfully diagnosed and recovered from identical failures on backend, frontend, and sandbox Container Apps. Includes side-effect mitigation for manual RBAC fixes.
 
 ## When to Use
 - `azd up` or `azd provision` fails with "Operation expired" on Container App
@@ -79,6 +79,64 @@ azd provision  # Should succeed now that RBAC is fixed
 ```bash
 azd deploy  # Builds and pushes images, updates Container Apps
 ```
+
+## Side Effects & Prevention
+
+### Role Assignment Collision (Manual Fix → Subsequent Provision)
+
+**Problem:** After manually creating role assignments with `az role assignment create` to unstick provisioning, subsequent `azd provision` fails with `RoleAssignmentExists` errors.
+
+**Root cause:**
+- Manual `az role assignment create` uses **RANDOM GUIDs** for role assignment names (Azure CLI default)
+- Bicep `rbac.bicep` module uses **DETERMINISTIC names** via `guid(scope, principalId, roleDefId)`
+- Azure RBAC enforces uniqueness on `(principal, role, scope)` triple
+- Bicep's attempt to create an assignment with its deterministic name fails because an assignment for the same triple ALREADY exists under a different name (the random GUID)
+
+**Symptoms:**
+```
+ERROR: RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is <guid>.
+```
+
+**Prevention Option 1 (Preferred):** Use deterministic GUID when manually creating role assignments
+
+⚠️ **COMPLEX** — not recommended for emergency recovery:
+```bash
+# Calculate deterministic GUID (same as Bicep)
+ASSIGNMENT_NAME=$(echo -n "${ACR_ID}${PRINCIPAL_ID}${ROLE_DEF_ID}" | sha256sum | cut -c 1-32 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)/\1-\2-\3-\4-/')
+
+az role assignment create \
+  --assignee $PRINCIPAL_ID \
+  --role $ROLE_DEF_ID \
+  --scope $ACR_ID \
+  --name $ASSIGNMENT_NAME
+```
+
+**Prevention Option 2 (Recommended):** Delete manual assignments before re-running provision
+
+✅ **SIMPLE** — use this for recovery:
+1. List existing role assignments to identify manual ones:
+   ```bash
+   az role assignment list --scope $ACR_ID --role AcrPull -o json
+   ```
+2. Delete manual assignments by their IDs (from error message or list output):
+   ```bash
+   az role assignment delete --ids <full-assignment-id-1> <full-assignment-id-2> ...
+   ```
+3. **IMMEDIATELY** run `azd provision` to recreate assignments with deterministic names
+   - ⚠️ Container Apps temporarily lose ACR Pull access during this window
+   - Running revisions don't need to re-pull (they're already running cached images)
+   - New revisions will fail to provision until assignments are recreated
+
+**When to apply:**
+- After manually creating role assignments to unstick a failed Container App
+- Before re-running `azd provision` or `azd up` if you previously applied manual RBAC fixes
+- If you see `RoleAssignmentExists` errors during Bicep deployment
+
+**Detection:**
+- List all role assignments on ACR: `az role assignment list --scope <acr-scope> --role AcrPull`
+- Manual assignments have random GUIDs (e.g., `4e7e6a5b-5438-4a64-9b8f-fbd38d63927e`)
+- Bicep assignments have deterministic GUIDs calculated from scope + principal + role
+
 
 ### Option B: Delete Failed App + Full Re-provision
 

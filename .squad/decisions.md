@@ -78,11 +78,14 @@ Remove ACR Pull assignments from `rbac.bicep` (lines 142-178) since they're now 
 2. Frontend identity (2026-05-22 08:44 UTC): AcrPull granted to 6216b79f-7f75-4697-87de-6374f03bd4d9
 3. Sandbox identity (2026-05-22 08:44 UTC): AcrPull granted to 92e01376-0bc6-46ef-aeda-2fbc13dcd46a
 4. Azd env var fix (2026-05-22 08:44 UTC): `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT acr2mta7feoalzyq.azurecr.io`
+5. **Role assignment collision fix (2026-05-22 09:15 UTC):** Deleted 3 manual role assignments that collided with Bicep deterministic naming
+
+**Critical side effect discovered:** Manual `az role assignment create` uses RANDOM GUIDs. Bicep uses DETERMINISTIC GUIDs via `guid(scope, principalId, roleDefId)`. Subsequent `azd provision` fails with `RoleAssignmentExists` error because Azure enforces uniqueness on `(principal, role, scope)` triple — the assignment exists but with a DIFFERENT name. **Solution:** Delete manual role assignments before re-running provision, or use deterministic GUID when creating manual assignments.
 
 **URGENT: Implement two-phase RBAC Bicep refactor BEFORE next full `azd down && azd up` cycle.**
 
 **Next steps:**
-1. Complete current deployment: `azd provision` → `azd deploy` (should succeed now that RBAC is fixed for all apps)
+1. Complete current deployment: `azd provision` → `azd deploy` (manual role assignments deleted, ready for Bicep to recreate with deterministic names)
 2. Implement two-phase RBAC Bicep modules (detailed below) ASAP
 3. Test full `azd down --purge && azd up` cycle to validate fix
 
