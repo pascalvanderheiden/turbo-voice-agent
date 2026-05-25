@@ -174,9 +174,14 @@ app.post("/tasks", (req, res) => {
     return res.status(400).json({ error: "prompt or command is required" });
   }
 
-  // Use per-task token if provided, fall back to container-level env
+  // Use per-task token if provided, fall back to container-level env.
+  // In session-pool deployments the backend does NOT pass the token in the
+  // body — instead it sends X-GH-Token on the first request per session and
+  // the middleware (above) authenticates `gh` CLI via `gh auth login
+  // --with-token`. `copilot` CLI then reads auth state from `gh`, so an
+  // authenticated gh state is sufficient even without GH_TOKEN env var.
   const effectiveToken = perTaskToken || ghToken;
-  if (prompt && !effectiveToken) {
+  if (prompt && !effectiveToken && !ghAuthenticated) {
     return res.status(400).json({ error: "GitHub token required — set it in Settings → Connections" });
   }
 

@@ -477,3 +477,86 @@ If you have a "image build → resource create → image rebuild" cycle where th
 - [Azure Container Apps Managed Identity](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)
 - [ACR authentication with Managed Identity](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-authentication-managed-identity)
 - [Bicep module dependencies](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/modules#module-dependencies)
+
+## Session Pool Variant: Per-Task Config vs Container-Startup Config
+
+**Confidence:** HIGH (validated 2026-05-22 — POST /tasks 400 on first dev-task after session pool migration; root cause traced in `sandbox/server.js` against backend dev_agent payload)
+
+### The class of mistake
+
+When migrating from a **per-user, per-task ACI container** (lived only for that user's task; baked credentials/skills at container start) to a **shared session-pool container** (ephemeral, reused across users, prewarmed before any user is known), every config item must be re-classified into one of two columns:
+
+| Column | Description | Examples |
+|--------|-------------|----------|
+| **Container-startup config** | Identical for every user the container will ever serve | ACR image, model defaults, `PORT`, system packages, az login via UAMI |
+| **Per-task config** | Specific to the user/task currently being served | GitHub PAT, user-uploaded skills, per-task workspace state, OAuth tokens for the user's own integrations |
+
+Anything in column 2 **cannot** be baked at container startup — the container doesn't know who it will serve yet. It must be delivered per-task by the backend, typically via:
+- A header on the first request (e.g., `X-GH-Token` → middleware authenticates `gh` CLI in-process)
+- A dedicated handshake endpoint the backend calls before submitting work (e.g., `POST /skills/sync` after the user's identity is known)
+- A field in the work-submission body
+
+### Symptom pattern
+
+- Session pool allocation succeeds (fast — UAMI ACR Pull pre-grant is correct).
+- The very first work-submission request (`POST /tasks`, `POST /jobs`, etc.) returns **400** or **403** complaining about missing credentials.
+- The container has the auth state — it was set up by the new per-task path — but a **stale validation gate** in the route still checks for the old container-startup path (env var, file on disk, etc.) and refuses the request.
+
+### Specific instance — POST /tasks 400 after X-GH-Token middleware
+
+**The bug:** Phase 5 added an `X-GH-Token` request middleware that runs `gh auth login --with-token` and flips `ghAuthenticated = true`. But the `POST /tasks` route's validation still required `effectiveToken = req.body.ghToken || process.env.GH_TOKEN`. In a session pool:
+- `process.env.GH_TOKEN` is unset (it was the docker-compose path).
+- Backend sends the token via header only, never in the body.
+- → 400 "GitHub token required" even though `gh` is fully authenticated.
+
+**The fix** (`sandbox/server.js`):
+```js
+// Before
+if (prompt && !effectiveToken) { return res.status(400).json({ error: "..." }); }
+
+// After
+if (prompt && !effectiveToken && !ghAuthenticated) { return res.status(400).json({ error: "..." }); }
+```
+
+The spawned `copilot` CLI reads auth state from `gh`, so an authenticated gh state is sufficient. The existing `...(effectiveToken ? { GH_TOKEN: effectiveToken } : {})` env-injection already gracefully handles the no-env-var case.
+
+### Diagnosis checklist when you hit this class of bug
+
+When a session-pool container rejects a request the backend "obviously" satisfies:
+
+1. **List every route-level validation in the container** — `grep -n "return res.status(40[0-9])" sandbox/server.js` (or equivalent).
+2. **For each gate**, ask: *what config source does this check?* Env var? Disk file? Request body? Process state set by middleware?
+3. **For each config source**, ask: *who sets this in a session pool?* If the answer is "the docker-compose entrypoint" or "the old ACI postdeploy script", that gate is stale.
+4. **Cross-reference the backend's request shape.** Pull the actual payload from the backend client (e.g., `dev_agent.py` `_sandbox_exec`) and the actual headers. Compare to what each gate checks.
+5. **Mismatch = stale gate.** Either teach the gate about the new path (e.g., accept process state), or have the backend send both.
+
+### Diagnosis steps (read-only — no deploy needed)
+
+```bash
+# 1. Find all 400/403 gates in the sandbox route handlers.
+grep -n "status(40[0-9])" sandbox/server.js
+
+# 2. For each gate, identify the config source.
+#    Look at the variable names: process.env.X, req.body.X, req.get('X-…'),
+#    module-level state flipped by middleware.
+
+# 3. Confirm what the backend sends. For Python httpx clients:
+grep -nA8 "POST.*\"/tasks\"\|/skills/sync\|/files" backend/app/agents/*.py backend/app/services/*.py
+
+# 4. Check pool container env from Bicep:
+grep -nA3 "env: \[" infra/modules/session-pool.bicep
+```
+
+### Prevention
+
+When adding new auth/config paths during a session-pool migration:
+
+1. **Update ALL validation gates that protect the same capability**, not just the new entry point. A gate that checks for `req.body.token` must also accept `ghAuthenticated === true` (or whatever module-level state the new middleware sets).
+2. **Add a contract test**: send a request with the new path (header) and no legacy path (no env var, no body field) and assert 2xx, not 4xx.
+3. **Document the path** in a comment on the validation gate so the next migrator sees both branches.
+4. **Distinguish "container has the credential" from "request supplied the credential"** in route logic. They are not equivalent in a session pool: the container can have a credential set by a *previous* request from a *previous* user — which is fine for `gh` auth (idempotent per session) but would be a leak for per-user secrets. Make this distinction explicit.
+
+### When to apply this pattern
+
+Any time you migrate a per-user container to a shared pool, audit every input the container accepted at startup (env vars, mounted secrets, command-line args) and decide whether it's column 1 (still OK at startup) or column 2 (must move to per-task delivery). The route handlers must reflect column 2 as a valid alternative to column 1, not as a mutually exclusive replacement during the transition.
+

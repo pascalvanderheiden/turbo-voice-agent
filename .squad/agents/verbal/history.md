@@ -401,3 +401,32 @@ Cross-references: `.squad/skills/aca-provision-recovery/SKILL.md`, decisions.md 
 - Image freshness diagnostic: `az acr repository show ... --query createdTime` vs `git log -1 --pretty=format:"%ad" --date=iso-strict -- <source-dir>`. If image is older than the source dir, you have a postprovision-hook chicken-and-egg.
 
 **Skill updated:** `.squad/skills/aca-provision-recovery/SKILL.md` gained section "Session Pool Variant: Stale Image Probe Mismatch (Postprovision Chicken-and-Egg)".
+
+## 2026-05-22 — Sandbox POST /tasks 400 after Phase 5 (X-GH-Token migration)
+**Requested by:** Pascal van der Heiden
+
+**Symptom:** Session pool allocates fast (UAMI pre-grant is working). First `POST /tasks` from `dev_agent._sandbox_exec` returns 400 "GitHub token required". Terminal also showed "No skills available in sandbox." — that's informational (blob `skills` container is empty), not the failure.
+
+**Root cause (one line):** Phase 5 added an `X-GH-Token` request middleware that runs `gh auth login --with-token` and sets `ghAuthenticated = true`, but the `POST /tasks` validation gate (L179 in `sandbox/server.js`) still required `effectiveToken = req.body.ghToken || process.env.GH_TOKEN`. In session pools neither is set — the token only arrives via header. **Stale validation gate.**
+
+**Fix (`sandbox/server.js`, one line):**
+```diff
+- if (prompt && !effectiveToken) { return res.status(400)... }
++ if (prompt && !effectiveToken && !ghAuthenticated) { return res.status(400)... }
+```
+The spawned `copilot` CLI reads from `gh` auth state — no `GH_TOKEN` env var needed. Existing L204 conditional env injection already handles the no-env-var path correctly.
+
+**Image rebuild:** `bash infra/scripts/build-sandbox-image.sh` → `az acr build`, server-side, ~3 min. Pool picks it up on next allocation; existing prewarmed instances may serve stale until pool cooldown — Pascal can force-recycle via `az resource delete` on the pool if he doesn't want to wait.
+
+**What I deliberately did NOT change:**
+- `entrypoint.sh` startup sync — already correct (unconditional marker write so `/ready` doesn't stall on empty/unreachable storage).
+- `sync-skills.sh` — works as designed. Empty `skills` blob container is a data state, not a bug.
+- `POST /skills/sync` lazy endpoint — already implemented and wired in `dev_agent._sync_skills_stage`. The "proper" per-task architecture Pascal hypothesised is already in place.
+- Backend payload (`dev_agent._sandbox_exec` L1359–1413) — sends `X-GH-Token` as a header on first call per task. That IS the Phase 5 design.
+
+**Skill updated:** `aca-provision-recovery/SKILL.md` gained section "Session Pool Variant: Per-Task Config vs Container-Startup Config" — generic pattern for the class of bug that happens when migrating per-user containers to shared session pools. Includes a diagnosis checklist (audit every `status(40x)` gate, map config sources to docker-compose-era vs pool-era paths, look for mismatches).
+
+**Learnings:**
+- When migrating per-user → shared-pool, every input the container accepted at startup (env vars, mounted secrets) must be re-classified as column-1 (still OK at startup) or column-2 (must move to per-task delivery). Route handlers must accept column-2 as a valid alternative to column-1, not as a mutually exclusive replacement.
+- "No skills available" UX message is benign here — the blob container being empty is correct early-stage behaviour. Not worth changing the wording unless users find it alarming. Flag for Pinback if it ever lands on a UX backlog.
+- Did NOT run `az monitor log-analytics query` for this one — the bug was unambiguously reproducible from reading the code against the known backend payload. Logs would have confirmed only what the source already proved. Saving the runbook for non-obvious cases.
