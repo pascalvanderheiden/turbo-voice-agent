@@ -353,3 +353,4 @@ output AI_WESTUS_ENDPOINT string = aiWestUs.outputs.endpoint
 output AI_CENTRALUS_ENDPOINT string = aiCentralUs.outputs.endpoint
 output SESSION_POOL_MANAGEMENT_ENDPOINT string = sessionPool.outputs.sessionPoolManagementEndpoint
 output SESSION_POOL_NAME string = sessionPool.outputs.sessionPoolName
+output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name

@@ -430,3 +430,29 @@ The spawned `copilot` CLI reads from `gh` auth state — no `GH_TOKEN` env var n
 - When migrating per-user → shared-pool, every input the container accepted at startup (env vars, mounted secrets) must be re-classified as column-1 (still OK at startup) or column-2 (must move to per-task delivery). Route handlers must accept column-2 as a valid alternative to column-1, not as a mutually exclusive replacement.
 - "No skills available" UX message is benign here — the blob container being empty is correct early-stage behaviour. Not worth changing the wording unless users find it alarming. Flag for Pinback if it ever lands on a UX backlog.
 - Did NOT run `az monitor log-analytics query` for this one — the bug was unambiguously reproducible from reading the code against the known backend payload. Logs would have confirmed only what the source already proved. Saving the runbook for non-obvious cases.
+
+---
+
+## Skills blob container seeding (gap from sandbox-dynamic-sessions)
+
+**Date:** 2025
+**Trigger:** Pascal reported `/skills/sync` returning `synced: 0, skills: []` after deploy. Container was empty.
+
+**Root cause:** The `sandbox-dynamic-sessions` change wired up the *consumer* side (sandbox entrypoint downloads from `skills` blob container at warm-up) but not the *producer* side at deploy time. The OpenSpec design glossed over it ("skills are already in the blob, identical to ACI behavior") but the original ACI flow never had a deploy-time upload either — every prior environment was running on whatever skills users had activated via the marketplace (`CosmosSkillsService.upload_skill_from_github_to_blob`). Platform-bundled skills in `.github/skills/` had no upload path.
+
+**Fix:**
+- New `infra/scripts/upload-skills.sh` — uploads `.github/skills/` → `skills` container via `az storage blob upload-batch --auth-mode login`. Idempotent.
+- Added `AZURE_STORAGE_ACCOUNT_NAME` Bicep output → propagates to azd env automatically.
+- Wired into `azure.yaml` `postprovision` (posix + windows).
+- Verified live against `st2mta7feoalzyq`: 20 blobs across 6 skills uploaded successfully.
+
+**Network ACL gotcha:** Storage account has `networkAcls.defaultAction = 'Deny'` (correct for production). The script handles this by temporarily adding the caller's public IP, waiting **60s** for ACL propagation (20s is too short — confirmed empirically), then removing the rule in a trap on exit. Requires deployer RBAC: `Storage Blob Data Contributor` AND `Storage Account Contributor`.
+
+**Learnings:**
+- When migrating from "container = per-user/per-task" to "container = shared infrastructure," every artifact that used to live IN the container (or in a per-user volume) must be reclassified as either:
+  - **(a) Bundled in the image** — ships with every deploy, requires image rebuild to update.
+  - **(b) Uploaded to shared storage at deploy time** — ships with every deploy via IaC hooks, updates without image rebuild.
+  - **(c) Uploaded at runtime by users/backend** — already covered by per-user activation flow.
+- The blob container being declared in Bicep does NOT seed it. Bicep only creates the *container resource*, never its data plane contents. Easy thing to miss when the consumer code "just works" against an empty container without crashing.
+- Azure Storage ACL propagation: 20s insufficient, 60s reliable. Adjust scripts accordingly.
+- `--auth-mode login` for blob uploads is much cleaner than juggling keys — but requires the deployer to have data-plane RBAC, not just control-plane.

@@ -93,6 +93,10 @@ hooks:
         echo "Frontend URL: ${FRONTEND_URL}"
         FRONTEND_URL="${FRONTEND_URL}" bash infra/scripts/setup-entra-app.sh
         bash infra/scripts/build-sandbox-image.sh
+        # Seed the `skills` blob container with .github/skills/ so freshly
+        # warmed sandbox sessions have platform skills available on first
+        # request. Idempotent; safe to re-run.
+        bash infra/scripts/upload-skills.sh
     windows:
       shell: pwsh
       run: |
@@ -101,6 +105,7 @@ hooks:
         Write-Host "Frontend URL: $env:FRONTEND_URL"
         bash infra/scripts/setup-entra-app.sh
         bash infra/scripts/build-sandbox-image.sh
+        bash infra/scripts/upload-skills.sh
 
   postdeploy:
     shell: sh

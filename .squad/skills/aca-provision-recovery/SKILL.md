@@ -560,3 +560,28 @@ When adding new auth/config paths during a session-pool migration:
 
 Any time you migrate a per-user container to a shared pool, audit every input the container accepted at startup (env vars, mounted secrets, command-line args) and decide whether it's column 1 (still OK at startup) or column 2 (must move to per-task delivery). The route handlers must reflect column 2 as a valid alternative to column 1, not as a mutually exclusive replacement during the transition.
 
+
+---
+
+## Migration data-uploads gotcha
+
+**When migrating from "container = per-user/per-task" to "container = shared infrastructure" (e.g., per-task ACI → Container Apps dynamic session pool), audit every input the container used to receive that is NOT a runtime request.**
+
+Three reclassification buckets:
+
+| Input source (before) | Reclassify as | Mechanism (after) |
+|---|---|---|
+| Env vars / startup args set per-container at provisioning time | (a) Image-baked OR (b) Shared-storage upload at deploy | Dockerfile COPY, or IaC postprovision hook |
+| Per-user mounted volumes / per-task injected files | (b) Shared-storage upload at deploy, OR (c) Runtime upload by backend | IaC postprovision hook + backend write path |
+| Per-request headers / per-request body | No change | Still per-request — keep as-is |
+
+**The trap:** Bicep declares a container/volume resource. The resource exists. The IaC succeeds. The consumer code reads from it without crashing (empty list, empty file — no error). But the *data plane is empty*. Symptom: feature silently returns "0 results" forever until someone notices.
+
+**Specific to this repo:** `infra/modules/storage.bicep` declares `containers/skills` — but only the empty container resource. The sandbox image's `sync-skills.sh` reads it happily and reports `synced: 0`. The fix: `infra/scripts/upload-skills.sh` runs at `postprovision` and seeds it from `.github/skills/`.
+
+**Checklist for the next migrator:**
+1. List every file path the OLD per-user/per-task container could see at startup.
+2. For each, decide bucket (a)/(b)/(c).
+3. For bucket (b), add a `postprovision` script using `az storage blob upload-batch --auth-mode login`.
+4. **Test:** after `azd up`, query the data plane (`az storage blob list`) — do not trust the absence of errors.
+5. **Network ACL caveat:** if storage uses `defaultAction = 'Deny'`, the upload script must add the caller's IP, wait **at least 60s** for propagation (20s is unreliable), then remove on cleanup.
