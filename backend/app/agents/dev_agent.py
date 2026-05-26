@@ -1373,15 +1373,11 @@ class DevAgent:
             raise ValueError("prompt or command is required")
 
         # Phase 6 of sandbox-dynamic-sessions: attach the user's GitHub PAT as
-        # ``X-GH-Token`` on the FIRST sandbox call per dev-task so the sandbox
-        # container can run ``gh auth login --with-token``. Subsequent requests
-        # for the same task skip the header — gh auth state persists for the
-        # session lifetime.
-        gh_token = getattr(self, "_current_gh_token", None)
+        # ``X-GH-Token`` on the FIRST sandbox call per dev-task. If skills-sync
+        # already sent it, this becomes a no-op. Subsequent requests for the same
+        # task skip the header — gh auth state persists for the session lifetime.
         first_call_headers: dict[str, str] = {}
-        if gh_token and task_id and task_id not in _gh_token_sent:
-            first_call_headers["X-GH-Token"] = gh_token
-            _gh_token_sent.add(task_id)
+        self._maybe_attach_gh_token(task_id, first_call_headers)
 
         log_preview = prompt[:120] if prompt else f"{command} {args}"
         logger.info("Sandbox exec [%s]: %s", stage_label, log_preview)
@@ -1405,15 +1401,34 @@ class DevAgent:
             )
 
         sandbox_client = self._sandbox_client()
-        resp = await sandbox_client.request(
-            "POST",
-            "/tasks",
-            identifier=task_id or "default",
-            json=payload,
-            headers=first_call_headers or None,
-            timeout=30.0,
-        )
-        resp.raise_for_status()
+
+        # Submit the task to the sandbox pool. If the pool returns 4xx/5xx (RBAC,
+        # quota, unhealthy), surface a diagnostic message instead of silently
+        # falling back to polling (which would fail with an undefined task_id).
+        try:
+            resp = await sandbox_client.request(
+                "POST",
+                "/tasks",
+                identifier=task_id or "default",
+                json=payload,
+                headers=first_call_headers or None,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as http_err:
+            status = http_err.response.status_code
+            # Truncate body to first 500 chars to avoid log spam
+            body_text = http_err.response.text[:500] if http_err.response.text else ""
+            msg = (
+                f"Sandbox pool rejected task (HTTP {status}): {body_text}\n"
+                f"Hint: Check backend identity RBAC on session pool, "
+                f"quota limits, or pool health status."
+            )
+            logger.error("Sandbox pool error for task %s: %s", task_id, msg)
+            if task_id and task_id in _pipeline_outputs:
+                _buf_append(task_id, {"type": "stderr", "data": msg, "ts": time.time()})
+            raise RuntimeError(msg) from http_err
+
         task_data = resp.json()
         sandbox_task_id = task_data["id"]
 
@@ -2429,15 +2444,27 @@ class DevAgent:
             ".squad/directives.md": directives_md,
         }
 
+    def _maybe_attach_gh_token(self, task_id: str, headers: dict[str, str]) -> None:
+        """Attach X-GH-Token header if this is the first sandbox call for task_id."""
+        gh_token = getattr(self, "_current_gh_token", None)
+        if gh_token and task_id and task_id not in _gh_token_sent:
+            headers["X-GH-Token"] = gh_token
+            _gh_token_sent.add(task_id)
+
     async def _sync_skills_stage(self, task_id: str) -> None:
         """Sync skills from blob storage to the sandbox and report what's available."""
         logger.info("Skills sync: task=%s", task_id)
         client = self._sandbox_client()
         try:
+            # Phase 6: skills-sync is the FIRST sandbox call; attach X-GH-Token here.
+            headers: dict[str, str] = {}
+            self._maybe_attach_gh_token(task_id, headers)
+
             resp = await client.request(
                 "POST",
                 "/skills/sync",
                 identifier=task_id,
+                headers=headers or None,
                 timeout=30.0,
             )
             resp.raise_for_status()

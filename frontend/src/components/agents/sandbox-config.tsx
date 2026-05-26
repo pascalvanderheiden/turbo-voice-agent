@@ -211,9 +211,10 @@ export function SandboxConfig({ className }: SandboxConfigProps) {
             onClick={handleRecreate}
             disabled={loading || status === "provisioning" || status === "busy"}
             className="flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] border border-[var(--color-border-dark)] px-4 py-2 text-sm text-[var(--color-text-primary)] disabled:opacity-50 transition-colors"
+            title="Release active sessions — next dev-task gets a fresh container"
           >
             {loading ? <IconLoader2 size={14} className="animate-spin" /> : <IconRefresh size={14} />}
-            Recreate
+            Release Sessions
           </button>
         </div>
       </div>

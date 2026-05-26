@@ -26,7 +26,7 @@ _ADMIN_IDENTIFIER = "admin"
 # The sandbox reports a running count that resets on container restart.
 # We track the last value we saw and accumulate a baseline so the total
 # is never lost when the sandbox restarts or tasks are deleted.
-_premium_baseline: int = 0      # accumulated from previous sandbox lifecycles
+_premium_baseline: int = 0  # accumulated from previous sandbox lifecycles
 _last_sandbox_premium: int = 0  # last value seen from the sandbox /health
 
 
@@ -41,18 +41,26 @@ def _get_service():
     return _sandbox_service
 
 
-async def _probe_sandbox_health() -> tuple[bool, int, int]:
-    """Probe sandbox /health and return (reachable, activeTasks, premiumRequests).
+async def _probe_sandbox_health() -> tuple[bool, int, int, str | None]:
+    """Probe sandbox /health and return (reachable, activeTasks, premiumRequests, error_detail).
 
     premiumRequests is a cumulative total that survives sandbox restarts:
     if the sandbox counter drops (restart), we fold the previous value
     into a baseline so nothing is lost.
+
+    error_detail contains diagnostic information if the probe fails:
+    - HTTP status + truncated body for HTTPStatusError
+    - "Pool unreachable (network/DNS issue)" for ConnectError
+    - "Pool cold (no response within 5s)" for TimeoutException
     """
     global _premium_baseline, _last_sandbox_premium
     try:
         client = get_sandbox_client()
         resp = await client.request(
-            "GET", "/health", identifier=_ADMIN_IDENTIFIER, timeout=5.0,
+            "GET",
+            "/health",
+            identifier=_ADMIN_IDENTIFIER,
+            timeout=5.0,
         )
         data = resp.json()
         active = data.get("activeTasks", 0)
@@ -64,9 +72,30 @@ async def _probe_sandbox_health() -> tuple[bool, int, int]:
         _last_sandbox_premium = sandbox_premium
 
         total_premium = _premium_baseline + sandbox_premium
-        return True, active, total_premium
-    except Exception:
-        return False, 0, _premium_baseline + _last_sandbox_premium
+        return True, active, total_premium, None
+    except httpx.HTTPStatusError as http_err:
+        status = http_err.response.status_code
+        body_text = http_err.response.text[:500] if http_err.response.text else ""
+        detail = f"HTTP {status}: {body_text}"
+        return False, 0, _premium_baseline + _last_sandbox_premium, detail
+    except httpx.ConnectError:
+        return (
+            False,
+            0,
+            _premium_baseline + _last_sandbox_premium,
+            "Pool unreachable (network/DNS issue)",
+        )
+    except httpx.TimeoutException:
+        return (
+            False,
+            0,
+            _premium_baseline + _last_sandbox_premium,
+            "Pool cold (no response within 5s)",
+        )
+    except Exception as exc:
+        # Unexpected errors — preserve some diagnostic info without leaking internals
+        detail = f"{type(exc).__name__}: {str(exc)[:200]}"
+        return False, 0, _premium_baseline + _last_sandbox_premium, detail
 
 
 @router.get("/status")
@@ -76,7 +105,7 @@ async def get_sandbox_status(request: Request):
     svc = _get_service().with_user(user_id)
     state = await svc.get_state()
 
-    reachable, active_tasks, premium_requests = await _probe_sandbox_health()
+    reachable, active_tasks, premium_requests, error_detail = await _probe_sandbox_health()
     live_status = "ready" if reachable else "stopped"
 
     # Check if user has a GitHub token stored in user connections
@@ -157,12 +186,50 @@ async def update_sandbox_config(body: UpdateConfigRequest, request: Request):
 
 @router.post("/recreate")
 async def recreate_sandbox(request: Request):
-    """Recreate the sandbox (e.g., after skill changes)."""
+    """Release user's active dev-task sessions (Option B from azure-pipeline-audit).
+
+    In session-pool mode, "recreate" doesn't rebuild a container — it releases
+    all active sessions for the current user so the next dev-task gets a fresh one.
+    """
     user_id = getattr(request.state, "user_id", "default-user")
     svc = _get_service().with_user(user_id)
-    await svc.set_status("provisioning")
-    logger.info("Sandbox recreation requested for user %s", user_id)
-    return {"status": "provisioning", "message": "Sandbox recreation initiated"}
+
+    # Enumerate user's active dev-tasks and stop their sandbox sessions
+    dev_service = getattr(request.app.state, "dev_service", None)
+    if dev_service is None:
+        logger.warning("recreate_sandbox: dev_service not available on app.state")
+        return {
+            "status": "ready",
+            "stopped": [],
+            "message": "Dev service unavailable — no sessions released.",
+        }
+
+    user_dev_service = dev_service.with_user(user_id)
+    tasks = await user_dev_service.list()
+
+    # Filter to tasks in {running, provisioning, pending} — these may hold sessions
+    active_states = {"running", "provisioning", "pending"}
+    active_tasks = [t for t in tasks if t.status in active_states]
+
+    client = get_sandbox_client()
+    stopped = []
+    for task in active_tasks:
+        try:
+            await client.stop_session(task.id, reason="recreate")
+            stopped.append(task.id)
+            logger.info("Recreate: stopped session for task %s (user %s)", task.id, user_id)
+        except Exception as exc:
+            # Best-effort — log and continue
+            logger.warning("Recreate: failed to stop session for task %s: %s", task.id, exc)
+
+    message = (
+        f"Released {len(stopped)} session(s); next dev-task will allocate fresh."
+        if stopped
+        else "No active sessions to release."
+    )
+    await svc.set_status("ready")
+    logger.info("Sandbox recreation for user %s: stopped %d session(s)", user_id, len(stopped))
+    return {"status": "ready", "stopped": stopped, "message": message}
 
 
 @router.post("/stop")
@@ -174,6 +241,7 @@ async def stop_sandbox(request: Request):
     # Cancel all running backend pipeline asyncio tasks
     from app.routes.dev import _get_service as _get_dev_service
     from app.routes.dev import _running_pipelines
+
     cancelled = 0
     for tid, atask in list(_running_pipelines.items()):
         if not atask.done():
@@ -197,7 +265,10 @@ async def stop_sandbox(request: Request):
     try:
         client = get_sandbox_client()
         resp = await client.request(
-            "GET", "/tasks", identifier=_ADMIN_IDENTIFIER, timeout=10.0,
+            "GET",
+            "/tasks",
+            identifier=_ADMIN_IDENTIFIER,
+            timeout=10.0,
         )
         data = resp.json()
         for t in data.get("tasks", []):
@@ -252,16 +323,23 @@ async def start_sandbox(request: Request):
 
     # Session-pool path: nothing to start — the pool is always live.
     # Probe health so the response reflects reality instead of a stale "provisioning".
-    reachable, _, _ = await _probe_sandbox_health()
+    reachable, _, _, error_detail = await _probe_sandbox_health()
     live = "ready" if reachable else "stopped"
     await svc.set_status(live)
+
+    if reachable:
+        message = "Session pool is live — no per-user start required."
+    else:
+        # Surface granular error detail to help diagnose RBAC/network/timeout issues
+        base_msg = "Session pool unreachable."
+        if error_detail:
+            message = f"{base_msg} {error_detail}. Check backend logs and Azure deployment."
+        else:
+            message = f"{base_msg} Check backend logs and Azure deployment."
+
     return {
         "status": live,
-        "message": (
-            "Session pool is live — no per-user start required."
-            if reachable
-            else "Session pool unreachable. Check backend logs and Azure deployment."
-        ),
+        "message": message,
     }
 
 

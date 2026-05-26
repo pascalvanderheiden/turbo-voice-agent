@@ -113,3 +113,50 @@ Refactored ~25 httpx call sites in `dev_agent.py`, `routes/dev.py`, `routes/sand
 - Backend has no App Insights SDK imports (verified by grep). The structured-log fallback is the cheapest forward-compatible path; a future opencensus handler can filter `record.event.startswith("sandbox.")` and call `track_event`.
 - The session pool has no explicit "allocate" call — first request is the allocation. Tracking `_allocated` in the client gives us a one-shot signal per session.
 - Identifiers (dev-task UUIDs) are safe to log; tokens/PATs/response bodies are not. The hygiene rule is enforced by only logging fields explicitly listed in the event table.
+
+## 2026-05-22T18:00Z — Sandbox /tasks 400 root cause analysis
+
+**Triggered by:** Pascal's first E2E run on the session pool. Allocation worked, but
+implement step hit `400 Bad Request` from the sandbox container (proxied via pool).
+
+**Diagnosis:** Phase-4→Phase-6 regression in the backend↔sandbox auth handshake.
+
+- Pre-Phase-6 backend included `payload["ghToken"] = gh_token` in the body of
+  every `/tasks` POST. Sandbox handler at `server.js:178` checks
+  `effectiveToken = perTaskToken || ghToken (env)` and 400s if missing.
+- Phase 6 (commit `fbaa199`) moved the PAT to `X-GH-Token` header on first call,
+  added middleware (`server.js:79–105`) that runs `gh auth login --with-token`
+  and flips `ghAuthenticated = true`. Removed body field.
+- BUT the `/tasks` handler was not updated to honour `ghAuthenticated`. It still
+  fails on missing body/env token even though middleware just authenticated.
+
+In session-pool mode the pool containers have no `GH_TOKEN` env (no per-user
+env on shared/ephemeral pool containers), so neither path is satisfied → 400.
+
+**Output:** Wrote full diagnosis + fix options to
+`.squad/decisions/inbox/fenster-sandbox-handshake-diagnosis.md`. Recommended
+Fix A (5-line change in `sandbox/server.js`): tolerate `ghAuthenticated` as a
+valid auth state in the `/tasks` handler. No backend code change needed.
+
+Also noted that the "No skills available in sandbox" message is independent —
+`/skills/sync` returns `{synced: 0}` because the pool container image likely
+lacks `AZURE_STORAGE_ACCOUNT_NAME` env or RBAC on the storage account, or no
+blobs exist. That's Verbal's infra domain. The protocol path is correct.
+
+**Key files inspected:**
+- `backend/app/agents/dev_agent.py::_sandbox_exec` (1326–1411)
+- `backend/app/agents/dev_agent.py::run_pipeline` (420–460) — sets `_current_gh_token`
+- `backend/app/agents/dev_agent.py::_sync_skills_stage` (2432–2495)
+- `backend/app/services/session_sandbox_client.py` — URL/header/param plumbing correct
+- `backend/app/routes/user.py::get_sandbox_user_token` (530–540)
+- `sandbox/server.js` (POST /tasks handler + X-GH-Token middleware + /skills/sync)
+- `sandbox/sync-skills.sh`, `sandbox/entrypoint.sh`
+- Git: `88558ab` (Phase 4 ACI removal), `fbaa199` (Phase 6 header-only)
+
+**Did NOT change any code.** Per coordination instructions, waiting on Verbal's
+complement diagnosis before batching the rebuild/redeploy.
+
+**Learning:** When migrating auth contracts across a process boundary, both
+sides need to land in the same release. The middleware change shipped, the
+matching handler change didn't. Worth adding a sandbox contract test that
+exercises the header-only auth path end-to-end.

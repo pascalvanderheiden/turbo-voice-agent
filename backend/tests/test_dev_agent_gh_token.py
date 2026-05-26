@@ -1,9 +1,9 @@
 """Tests for Phase 6 of sandbox-dynamic-sessions: X-GH-Token header flow.
 
 Covers:
-- First ``_sandbox_exec`` call for a dev-task attaches ``X-GH-Token``.
-- Subsequent calls for the same task do NOT resend the header (the sandbox
-  container retains gh-auth state for the session lifetime).
+- First sandbox call (skills-sync) attaches ``X-GH-Token``.
+- Subsequent calls (_sandbox_exec, more skills-syncs) for the same task do NOT
+  resend the header (the sandbox container retains gh-auth state for session lifetime).
 - ``cancel_sandbox_task_for`` and ``_teardown_sandbox_session`` clear the
   per-task tracker so re-runs receive a fresh bootstrap.
 """
@@ -48,6 +48,64 @@ def _clear_tracker() -> None:
 @pytest.fixture
 def agent() -> DevAgent:
     return DevAgent(dev_service=MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_skills_sync_attaches_x_gh_token_first(
+    agent: DevAgent, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skills-sync is the FIRST sandbox call; it attaches X-GH-Token."""
+    recorder: list[dict[str, Any]] = []
+
+    async def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
+        recorder.append({"method": method, "path": path, "kwargs": kwargs})
+        # Return successful skills-sync response
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"synced": 0, "skills": []}
+        mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    client = MagicMock()
+    client.request = AsyncMock(side_effect=_request)
+    monkeypatch.setattr(agent, "_sandbox_client", lambda: client)
+    agent._current_gh_token = "ghp_test_skills_sync_123"
+
+    await agent._sync_skills_stage(task_id="task-sync-first")
+
+    assert len(recorder) == 1
+    assert recorder[0]["path"] == "/skills/sync"
+    headers = recorder[0]["kwargs"].get("headers")
+    assert headers is not None, "skills-sync must attach headers dict"
+    assert headers.get("X-GH-Token") == "ghp_test_skills_sync_123"
+    assert "task-sync-first" in _gh_token_sent
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_after_skills_sync_omits_token(
+    agent: DevAgent, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_sandbox_exec called AFTER skills-sync sees task already in _gh_token_sent, omits header."""
+    recorder: list[dict[str, Any]] = []
+    client = _make_mock_client(recorder)
+    monkeypatch.setattr(agent, "_sandbox_client", lambda: client)
+    agent._current_gh_token = "ghp_test_pat_456"
+
+    # Simulate skills-sync already ran and added task to tracker
+    _gh_token_sent.add("task-after-sync")
+
+    with pytest.raises(_StopRequest):
+        await agent._sandbox_exec(
+            task_id="task-after-sync",
+            command="echo hello",
+            args=[],
+            stage_label="implement",
+        )
+
+    assert len(recorder) == 1
+    headers = recorder[0]["kwargs"].get("headers")
+    # Header dict may exist but must NOT contain X-GH-Token
+    if headers is not None:
+        assert "X-GH-Token" not in headers
 
 
 @pytest.mark.asyncio
