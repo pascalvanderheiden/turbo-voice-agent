@@ -160,3 +160,32 @@ complement diagnosis before batching the rebuild/redeploy.
 sides need to land in the same release. The middleware change shipped, the
 matching handler change didn't. Worth adding a sandbox contract test that
 exercises the header-only auth path end-to-end.
+
+## 2025-11-26 — Azure Pipeline Audit Fixes (Commit 2a7e013)
+
+**Scope:** Implemented all four fixes from `.squad/decisions/inbox/fenster-azure-pipeline-audit.md` after Pascal's approval.
+
+**Changes:**
+1. **gh-token centralization (BLOCKER)** — Extracted `_maybe_attach_gh_token()` helper. Skills-sync (`_sync_skills_stage`) is now the FIRST sandbox call and attaches `X-GH-Token` on initial request per dev-task. `_sandbox_exec` calls the same helper (no-op if already sent). Preserves dedup set `_gh_token_sent` and teardown logic.
+
+2. **Pool 4xx/5xx surfacing (BLOCKER)** — POST /tasks wrapped in separate try/except for `httpx.HTTPStatusError`. On HTTP error: build diagnostic (status + truncated body), log at ERROR, emit `{"type": "stderr", ...}` to pipeline buffer, re-raise as `RuntimeError`. No more silent fallback to polling with undefined `sandbox_task_id`.
+
+3. **Granular probe errors (HIGH)** — `_probe_sandbox_health()` now returns 4-tuple `(reachable, active, premium, error_detail)`. Catches `HTTPStatusError` (status + body), `ConnectError` ("Pool unreachable (network/DNS issue)"), `TimeoutException` ("Pool cold (no response within 5s)"). `/api/sandbox/start` surfaces `error_detail` in response message. Status polling discards it (transient failures expected).
+
+4. **/api/sandbox/recreate Option B (MED)** — Recreate now enumerates user's dev-tasks via `dev_service.list()`, filters to `{running, provisioning, pending}`, calls `client.stop_session(task_id, reason="recreate")` for each (best-effort). Returns `{"stopped": [ids], "message": "Released N sessions"}`. Frontend button changed from "Recreate" to "Release Sessions".
+
+**Tests added (boundary exception — normally Kobayashi's domain):**
+- Updated `test_dev_agent_gh_token.py` (2 new tests: skills-sync first, exec after sync).
+- New `test_dev_agent_pool_errors.py` (3 tests: 403, 429, 500).
+- New `test_sandbox_probe_errors.py` (4 tests: 403, connect, timeout, start endpoint).
+- New `test_sandbox_recreate.py` (3 tests: active sessions, no sessions, error handling).
+
+**Verification:** `pytest` 39 tests green (7 gh_token + 19 session_sandbox_client + 3 disconnect + 3 pool_errors + 4 probe_errors + 3 recreate). `ruff check` + `ruff format` clean on touched files.
+
+**Learnings:**
+- When the FIRST sandbox call changes (skills-sync precedes `_sandbox_exec`), the gh-token injection MUST move with it. The dedup tracker is only useful if the helper is called from all entry points.
+- Pool errors should always surface to users with actionable diagnostics. The HTTPStatusError → RuntimeError pattern with truncated body (500 chars) + hint ("Check RBAC on session pool resource") is the right trade-off for UX vs log spam.
+- `_probe_sandbox_health` returning 4-tuple with optional `error_detail` lets `/start` (user-facing, happens once) show full diagnostics while `/status` (polled every 15s) stays forgiving on transient failures.
+- Recreate in pool mode was vestigial because there's no per-user container to rebuild. Stopping active sessions (Option B) is the useful equivalent — next dev-task gets a fresh container from the pool.
+- Test organization: respx for HTTP client tests, plain MagicMock + AsyncMock for agent/route logic. Keep assertions on diagnostic strings loose enough to survive minor message tweaks but tight enough to catch regressions (e.g., "HTTP 403" in message, not exact wording).
+
