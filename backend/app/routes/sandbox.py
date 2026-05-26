@@ -222,12 +222,47 @@ async def stop_sandbox(request: Request):
 
 @router.post("/start")
 async def start_sandbox(request: Request):
-    """Start/restart the sandbox environment."""
+    """Start/restart the sandbox environment.
+
+    Local dev: starts the docker-compose sandbox container (idempotent — if
+    already healthy, returns immediately as "ready").
+    Session-pool mode: pool is always live; this is best-effort health probe
+    only — there is no per-user "start" operation for shared session pools.
+    """
     user_id = getattr(request.state, "user_id", "default-user")
     svc = _get_service().with_user(user_id)
-    await svc.set_status("provisioning")
     logger.info("Sandbox start requested for user %s", user_id)
-    return {"status": "provisioning", "message": "Sandbox start initiated"}
+
+    # Local dev path: actually start the docker container.
+    docker_svc = getattr(request.app.state, "docker_sandbox_svc", None)
+    if docker_svc is not None:
+        await svc.set_status("provisioning")
+        healthy = await docker_svc.start()
+        if healthy:
+            await svc.set_status("ready")
+            return {"status": "ready", "message": "Local sandbox started"}
+        await svc.set_status("stopped")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Failed to start local sandbox. Ensure Docker is running, then "
+                "try 'docker compose up -d sandbox' manually."
+            ),
+        )
+
+    # Session-pool path: nothing to start — the pool is always live.
+    # Probe health so the response reflects reality instead of a stale "provisioning".
+    reachable, _, _ = await _probe_sandbox_health()
+    live = "ready" if reachable else "stopped"
+    await svc.set_status(live)
+    return {
+        "status": live,
+        "message": (
+            "Session pool is live — no per-user start required."
+            if reachable
+            else "Session pool unreachable. Check backend logs and Azure deployment."
+        ),
+    }
 
 
 class SandboxTaskRequest(BaseModel):

@@ -372,6 +372,9 @@ async def lifespan(app: FastAPI):
             logger.debug("Docker sandbox auto-start skipped: %s", exc)
             docker_sandbox_svc = None
 
+    # Expose to routes so /api/sandbox/start and /api/sandbox/stop can use it.
+    app.state.docker_sandbox_svc = docker_sandbox_svc
+
     yield
 
     # Shutdown

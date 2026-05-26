@@ -38,8 +38,11 @@ TOKEN_REFRESH_BUFFER_SECONDS = 60
 APPINSIGHTS_EVENT_PREFIX = "sandbox."
 
 # Local-dev fallback: when SESSION_POOL_MANAGEMENT_ENDPOINT is unset, sandbox
-# calls are routed at this base URL (the docker-compose ``sandbox`` service).
-LOCAL_SANDBOX_URL_DEFAULT = "http://sandbox:3000"
+# calls are routed at this base URL. The repo's docker-compose.yml runs only
+# the sandbox + cosmos containers (not the backend), so the backend hits the
+# sandbox via its host port mapping (``4000:3000``). Override with ``SANDBOX_URL``
+# if you run the backend inside the compose network (use ``http://sandbox:3000``).
+LOCAL_SANDBOX_URL_DEFAULT = "http://localhost:4000"
 
 
 class SandboxClient(Protocol):
@@ -363,12 +366,13 @@ class LocalSandboxClient:
 
     Selected automatically by :func:`get_sandbox_client` when
     ``SESSION_POOL_MANAGEMENT_ENDPOINT`` is unset. Routes every call to a single
-    long-running sandbox container (``http://sandbox:3000`` by default), ignoring
-    the ``identifier`` parameter — local dev has no per-task isolation. The API
+    long-running sandbox container (``http://localhost:4000`` by default — the
+    host port mapped by the project's docker-compose), ignoring the
+    ``identifier`` parameter — local dev has no per-task isolation. The API
     surface mirrors :class:`SessionSandboxClient` so callers don't branch.
 
-    The ``SANDBOX_URL`` env var overrides the base URL (legacy compose setups
-    use ``http://localhost:4000``).
+    The ``SANDBOX_URL`` env var overrides the base URL (set it to
+    ``http://sandbox:3000`` if the backend is run inside the compose network).
     """
 
     def __init__(self, base_url: str | None = None) -> None:
