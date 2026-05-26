@@ -456,3 +456,23 @@ The spawned `copilot` CLI reads from `gh` auth state — no `GH_TOKEN` env var n
 - The blob container being declared in Bicep does NOT seed it. Bicep only creates the *container resource*, never its data plane contents. Easy thing to miss when the consumer code "just works" against an empty container without crashing.
 - Azure Storage ACL propagation: 20s insufficient, 60s reliable. Adjust scripts accordingly.
 - `--auth-mode login` for blob uploads is much cleaner than juggling keys — but requires the deployer to have data-plane RBAC, not just control-plane.
+
+## 2026-05-26: Azure Validation Runbook + Skills-Sync Investigation Flagged
+
+**Task:** Produce Azure validation runbook for Pascal to debug sandbox pool startup failures (commit `909418a`).
+
+**Delivered:** `.squad/decisions/inbox/verbal-azure-validation-runbook.md` — 381 lines, 6 phases with auto-resolved resource names, copy-pasteable commands.
+
+**Phases:**
+- A.1: Pre-flight (backend revisions, pool status, image staleness)
+- A.2: Pool refresh options
+- A.2.2: Backend deploy
+- A.3: Trigger controlled failures
+- A.4: Capture logs
+- B: Triage template
+
+**Key finding noted:** `/skills/sync` returns 200 with `synced: 0` when blob storage not mounted or RBAC missing. Backend renders this as "No skills available in sandbox" (informational, not a failure). Fenster's diagnosis confirms blob container is currently empty (no user uploads yet).
+
+**Investigation flagged for Verbal:** Verify session-pool container has `AZURE_STORAGE_ACCOUNT_NAME` set and MSI has Storage Blob Data Reader on the storage account. If both OK but sync still returns 0, blade issue (blob container truly empty) or `sync-skills.sh` error (log it, don't swallow).
+
+**Next:** Await Pascal to execute runbook Phase A.1–A.4 and provide triage output.

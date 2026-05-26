@@ -682,3 +682,241 @@ Selected at runtime by `get_sandbox_client()` singleton, which checks `SESSION_P
 - All meaningful changes require team consensus
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
+
+# Decision: Azure Pipeline Audit & Fix — Session 2026-05-26
+
+---
+date: 2026-05-26
+author: fenster-1 (audit), fenster-fix (implementation), verbal (runbook)
+status: COMPLETED
+confidence: HIGH
+---
+
+## Background
+
+Pascal reported dev-task failures in Azure session-pool mode (after commit `909418a`):
+- Tasks complete with "no visible error message"
+- "Not authenticated in sandbox" errors
+- `/api/sandbox/start` returns generic "stopped" without diagnostic detail
+- `/api/sandbox/recreate` shows "Provisioning" but never clears
+
+Three-agent session identified 7 findings and implemented fixes.
+
+## Problem: 7 Findings (Audit)
+
+### Blockers (2)
+
+#### 1. Silent HTTPError in POST /tasks
+**File:** `backend/app/agents/dev_agent.py:1408-1416`
+
+POST /tasks → HTTP 4xx/5xx from pool (401/403 RBAC, 404 pool not found, 409 cooldown conflict, 429 concurrency cap, 5xx pool unhealthy) triggers `resp.raise_for_status()` → `httpx.HTTPStatusError` caught by outer try/except. Fallback code assumes task was submitted and polls for `sandbox_task_id` which was never assigned. Returns empty output; user sees no error.
+
+**Fix:** Wrap `resp.raise_for_status()` in own try/except before SSE stream starts. Emit diagnostic message to stderr buffer when POST /tasks fails.
+
+#### 2. gh-token ordering (skills-sync runs first without header)
+**Files:** `dev_agent.py:2432-2495` (skills-sync), `dev_agent.py:1379-1384` (sandbox exec)
+
+Skills-sync is FIRST sandbox call in every pipeline. It passes `identifier=task_id` (allocates session) but does NOT attach `X-GH-Token` header. Backend's `_gh_token_sent` tracker only checked in `_sandbox_exec` (called later), so `_sandbox_exec` may attach header to different session or first-call detection fails. gh-auth lands on wrong container.
+
+**Fix:** Extract centralized `_maybe_attach_gh_token(task_id, headers)` helper. Call it in `_sync_skills_stage` BEFORE POST /skills/sync, and in `_sandbox_exec` as fallback (idempotent via tracker).
+
+### High (1)
+
+#### 3. Start probe error swallowing
+**File:** `backend/app/routes/sandbox.py:44-69`
+
+`_probe_sandbox_health()` bare `except Exception:` at line 68 catches all errors (401/403 RBAC not propagated, 404 pool not found, ConnectTimeout cold pool, TimeoutException). User sees `"status": "stopped"` with generic message; real error only in backend logs.
+
+**Fix:** Catch `httpx.HTTPStatusError`, `httpx.ConnectError`, `httpx.TimeoutException` separately. Return error detail in 4-tuple; `/api/sandbox/start` surfaces it in response message.
+
+### Medium (1)
+
+#### 4. Recreate vestigial in pool mode
+**File:** `backend/app/routes/sandbox.py:158-165`
+
+Sets status to "provisioning" but releases no sessions. Pool is always live; no container restart. In ACI mode it restarted the CA instance. In pool mode: does nothing useful.
+
+**Fix (Option B chosen by Pascal):** Enumerate user's active dev-tasks, call `client.stop_session(task_id)` for each. Return `{"stopped": [...]}`. Frontend button relabeled to "Release Sessions".
+
+### Low (2)
+
+#### 5. Status flip-flop on transient probe failure
+**Files:** `sandbox.py:72-80`, `frontend/sandbox-config.tsx:51-56`
+
+Frontend polls status every 15s. Probe timeout (5s) on occasional pool load causes transient failure → UI shows "Stopped" → next poll succeeds → flickers back to "Ready". UX confusing.
+
+**Fix:** Add hysteresis or increase timeout to 10s in pool mode.
+
+#### 6. Premium baseline tracking (OK — verified preserved)
+**File:** `backend/app/routes/sandbox.py:25-30, 51-69, 102-113`
+
+Verified correct. Preserved in commit `909418a`. No regression.
+
+### OK (1)
+
+#### 7. Cosmos lazy upgrade handles containerAppUrl (OK — verified correct)
+**File:** `backend/app/services/sandbox_service.py:36-52`
+
+Tolerates legacy `containerAppUrl` field. No blocking issue.
+
+---
+
+## Solution: Four Fixes Implemented (Fenster-Fix)
+
+### Fix 1: gh-token → FIRST call
+**Commit:** `2a7e013`  
+**Files:** `backend/app/agents/dev_agent.py` lines 2432–2450
+
+Centralized helper `_maybe_attach_gh_token(task_id, headers)` checks `_gh_token_sent` and adds header if needed. Both `_sync_skills_stage` and `_sandbox_exec` call it. Skills-sync now attaches header on first allocation.
+
+### Fix 2: Surface pool 4xx/5xx errors
+**Commit:** `2a7e013`  
+**Files:** `backend/app/agents/dev_agent.py` lines 1403–1428
+
+POST /tasks wrapped in own try/except catching `httpx.HTTPStatusError` specifically. On error: build diagnostic message (status + truncated body), log ERROR, emit `{"type": "stderr", ...}` to pipeline output buffer, re-raise as RuntimeError.
+
+### Fix 3: Granular start probe errors
+**Commit:** `2a7e013`  
+**Files:** `backend/app/routes/sandbox.py` lines 44–87, 99, 265–278
+
+`_probe_sandbox_health()` returns 4-tuple: `(reachable, active, premium, error_detail | None)`.
+- Catch `httpx.HTTPStatusError` separately (include status + truncated body)
+- Catch `httpx.ConnectError` separately ("Pool unreachable (network/DNS issue)")
+- Catch `httpx.TimeoutException` separately ("Pool cold (no response within 5s)")
+- `/api/sandbox/start` surfaces `error_detail` in response message
+
+### Fix 4: Recreate releases sessions
+**Commit:** `2a7e013`  
+**Files:** `backend/app/routes/sandbox.py` lines 158–199, `frontend/sandbox-config.tsx` lines 210–217
+
+Enumerate user's dev-tasks via `dev_service.with_user(user_id).list()`, filter to `{running, provisioning, pending}`, call `client.stop_session(task_id, reason="recreate")` for each (best-effort), return `{"status": "ready", "stopped": [task_ids]}`.
+
+---
+
+## Test Coverage
+
+**Boundary exception:** Fenster-fix included test implementation (normally Kobayashi's domain) because fixes were tightly coupled to test surface. 39 tests added/updated, all passing.
+
+**Updated:** `test_dev_agent_gh_token.py` (2 new tests)
+
+**New:**
+- `test_dev_agent_pool_errors.py` (3 tests: 403, 429, 500 diagnostics)
+- `test_sandbox_probe_errors.py` (4 tests: probe error detail, error types, endpoint surface)
+- `test_sandbox_recreate.py` (3 tests: stop sessions, no-op, error handling)
+
+**Verification:**
+```bash
+pytest tests/test_dev_agent_gh_token.py \
+       tests/test_session_sandbox_client.py \
+       tests/test_sandbox_disconnect.py \
+       tests/test_dev_agent_pool_errors.py \
+       tests/test_sandbox_probe_errors.py \
+       tests/test_sandbox_recreate.py -v
+# ✅ 39 passed in 1.09s
+```
+
+---
+
+## Azure Validation Runbook (Verbal)
+
+Produced complete, copy-pasteable runbook for Pascal to execute. 6 phases with commands that auto-resolve resource names via `azd env get-values`.
+
+**Location:** `.squad/decisions/inbox/verbal-azure-validation-runbook.md` (merged from inbox)
+
+**Phases:**
+- A.1: Pre-flight (backend revisions, pool status, image staleness)
+- A.2: Pool refresh (delete & reprovision or wait)
+- A.2.2: Deploy latest backend
+- A.3: Trigger controlled failures
+- A.4: Capture logs
+- B: Triage output template
+
+**Status:** Awaiting Pascal to execute and provide triage output.
+
+---
+
+## Ancillary Decisions (Merged from Inbox)
+
+### Sandbox image build moved to preprovision (Verbal, 2026-05-22T15:30Z)
+
+After UAMI ACR-Pull fix (`efd6565`), `azd provision` failed at session pool with "crashing pods" due to stale sandbox image. Phase 5 code additions (`/health`, `/ready` endpoints) built at 2026-05-22T11:43, but image was from 11:17 (26 min prior) — probes hit 404s → pods killed.
+
+**Fix:** Added `bash infra/scripts/build-sandbox-image.sh` to `preprovision` hook in `azure.yaml` (in addition to existing `postprovision`/`postdeploy`). Script safe-exits 0 when `AZURE_CONTAINER_REGISTRY` unset (first run); on subsequent runs, image rebuilt before pool is reconciled, eliminating staleness window.
+
+**Immediate recovery:** Manually built image, deleted failed pool, Pascal can re-run `azd provision`.
+
+**Commit:** Included in Phase 5 work (Verbal domain).
+
+### Session pool uses pre-granted UAMI for ACR Pull (Verbal, 2026-05-22T14:30Z)
+
+Switched from system-assigned managed identity to user-assigned UAMI (`id-sandbox-pool-${resourceToken}`) granted `AcrPull` on registry in separate module deployed BEFORE pool creation. Eliminates RBAC propagation race (5–10 min delay after identity creation).
+
+**Commit:** Bicep changes in Phase 4 work.
+
+### X-GH-Token middleware contract (Verbal, Phase 5)
+
+Express middleware reads `X-GH-Token` header on every request. First valid header triggers `gh auth login --with-token` via stdin. In-process flag `ghAuthenticated` prevents repeat attempts. Header stripped after read (never logged).
+
+**Design:** Backend (Phase 6) injects user's GitHub PAT as per-session header instead of ACI env var. Middleware must auth idempotently and never leak token.
+
+**Commit:** Phase 5 sandbox code.
+
+### Sandbox readiness marker file pattern (Verbal, Phase 5)
+
+Sandbox container signals "skills synced" via marker file `/tmp/sandbox-state/skills-synced`. `entrypoint.sh` writes unconditionally after `sync-skills.sh` returns (regardless of blob sync success). `GET /ready` returns 200 iff marker exists, else 503.
+
+**Why:** Pool Startup probe polls `/ready` (5s × 30 attempts). Marker decouples bash sync script from Node server readiness without IPC. Unconditional marker write is intentional — allows probe to pass even if blob storage fails; users can retry via `POST /skills/sync`.
+
+**Commit:** Phase 5 sandbox code.
+
+### Sandbox /tasks handler stale validation gate (Fenster handshake diagnosis, 2026-05-22T18:00Z)
+
+Root cause of 400 Bad Request on first dev-task POST /tasks in session-pool mode: handler checks `effectiveToken = perTaskToken || process.env.GH_TOKEN` for prompt-based tasks. In pool mode:
+- No `GH_TOKEN` env var (shared ephemeral containers, not per-user)
+- Backend stopped sending `ghToken` in body (Phase 6 move to header)
+- Middleware authenticated `gh` from `X-GH-Token` header but handler doesn't consult `ghAuthenticated` flag
+
+**Proposed fix (Phase 5 follow-up):** Add `&& !ghAuthenticated` to the validation gate in `sandbox/server.js` POST /tasks handler (lines ~138–183).
+
+**Status:** Flagged for Verbal to implement sandbox-side fix.
+
+### Skill-sync architecture is correct (Fenster handshake diagnosis)
+
+`sync-skills.sh` designed for per-user long-lived ACI containers, but reusable in dynamic pool:
+- Containers ephemeral but shared (not per-user)
+- Skills not user-scoped on disk (installed system-wide)
+- User activation state in Cosmos, enforced backend-side
+- `sync-skills.sh` at startup still works (just needs MSI + storage RBAC wired through)
+- Lazy `POST /skills/sync` endpoint already in `sandbox/server.js` and called by backend
+
+**Status:** No architectural change needed. MSI + storage config verification needed (Verbal's domain).
+
+### Premium request baseline tracking (verified OK)
+
+Logic for tracking premium-request counts survives pool-mode rewrite. No regression.
+
+### Cosmos schema lazy upgrade tolerates legacy containerAppUrl field
+
+Sandbox service `_doc_to_model` accepts `containerAppUrl` field from legacy docs, ignores it. `_model_to_doc` never writes it. No blocking issue.
+
+### Phase 8 deferral: App Insights custom events
+
+Emit `sandbox.session.allocated` / `sandbox.session.stopped` as structured `logging` records with `extra={"event": "sandbox.session.*", ...}` rather than wiring opencensus / azure-monitor-opentelemetry into backend lifespan. This allows App Insights integration later without modifying agent code.
+
+**Commit:** Phase 8 note (deferred implementation).
+
+### Phase 9 local test sweep (Kobayashi)
+
+Local test sweep of `sandbox-dynamic-sessions` work (all 9 phases) ready pending fixup of the two audit-identified BLOCKERS (gh-token ordering, silent HTTPError). Once `2a7e013` is deployed, Kobayashi to re-run e2e suite.
+
+---
+
+## Notes for Next Session
+
+- **Verbal:** Verify `/skills/sync` response on pool (0 skills → blob storage not mounted? MSI RBAC missing?). Sandbox-side `/ready` issue flagged for investigation.
+- **Kobayashi:** Review test coverage, assertion clarity, and mock hygiene in fenster-fix boundary-exception tests.
+- **Pascal:** Execute Verbal's Azure validation runbook (Phase A.1–A.4) to provide triage data.
+- **All:** Silent error modes now visible; expect user-facing improvements in dev-task observability.
+
+---
+

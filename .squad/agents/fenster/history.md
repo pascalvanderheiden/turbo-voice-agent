@@ -189,3 +189,55 @@ exercises the header-only auth path end-to-end.
 - Recreate in pool mode was vestigial because there's no per-user container to rebuild. Stopping active sessions (Option B) is the useful equivalent — next dev-task gets a fresh container from the pool.
 - Test organization: respx for HTTP client tests, plain MagicMock + AsyncMock for agent/route logic. Keep assertions on diagnostic strings loose enough to survive minor message tweaks but tight enough to catch regressions (e.g., "HTTP 403" in message, not exact wording).
 
+
+## 2026-05-26: Azure Pipeline Audit → Fixes Shipped
+
+**Mandate:** Code audit of dev-task pipeline in session-pool mode. Identify blocking issues, silent failure modes.
+
+**Methodology:** Read-only review of commits `c8db9e4`–`909418a`, focusing on `dev_agent.py`, `sandbox.py`, frontend `sandbox-config.tsx`.
+
+**Key Learnings:**
+
+### 7 Findings
+
+**Blockers (2):**
+1. Silent HTTPError — pool 4xx/5xx caught but not surfaced. Fallback polling fails (undefined `sandbox_task_id`). User sees no error.
+2. gh-token ordering — skills-sync (FIRST call) doesn't attach `X-GH-Token` header. Session allocator receives header on wrong container or not at all.
+
+**High (1):**
+3. Start probe error swallowing — bare `except Exception` hides RBAC/network/timeout. User sees generic "stopped".
+
+**Medium (1):**
+4. Recreate vestigial — sets "provisioning" status but does nothing in pool mode.
+
+**Low (2):**
+5. Status flip-flop — transient probe failures cause UI to flicker.
+
+**OK (2):**
+6. Premium baseline tracking preserved.
+7. Cosmos lazy upgrade correct.
+
+### Four Fixes Implemented (Commit `2a7e013`)
+
+1. **gh-token → FIRST call** — Centralized `_maybe_attach_gh_token()` helper attached to `_sync_skills_stage` (not later `_sandbox_exec`). Header arrives on actual first allocation.
+
+2. **Surface pool 4xx/5xx errors** — POST /tasks wrapped in own try/except. On error: diagnostic message, log ERROR, emit stderr to output buffer, re-raise as RuntimeError.
+
+3. **Granular start probe errors** — Return 4-tuple from `_probe_sandbox_health()`. Catch HTTPStatusError, ConnectError, TimeoutException separately. `/api/sandbox/start` surfaces error_detail in response message.
+
+4. **Recreate releases sessions (Option B)** — Enumerate active dev-tasks, stop sessions, return stopped list. Frontend button relabeled "Release Sessions".
+
+### Test Coverage (39 tests passing)
+
+- Updated: `test_dev_agent_gh_token.py` (2 new tests)
+- New: `test_dev_agent_pool_errors.py` (3 tests)
+- New: `test_sandbox_probe_errors.py` (4 tests)
+- New: `test_sandbox_recreate.py` (3 tests)
+
+**Boundary exception:** Tests normally Kobayashi's domain, but fixes were tightly coupled to test surface. Flagged for Kobayashi review (coverage, assertion clarity, mock hygiene).
+
+### Production Impact
+
+Silent failures now visible. GitHub PAT primes sandbox on actual first call. Pool errors surface with actionable diagnostics. Recreate releases sessions instead of spinning.
+
+**Expected fix:** Pascal's "no visible error" and "not authenticated" reports should resolve.

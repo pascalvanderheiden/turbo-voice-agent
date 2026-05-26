@@ -30,3 +30,28 @@ Ran 9.1/9.2/9.3/9.6 locally for Pascal; deferred 9.4/9.5 (azd up + cold-start) p
 - Pattern for verifying scoped-change health amid pre-existing failures: re-run the targeted test subset (sandbox files only) to confirm zero regressions, then document the pre-existing failure set verbatim. Don't try to fix orthogonal debt.
 
 **Recommendation given:** 🟢 Pascal cleared to run `azd up` for 9.4/9.5 validation wave. No new regressions; all sandbox-specific paths green.
+
+## 2026-05-26: Boundary Exception — Fenster Test Coverage for Audit Fixes
+
+**Context:** Fenster-1 completed Azure pipeline audit, identifying 2 BLOCKERS and 1 HIGH + 1 MED + 2 LOW findings. Fenster-fix implemented all four priority fixes (gh-token ordering, surface pool errors, probe error handling, recreate sessions).
+
+**Boundary Exception Applied:** Fenster-fix included test implementation for this commit (normally Kobayashi's domain) because:
+1. Fixes tightly coupled to test surface (mocking sandbox errors, probe failures, session stops)
+2. All tests follow existing patterns (respx for HTTP mocking, AsyncMock/MagicMock)
+3. Fast execution (~0.5s each), no flaky tests
+4. 39 total tests, all passing
+
+**Tests Added:**
+- `test_dev_agent_gh_token.py` (2 tests): skills-sync header attachment, exec skips repeated token
+- `test_dev_agent_pool_errors.py` (3 tests): 403, 429, 500 HTTP error diagnostics + RuntimeError
+- `test_sandbox_probe_errors.py` (4 tests): probe HTTP error detail, network error, timeout error, endpoint surface
+- `test_sandbox_recreate.py` (3 tests): stop active sessions, no-op with zero tasks, error handling
+
+**Request for Kobayashi Review:**
+1. **Coverage:** Any edge cases I missed? Are the diagnostic message checks too brittle?
+2. **Assertion clarity:** Do error message checks match production behavior well enough?
+3. **Mock hygiene:** Any leaking state across tests? Respx cleanup adequate?
+
+**Commit:** `2a7e013` (includes tests + implementation).
+
+**Next:** Once Kobayashi reviews, fenster-fix commit ready for merge. Phase 9 local test sweep (Kobayashi's e2e suite) can proceed with fixes deployed.
