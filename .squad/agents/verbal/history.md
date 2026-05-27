@@ -9,29 +9,34 @@ Infrastructure: Azure Container Apps for backend + frontend, ACI for sandbox con
 
 ## Core Context
 
-**Recent Focus (2026-05):**
+**Architecture Summary:**
+- **Multi-region AI Foundry:** 3 separate Foundry accounts (Primary: gpt-5.2/4.1/4o-transcribe; Voice: gpt-realtime; Research: o3-deep-research)
+- **Dynamic Sessions (2026-05-27 archived):** Azure Container Apps sessionPools replaced ACI sandbox; subsecond allocation verified in production
+- **Deployment Pattern:** azd preprovision hooks for interactive region/param selection (idempotent, CI-safe)
+- **Quota Strategy:** Per-model checking (OpenAI.GlobalStandard.<model-name>, not aggregate OpenAI.Standard)
+- **Bicep Patterns:** RBAC must execute BEFORE app deployment (or use two-phase approach); Cosmos private networking complete (VNet, private endpoint, DNS zone, CAE VNet integration pending provider registration)
+- **Stdout Discipline:** Command substitution functions route diagnostic output to stderr only; clean values to stdout for env var capture
+- **GitHub Sandbox:** Header-based X-GH-Token on first session request per dev-task; skills sync precedes exec calls
+
+**Known Blockers:**
+- Container App RBAC timing: manual workaround applied (2026-05-22); permanent two-phase Bicep refactor pending in decisions.md
+- CAE VNet integration: Microsoft.ContainerService provider registration blocked since 2025-07-29
+
+**Key Scripts & Modules:**
+- `infra/scripts/select-model-regions.sh` — quota-aware, interactive region picker (deployed 2026-05-20)
+- `infra/scripts/collect-deployment-params.sh` — automated param collection for GitHub Actions
+- Session pool Bicep module: `infra/modules/session-pool.bicep` (wired by Keaton 2026-05-22)
+- Backend `SessionSandboxClient`: HTTP client for Azure dynamic sessions API (Fenster 2026-05-22)
+
+For pre-2026-05 learnings and detailed troubleshooting, see git history (commits b70212d–e1e2a3d) and `infra/README.md` Troubleshooting section.
+
+## Core Context — Recent Focus (2026-05)
 - Quota-aware region selection for multi-region AI Foundry deployments (`select-model-regions.sh`)
 - Automated deployment parameter collection (`collect-deployment-params.sh`)
 - Deployment parameter orchestration & CI/CD workflow genericization
 - Fixed stdout/stderr pollution bug in region picker causing env var persistence failure
 - Fixed per-model quota dimension checking (OpenAI.GlobalStandard.<model-name> not generic OpenAI.Standard)
 - Diagnosed & recovered Container App RBAC timing catch-22: identity created before ACR Pull role assignment
-
-**Key Patterns:**
-- Preprovision hooks in `azure.yaml` for interactive parameter collection (idempotent, CI-safe)
-- Bicep dependency ordering: RBAC must execute BEFORE backend deployment (or use two-phase approach)
-- Quota validation must be per-model not aggregate (different models → different quotas)
-- Stdout/stderr discipline critical in azd hook scripts for clean env var capture
-
-**Active Issues:**
-- Container App RBAC timing: manual fix applied 2026-05-22; permanent two-phase Bicep refactor pending
-- CAE VNet integration still blocked (Microsoft.ContainerService provider registration issue from 2025-07-29)
-
-**Deployment State:**
-- Backend + Frontend: deployed to Azure Container Apps via `azd deploy`
-- Cosmos DB: private networking infrastructure complete, public access disabled
-- ACI Sandbox: functional, cold-start optimizations (2s health poll, split provisioning)
-- GitHub Actions: OIDC-only, re-enabled for infra/backend/frontend changes
 
 ## Work Queue
 

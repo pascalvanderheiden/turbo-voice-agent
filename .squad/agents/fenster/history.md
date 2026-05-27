@@ -7,6 +7,26 @@ User: the project maintainer.
 
 Backend has 12 specialist agents: notes, brainstorm, research, spec, dev, marketing, slides, skills, todo, work + supervisor. Service layer pattern with dual Cosmos DB + InMemory implementations.
 
+## Core Context
+
+**Architecture Patterns (pre-2026-05):**
+- Slides pipeline: `init → slides → run` stages (skills sync in init, Slidev server in run).
+- Sandbox abstraction: SandboxClient protocol with SessionSandboxClient (dynamic sessions) and LocalSandboxClient (docker-compose) backends.
+- Split provisioning: start sandbox → gather content in parallel → wait for health (cold-start optimization).
+- Connection error discipline: unreachable local services log at debug/warning level, never exception() with tracebacks.
+- Skills service: dual Cosmos/InMemory implementations; in-memory writes to `.agents/skills/` disk when blob storage unavailable.
+- Live preview: restart-on-demand with health check; workspace existence validated via sandbox `/files/` before start.
+- OSS scrubbing: `.env.example` placeholders only (`<your-...>`), generic metadata in pyproject.toml, neutral example domains.
+
+**Key Files:**
+- `backend/app/agents/dev_agent.py` — pipeline orchestration (init/slides/run)
+- `backend/app/services/session_sandbox_client.py` — dynamic sessions HTTP client (19 unit tests)
+- `backend/app/services/docker_sandbox_service.py` — local sandbox lifecycle
+- `backend/app/services/in_memory_skills_service.py` — disk-backed skills fallback
+- `.github/copilot-instructions.md` — refreshed 2026-05-22 for OSS + dynamic sessions
+
+For detailed pre-2026-05 learnings, see git history (commits c8db9e4–2a7e013).
+
 ## Team Updates
 
 - **2026-05-22:** Verbal diagnosed and recovered failed `azd up` deployment. Root cause: Bicep RBAC module dependency ordering catch-22 — backend Container App identity had zero role assignments because RBAC module depends on backend being healthy, creating circular dependency. Manual fix: `az role assignment create` granted AcrPull to backend identity. **Action required:** Run `azd provision` then `azd deploy` to complete deployment. Permanent fix: Two-phase RBAC Bicep refactor proposed (see `.squad/decisions/decisions.md`).
