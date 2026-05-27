@@ -67,3 +67,24 @@ The current sandbox stack uses **two parallel implementations**: a long-running 
 1. New session pool comes online.
 2. Backend redeploys reading new env vars.
 3. Old `ca-sandbox-*` and any lingering ACI groups can be manually deleted post-cutover (no in-flight tasks survive a deploy anyway).
+
+## Post-Implementation Notes
+
+### Delivery Summary
+
+All implementation tasks completed and verified in production:
+
+- **Infrastructure**: Session pool Bicep module (`infra/modules/session-pool.bicep`, `session-pool-role.bicep`) created and wired into `main.bicep`. Deploys cleanly.
+- **Backend**: `SessionSandboxClient` implemented with token caching, retry logic (401/403 with token refresh), and SSE streaming. All 19 unit tests pass.
+- **Code cleanup**: ACI implementation deleted (`aci_sandbox_service.py`, `aci-network.bicep`, `aci-identity.bicep`, `aci-backend-role.bicep`, `container-app-sandbox.bicep`). All ACI env vars removed.
+- **Testing**: Backend test suite passes (111 passed, 18 auth-related skipped due to `AUTH_DISABLED` config — expected for local dev). Sandbox client tests: 19/19 pass.
+- **Documentation**: AGENTS.md updated with dynamic session pool architecture. Session pool observability (structured logging, retry tracking) integrated.
+- **Deployment**: Production deployment verified end-to-end by Pascal. Session allocation confirmed subsecond (vs prior 30–120s ACI cold-start).
+
+### Optional Tasks (Not Shipped)
+
+- **Task 7.1**: `infra/scripts/cleanup-aci-orphans.sh` — marked as optional post-migration utility. No ACI orphans detected in current deployment; script deferred pending legacy cleanup needs.
+
+### Divergences from Proposal
+
+None. All core objectives met. Spec deltas in `specs/` accurately reflect shipped capabilities.
