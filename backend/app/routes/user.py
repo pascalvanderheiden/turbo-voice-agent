@@ -528,11 +528,28 @@ def _decrypt_sandbox_token(encrypted: str) -> str:
     return decrypted.decode()
 
 
-async def get_sandbox_user_token(user_id: str) -> str | None:
+async def get_sandbox_user_token(user_id: str, profile_service=None) -> str | None:
     """Retrieve the decrypted GitHub sandbox token for a user."""
     conn = _connection_store.get(f"sandbox:{user_id}")
     if conn and conn.get("token"):
         return _decrypt_sandbox_token(conn["token"])
+
+    if profile_service:
+        profile = await profile_service.get_profile(user_id)
+        if profile and profile.get("githubSandboxToken"):
+            _connection_store[f"sandbox:{user_id}"] = {
+                "token": profile["githubSandboxToken"],
+                "connectedAt": profile.get("githubSandboxConnectedAt", ""),
+            }
+            logger.info(
+                "sandbox.user_token.cache_miss_recovered",
+                extra={
+                    "event": "sandbox.user_token.cache_miss_recovered",
+                    "user_id": user_id,
+                    "source": "cosmos",
+                },
+            )
+            return _decrypt_sandbox_token(profile["githubSandboxToken"])
     return None
 
 

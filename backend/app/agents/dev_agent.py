@@ -560,7 +560,7 @@ class DevAgent:
         # Resolve user's GitHub PAT for sandbox auth
         from app.routes.user import get_sandbox_user_token
 
-        self._current_gh_token = await get_sandbox_user_token(user_id)
+        self._current_gh_token = await get_sandbox_user_token(user_id, self._profile_service)
         self._current_user_id = user_id
 
         if not USE_CLI_SANDBOX:

@@ -35,6 +35,7 @@ For detailed pre-2026-05 learnings, see git history (commits c8db9e4–2a7e013).
 - **2026-05-27:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change (49/50 tasks complete, production verified subsecond session allocation); 7 spec deltas merged into canonical library. See `.squad/decisions/decisions.md`.
 
 ## Learnings
+- Cache-cold-on-deploy failure mode: in-memory caches that mirror persistent storage MUST fall back to the source on miss, especially when the cache is process-local and lost on redeploy. Check every future cache helper for cache miss → source read → cache warm behavior before relying on it in background agents or pipelines.
 - Slides pipeline restructured from `init→skills→slides` to `init→slides→run`. Skills sync merged into init stage (it's infrastructure, not user-visible). Slides stage now uses `copilot --autopilot --yolo` via shell command instead of `_sandbox_exec(prompt=...)`. Run stage handles npm install + dev server + health check, auto-registering the preview URL in `_live_previews`.
 - The `_sandbox_exec()` helper supports both `prompt` (Copilot CLI) and `command` (shell) modes. For the new slides stage, piping the prompt into `copilot --autopilot --yolo` via command mode avoids the model parameter dependency.
 - The `start_live` route no longer starts a server — it's just a URL lookup now. The run stage in the pipeline owns the server lifecycle.
@@ -265,3 +266,11 @@ Silent failures now visible. GitHub PAT primes sandbox on actual first call. Poo
 **Expected fix:** Pascal's "no visible error" and "not authenticated" reports should resolve.
 - Transient session-pool allocation retry shipped in `_sandbox_exec`: POST `/tasks` now makes 3 total attempts with exponential delays of 1s then 2s between retries (the 4s slot is retained as the next backoff value for the 3-attempt policy) and ±25% jitter to avoid synchronized retry bursts when the pool is cold or capacity constrained. Retry triggers are HTTP 5xx, 429, the exact Azure allocator body substring `Error happened when allocating pod`, allocator-like 5xx `sessionpool` bodies, and `httpx.ConnectError` / `ReadTimeout` / `PoolTimeout`; 4xx except 429 fail immediately.
 - Edge case discovered while testing with respx: successful `_sandbox_exec` tests need a fake `stream_response()` context manager after the mocked POST succeeds, otherwise the helper continues into SSE/polling. Repeated respx POST outcomes work cleanly with `side_effect=[Response(...), Response(...), ...]`, and transport exceptions can be mixed into that list before a final success response.
+
+## 2026-05-27 — Session-pool error route gotcha
+
+- The Azure session-pool allocator message `Error happened when allocating pod...` can reach dev-task users through two distinct routes: synchronously as the HTTP response body from backend `POST /tasks`, or asynchronously as sandbox stream/status output after a sandbox task has already been accepted.
+- The transient retry added in `986f326` only wraps the synchronous `_sandbox_exec` submit path (`_post_task_with_transient_retry`). It does not inspect `stdout` / `stderr` entries forwarded from `/tasks/{id}/stream` or polling `recentOutput`.
+- Current stream handling forwards sandbox entries verbatim into the pipeline buffer before type-specific processing, so any allocator-like text arriving as streamed `stderr` is surfaced to the user without retry/filtering.
+- Diagnosis rule: check whether the user-facing text is prefixed by backend `Sandbox pool rejected task (...)` (sync submit path) or appears as raw sandbox stream output (async path). Fix locations differ.
+
