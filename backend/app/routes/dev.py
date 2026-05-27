@@ -500,14 +500,16 @@ async def trigger_pipeline(task_id: str, request: Request, body: TriggerRequest 
     # Check sandbox availability before starting the pipeline
     from app.routes.sandbox import _probe_sandbox_health
 
-    reachable, _, _ = await _probe_sandbox_health()
+    reachable, _, _, error_detail = await _probe_sandbox_health()
     if not reachable:
         await service.set_status(task_id, "paused")
-        logger.warning("Sandbox unreachable — task %s paused", task_id)
-        raise HTTPException(
-            status_code=503,
-            detail="Sandbox is not running. Task is paused until the sandbox is available.",
+        logger.warning(
+            "Sandbox unreachable — task %s paused (%s)", task_id, error_detail or "no detail"
         )
+        detail = "Sandbox is not running. Task is paused until the sandbox is available."
+        if error_detail:
+            detail = f"{detail} ({error_detail})"
+        raise HTTPException(status_code=503, detail=detail)
 
     # Reset stage timestamps before re-running
     raw_doc = await service.get_raw(task_id)
