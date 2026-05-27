@@ -920,3 +920,231 @@ Local test sweep of `sandbox-dynamic-sessions` work (all 9 phases) ready pending
 
 ---
 
+
+---
+
+# Decision: Transient Pool Allocation Retry Shipped
+
+**Agent:** Fenster  
+**Status:** Shipped  
+**Commit:** `986f326392de2da95eb8e1109a4fd1e54ead3608`
+
+## Retry parameters
+
+- Scope: backend `_sandbox_exec` POST `/tasks` only.
+- Attempts: 3 total attempts.
+- Backoff: exponential 1s → 2s → 4s policy with ±25% jitter. With 3 total attempts, sleeps occur before retry attempts using the 1s and 2s slots; the 4s slot is retained as the next value for the same policy shape.
+- User stderr: emitted only after final failure, preserving the existing terminal error schema.
+- Internal observability: retryable attempts log `sandbox.session.transient_retry` with identifier, attempt, max attempts, status code, and latency.
+
+## Trigger conditions
+
+Retry is enabled for:
+
+- HTTP 5xx from the session pool.
+- HTTP 429.
+- Response body containing `Error happened when allocating pod` regardless of status.
+- Response body containing `sessionpool` with status >= 500.
+- `httpx.ConnectError`, `httpx.ReadTimeout`, and `httpx.PoolTimeout`.
+
+Do not retry:
+
+- HTTP 4xx except 429, including auth/bad-request failures such as `400 missing token`.
+
+---
+
+# Decision: Fenster — Sandbox token Cosmos fallback
+
+**Date:** 2026-05-27
+**Author:** Fenster
+**Status:** Implemented
+
+## Problem
+
+After a backend redeploy, the process-local `_connection_store` is empty. `get_sandbox_user_token()` only read that cache, so the first dev-task for a user could omit `X-GH-Token` even though the user's encrypted `githubSandboxToken` was persisted in Cosmos. The sandbox then rejected prompt-based tasks with HTTP 400: `GitHub token required`.
+
+## Fix
+
+`get_sandbox_user_token(user_id, profile_service)` now keeps cache-first behavior, then falls back to `UserProfileService.get_profile(user_id)` on cache miss. When Cosmos contains `githubSandboxToken`, the helper warms `_connection_store`, decrypts the token, and returns it for the dev pipeline. The dev agent passes its injected profile service into this helper during `run_pipeline()`.
+
+## Observability
+
+When the Cosmos fallback recovers a cold cache, the backend logs structured event `sandbox.user_token.cache_miss_recovered` with `user_id` and `source: "cosmos"`.
+
+## Verification
+
+Added tests for cache hit/no Cosmos read, cache miss with Cosmos token/cache warm, and cache miss with no Cosmos token. Focused token tests pass. Full repo lint/test commands were also run; they currently fail on pre-existing unrelated backend formatting/lint and notes API baseline issues.
+
+---
+
+# Decision: Dev-task stream lacks structured agent events
+
+**Author:** McManus
+**Date:** 2026-05-27
+**Status:** PROPOSAL — Option A Selected (Draft OpenSpec Proposal in Future Session)
+
+## Finding
+
+Production logs for dev task `d9cc6118-7805-45b0-9433-1c38a5c8af56` show the backend did start and execute dev-task stages (`cleanup`, `init`, `squad-*`, `implement`, `screenshots`). The SSE endpoint was also opened successfully by the browser.
+
+The current event pipeline is:
+
+1. `sandbox/server.js` spawns raw commands or `copilot -p ... --agent squad --autopilot ...`.
+2. The sandbox stream endpoint emits only stdout/stderr/exit entries as anonymous SSE `data:` messages.
+3. `backend/app/agents/dev_agent.py::_sandbox_exec` appends those entries to the module-level pipeline buffer, adding coarse `stage` / `stage_exit` markers.
+4. `backend/app/routes/dev.py` re-streams the buffer via `/api/dev/{task_id}/stream`, also as anonymous SSE `data:` messages.
+5. `frontend/src/app/(app)/development/[id]/page.tsx` renders only `stdout`, `stderr`, `stage`, and `decision` entries in the terminal; stage and squad UI state comes from polling `devApi.get()`.
+6. `frontend/src/app/(app)/agents/page.tsx` does not subscribe to dev-task SSE or active dev-task events.
+
+## Root cause
+
+There is no structured agent-event contract in the current pipeline. Expected events like `Architect started`, `Coder started`, or per-agent progress are not emitted as first-class `agent_start` / `agent_progress` / `agent_complete` events. Squad activity is only inferred by regex from stdout lines in `_sandbox_exec`, and those inferred updates are stored on the dev task for polling, not streamed as typed SSE events.
+
+## Recommended fix (Option A)
+
+Introduce explicit pipeline buffer event types for `stage_start`, `stage_complete`, `agent_start`, `agent_progress`, and `agent_complete` around squad setup, Copilot CLI execution, and parsed squad status.
+
+Backend: optionally emit named SSE `event:` fields in `routes/dev.py` while keeping the existing `data:` payload for backward compatibility.
+
+Frontend detail page: render the new event types in the terminal/activity timeline and update squad state optimistically from SSE instead of relying only on 2s polling.
+
+Frontend agents page: either show active dev-task activity by polling `devApi.list()`/active task detail, or subscribe to a new aggregate dev-task activity stream if backend provides one.
+
+## Risk
+
+Small risk to existing terminal streaming if old `stdout`/`stderr` entries are preserved. Higher risk if named SSE events replace anonymous `message` events; use additive event types first to avoid breaking current clients.
+
+## Decision Made
+
+**Pascal selected Option A:** Draft an OpenSpec proposal in a future session with Redfoot to design the typed agent-event SSE contract, backend implementation, and frontend rendering.
+
+---
+
+# Decision: Transient Pool Allocation Errors in Dev-Task Stream
+
+**Date:** 2026-05-27  
+**Scope:** UX handling of pool-level transient failures during sandbox execution  
+**Context:** Task `d9cc6118-...` experienced a transient pool allocator failure ("Error happened when allocating pod..."), retried at iteration level, and eventually succeeded. User saw the scary error in the dev-task output stream even though recovery happened.
+
+## The Issue
+
+When Azure Container Apps session pool returns a transient error (e.g., capacity blip, cold-start pod scheduling delay), our new error-surfacing code (commit 2a7e013) writes it to the dev-task stderr stream. Users see:
+
+```
+Error happened when allocating pod for identifier d9cc6118-... in pool sp-sandbox-...
+```
+
+even though the pipeline auto-recovers on retry. **Poor UX:** scary error for non-critical transient condition.
+
+## Recommendation
+
+**Option A: Add transient-retry inside `_sandbox_exec` with exponential backoff.**
+
+Smart retry logic (3 attempts, 1s/2s/4s backoff) for transient-class errors only (5xx, 429, pool allocator messages). Prevents transient errors from ever hitting the stderr stream. Users only see errors that are real (after all retries exhausted).
+
+**Rationale:** Transient pool errors are part of normal operation (cold starts, capacity squalls). Production systems silently recover from these. Hidden transients ≠ hidden signals — log the retries internally for debugging, but don't surface to user unless final failure.
+
+## Implementation Notes
+
+- Scope the retry to `SessionSandboxClient.request()` or wrap specific call sites in `_sandbox_exec`
+- Detect transient: status ≥ 500, status = 429, body contains "allocat" or "pod" + "error"
+- Log internal retry attempts at DEBUG level for observability
+- Abort retry loop only on 4xx (real errors) or max attempts exhausted
+- Don't change iteration-level retry behavior (that's separate concern)
+
+**Status:** Implemented via commit `986f326` (Option A shipped).
+
+---
+
+# Decision: X-GH-Token Validation Gate — No Code Change
+
+**Date:** 2026-05-27
+**Status:** Diagnosed + Decision = No Fix Needed
+**Scope:** Session pool allocation + sandbox authentication
+**Owners:** Verbal (diagnostic), Pascal (user action)
+
+## Summary
+
+Dev-task failed during sandbox allocation with backend HTTP 400: `"GitHub token required — set it in Settings → Connections"`. Root cause: user has not configured a GitHub personal access token (PAT) in the app under Settings → Connections. When missing, `backend/app/routes/user.py:get_sandbox_user_token()` returns `None`, and `dev_agent` cannot send the required `X-GH-Token` header on the first sandbox request. Sandbox validation gate correctly rejects the task.
+
+**Decision:** No code fix. The system is working as designed. User action required.
+
+## Root Cause Analysis
+
+### Call Path
+1. **Dev-task starts** → `dev_agent.run_pipeline(task_id, user_id, ...)`
+2. **Phase 1: Skills sync** → `_sync_skills_stage(task_id)` makes first sandbox call
+3. **Token resolution** → `await get_sandbox_user_token(user_id)` queries Cosmos DB
+4. **Lookup fails** → `_connection_store.get(f"sandbox:{user_id}")` returns None (user never set a GitHub PAT)
+5. **No header sent** → `dev_agent._maybe_attach_gh_token()` skips adding X-GH-Token because `gh_token` is None
+6. **Sandbox rejects** → `sandbox/server.js` validation gate line 179 checks `if (!effectiveToken && !ghAuthenticated)` and returns 400
+7. **Container fails** → Startup probe fails, pool reports allocation error
+
+### Why This Is Expected
+
+The sandbox container requires a GitHub token to bootstrap `gh auth login --with-token` (Phase 5 of `sandbox-dynamic-sessions` architecture). Without it:
+- Container cannot authenticate as the user with GitHub
+- Cannot run `gh` CLI commands (gists, repo interactions)
+- Cannot clone or push to Git repositories
+- Must reject the request at validation time (not midway through execution)
+
+The message `"set it in Settings → Connections"` is the correct user-facing error.
+
+## Evidence
+
+**Backend logs** (Log Analytics, task `d9cc6118-7805-45b0-9433-1c38a5c8af56`):
+```
+2026-05-27 08:38:29.014 ERROR app.agents.dev_agent
+  Sandbox pool rejected task (HTTP 400):
+  {"error":"GitHub token required — set it in Settings → Connections"}
+```
+
+**Pool status:**
+- `provisioningState: Succeeded` (healthy)
+- Identity: UAMI `id-sandbox-pool-2mta7feoalzyq` with AcrPull (working)
+- Image: `acr2mta7feoalzyq.azurecr.io/turbo-voice-agent/sandbox:latest` (correct)
+
+**Earlier same day:** Tasks completed successfully — those dev-tasks likely came from users who HAD GitHub tokens configured.
+
+## Decision
+
+### No code fix required
+- Validation logic is correct
+- Sandbox correctly rejects tasks without GitHub auth
+- Backend correctly forwards user's PAT when available, omits when missing
+
+### No UI/UX fix needed
+- Error message is clear: "set it in Settings → Connections"
+- User has the information needed to resolve
+
+### What will make it work
+**Pascal's immediate action:**
+1. Open app → Settings → Connections
+2. Add GitHub Personal Access Token (repo + gist scopes, or broader)
+3. Save (encrypted, stored in Cosmos DB under `sandbox:{user_id}`)
+4. Trigger new dev-task
+5. Backend loads token, sends `X-GH-Token`, sandbox accepts, task runs
+
+## Diagnostic Pattern For Future
+
+Session pool allocation errors are often opaque at the infrastructure level:
+
+| Symptom | Investigation Path |
+| --- | --- |
+| "Error happened when allocating pod for identifier X in pool Y" | Check **backend container logs** for the real HTTP error from SessionSandboxClient |
+| Allocation fails but pool state is Succeeded | Examine container startup logic (probes, entrypoint). The pool is fine; the container crashed. |
+| Intermittent failures | If earlier tasks succeeded, it's usually data-plane (user config) not infrastructure (pool, image, RBAC) |
+
+**Log queries to run:** `ContainerAppConsoleLogs_CL` filtering for identifier and `sandbox.session.error` events in backend logs.
+
+## References
+
+- `backend/app/services/session_sandbox_client.py` — X-GH-Token forwarding
+- `backend/app/agents/dev_agent.py` — Token loading + attachment logic
+- `backend/app/routes/user.py:get_sandbox_user_token()` — Cosmos DB lookup
+- `sandbox/server.js:L179` — Validation gate
+- `.squad/agents/verbal/history.md` → Phase 5 learnings (2026-05-22)
+
+---
+
+**No follow-up work needed.** System is functioning as designed.

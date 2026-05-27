@@ -274,3 +274,28 @@ Silent failures now visible. GitHub PAT primes sandbox on actual first call. Poo
 - Current stream handling forwards sandbox entries verbatim into the pipeline buffer before type-specific processing, so any allocator-like text arriving as streamed `stderr` is surfaced to the user without retry/filtering.
 - Diagnosis rule: check whether the user-facing text is prefixed by backend `Sandbox pool rejected task (...)` (sync submit path) or appears as raw sandbox stream output (async path). Fix locations differ.
 
+
+## 2026-05-27 Sandbox Token Cold Cache Recovery
+
+**Context:** After backend redeploy, process-local `_connection_store` token cache was empty. Dev-task `b32637b0` omitted `X-GH-Token` header on first sandbox request → 400 "GitHub token required".
+
+**Root Cause:** `get_sandbox_user_token(user_id)` read ONLY from in-memory `_connection_store` cache. No fallback to Cosmos DB on miss. When cache is lost (redeploy, restart), users hit token-missing errors even though encrypted tokens exist in persistent storage.
+
+**Solution (Commit `9ae0490`):**
+- `get_sandbox_user_token(user_id, profile_service)` now: cache-first (O(1) hot path) → cache miss → fallback to `UserProfileService.get_profile(user_id)` from Cosmos DB
+- On Cosmos hit: warm cache, decrypt token, emit observability event `sandbox.user_token.cache_miss_recovered`
+- Injected `profile_service` into dev agent's `run_pipeline()` so token helper has access to persistent storage
+
+**Implementation Details:**
+- In-memory `_connection_store` remains the hot path (no latency penalty for cache hits)
+- Cosmos fallback only on miss (expected: rare, cold-start or eviction)
+- Structured observability event enables monitoring of cache miss frequency (if high, adjust cache TTL or pre-warm strategy)
+
+**Tests Added:** 
+- Cache hit (no Cosmos read)
+- Cache miss + Cosmos token present (warm succeeds)
+- Cache miss + no Cosmos token (returns None gracefully)
+
+**Learning:** Every service-layer cache with persistent backing MUST have fallback on miss. Critical for multi-turn pipelines and background agents where the process-local cache may have been cleared. Pattern: cache-first (if available) → persistent store fallback → apply side effects (warm cache, log event) → return. This pattern is now standard across NotesService, IdeaService, DevTaskService; apply it consistently to auth-critical helpers like `get_sandbox_user_token()`.
+
+**Decision Created:** `fenster-sandbox-token-cosmos-fallback.md` (merged to decisions.md)

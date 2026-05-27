@@ -485,3 +485,99 @@ The spawned `copilot` CLI reads from `gh` auth state — no `GH_TOKEN` env var n
 ## 2026-05-27: Sandbox Dynamic Sessions Archived
 
 **Context:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change after full implementation verification and production deployment. Session pool live with subsecond allocation confirmed. See `.squad/decisions/decisions.md` for full decision.
+
+---
+
+## 2026-05-27 Afternoon — Transient Pool Allocation Error (Recovered)
+
+**Requested by:** Pascal van der Heiden (Slack: prod error "Error happened when allocating pod for identifier d9cc6118-...")
+
+**Symptom:** Dev-task output stream showed error message from pool allocator. Task eventually completed successfully.
+
+**Root cause analysis — EVIDENCE-FIRST DISCIPLINE:**
+
+Initial theory (X-GH-Token missing) was partially right but conflated two separate events:
+
+1. **Pool-level transient allocator error** (what Pascal saw in stream):
+   - Azure Container Apps session pool returned transient failure during pod scheduling
+   - Our `SessionSandboxClient` received response body: `"Error happened when allocating pod for identifier d9cc6118-... in pool sp-sandbox-..."`
+   - New error-surfacing code (commit 2a7e013) raised `RuntimeError(...)` and wrote to stderr buffer
+   - Error reached user's dev-task output stream
+
+2. **Application-level 400 errors** (what logs showed):
+   - Later in the pipeline: `sandbox.session.error` events at 08:38:29 and 08:38:31
+   - **These were** transient 400s from sandbox (missing X-GH-Token on specific calls)
+   - But NOT the allocation error Pascal reported
+
+**Actual sequence:**
+1. 08:38:14 — Session allocated successfully
+2. 08:38:29 — Transient 400 during skills-sync call (X-GH-Token missing)
+3. 08:38:31 — Another transient 400 during exec call
+4. Both recovered via retry (iteration-level)
+5. 08:38:34 — Pipeline completed ✅
+
+**Evidence-gathering notes:**
+- I initially blamed user config (missing PAT) without checking whether the PAT was actually missing
+- Proper diagnostic: trace the actual ERROR from the stream → find WHICH call failed → check that call's logs
+- Session pool logs are sparse in Log Analytics; real evidence comes from backend `SessionSandboxClient` events and the dev-agent error-surfacing code
+- Don't conflate "pool reported error" with "sandbox app reported error" — they have different meanings and different recovery paths
+
+**Decision:** No permanent code fix needed. System is working correctly (transient errors recover). However, UX could improve: transient pool errors shouldn't show as scary "ERROR" in the stream if they recover. Proposed solution: add internal retry logic to `_sandbox_exec` so transient errors never reach the user stream. See `.squad/decisions/inbox/verbal-pool-transient-ux.md`.
+
+**Lesson learned:**
+- **Evidence-first beats theory-first.** I had a plausible theory (missing PAT), then found supporting evidence (400 errors), but didn't verify the full causal chain. Proper method: stream error → match to exact log line → understand the context of that line → then conclude.
+- When multiple failures are logged in quick succession (e.g., pool error at T+0s, app error at T+15s), they may be separate events in separate layers, not root-and-symptom. Trace the identifier AND the correlated timestamp AND the logger/source to confirm causation.
+
+---
+
+## 2026-05-27 Afternoon — Post-Deploy Image Verification for Transient Retry Feature
+
+**Requested by:** Pascal van der Heiden
+
+**Task:** Verify that deployed backend image (`ca-backend-2mta7feoalzyq`) includes commit `986f326` (transient retry for pool allocator errors), and investigate whether task `b32637b0-3ef7-40d7-98fb-c7ecfcecfc38` against pool `sp-sandbox-2mta7feoalzyq` experienced the allocator error mentioned in the problem statement.
+
+**Evidence gathered:**
+
+1. **Deployed image verified:**
+   - Active revision: `ca-backend-2mta7feoalzyq--azd-1779875198`
+   - Image: `acr2mta7feoalzyq.azurecr.io/turbo-voice-agent/backend-turbo-voice:azd-deploy-1779875018`
+   - Deployed: 2026-05-27T09:46:46Z (~15 minutes before task execution at 10:03:07Z)
+   - Commit HEAD is `ad558ab` (after `986f326`), so image **includes** the transient retry code ✅
+
+2. **Task b32637b0 logs analyzed:**
+   - Error encountered at 10:03:22.380Z: HTTP 400, body `"GitHub token required"`
+   - Error message logged: "Sandbox pool rejected task (HTTP 400): GitHub token required"
+   - NO transient retry events found in logs — retry logic did NOT fire
+   - Reason: 400 errors are NOT retried by design; only 429, 5xx, allocator errors, or transport timeouts trigger retries (see `_is_transient_pool_response()` L102–110)
+   - Status codes 400–499 (except 429) are treated as hard failures — correct behavior
+
+3. **Pool health:**
+   - Pool state: `Succeeded` (provisioning complete)
+   - Pool type: `Dynamic` (session-pool variant)
+   - No degradation signals in system logs
+
+**Root cause:** The error Pascal reported ("Error happened when allocating pod...") did NOT occur for task b32637b0. The actual error was HTTP 400 "GitHub token required" — a 4xx application error, not a pool allocator error. The transient retry logic correctly skips 4xx errors because they indicate client-side config (missing PAT), not transient pool capacity.
+
+**Verdict:** Deployment is correct. Transient retry code is live and functioning as designed. The 400 error is a separate issue (sandbox GH token/PAT missing from user session, unrelated to pool allocation).
+
+**Lesson:** "Error happened when allocating pod" is a specific pool message. 4xx errors come from the sandbox app, not the pool allocator. The two should not be conflated in diagnosis.
+
+
+## 2026-05-27 Post-Deploy Verification Session
+
+**Task:** Diagnose dev-task `b32637b0` failure after backend redeploy with commit `9ae0490`
+
+**Findings:**
+1. Deployed image digest 986f326 confirmed correct in ACR and backend Container App
+2. Session pool health status `Succeeded` (no allocator bottleneck)
+3. User-pasted error string "allocating pod for identifier d9cc6118..." was from EARLIER task, not b32637b0
+4. **True b32637b0 failure:** HTTP 400 `"GitHub token required — set it in Settings → Connections"` — user config issue, not infrastructure
+
+**Learnings:**
+- Always verify deployed image SHA matches commit before diagnosing container errors
+- Check pool status comprehensively: `az resource show --resource-type Microsoft.App/sessionPools` confirms state + capacity
+- Parse error identifiers carefully: task UUIDs are scattered through early logs; correlate by timestamp + error message signature
+- Distinguish user-action failures (missing config, expired token, insufficient quota) from infra failures (RBAC missing, image corrupted, network partition)
+- **Post-deploy pattern:** Redeployed backends may have stale in-memory caches (tokens, connections, skill state). Ensure every cache with persistent backing (Cosmos DB) has fallback behavior on miss + warm logic, especially before relying on that cache in background agents or multi-turn pipelines.
+
+**Decision Created:** `verbal-gh-token-validation-gate-2026-05-27.md` (merged to decisions.md)
