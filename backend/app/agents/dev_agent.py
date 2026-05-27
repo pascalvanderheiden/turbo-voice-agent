@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import time
 from datetime import UTC, datetime
@@ -81,6 +82,136 @@ def _buf_append(task_id: str, entry: dict) -> None:
     buf.append(entry)
     if len(buf) > _PIPELINE_BUFFER_CAP:
         del buf[: len(buf) - _PIPELINE_BUFFER_CAP]
+
+
+_SANDBOX_TASK_MAX_ATTEMPTS = 3
+_SANDBOX_TASK_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_SANDBOX_ALLOCATOR_ERROR = "Error happened when allocating pod"
+_TRANSIENT_TRANSPORT_ERRORS = (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
+
+
+class _SandboxTaskSubmitError(Exception):
+    """Terminal failure while submitting a sandbox task after transient retries."""
+
+    def __init__(self, *, status_code: int | None, body_text: str) -> None:
+        self.status_code = status_code
+        self.body_text = body_text
+        super().__init__(body_text)
+
+
+def _is_transient_pool_response(response: httpx.Response) -> bool:
+    """Return True when a pool response is likely allocator/capacity transient."""
+    body_text = response.text or ""
+    status_code = response.status_code
+    if _SANDBOX_ALLOCATOR_ERROR in body_text:
+        return True
+    if status_code == 429 or status_code >= 500:
+        return True
+    return status_code >= 500 and "sessionpool" in body_text.lower()
+
+
+def _sandbox_pool_error_message(status_code: int | None, body_text: str) -> str:
+    """Build the user-facing terminal sandbox pool diagnostic."""
+    body = body_text[:500] if body_text else ""
+    status = f"HTTP {status_code}" if status_code is not None else "transport error"
+    return (
+        f"Sandbox pool rejected task ({status}): {body}\n"
+        f"Hint: Check backend identity RBAC on session pool, "
+        f"quota limits, or pool health status."
+    )
+
+
+async def _sleep_with_jitter(base_delay_seconds: float) -> None:
+    """Sleep using ±25% jitter around the exponential backoff delay."""
+    await asyncio.sleep(base_delay_seconds * random.uniform(0.75, 1.25))
+
+
+async def _post_task_with_transient_retry(
+    sandbox_client: SandboxClient,
+    *,
+    identifier: str,
+    task_id: str,
+    payload: dict,
+    headers: dict[str, str] | None,
+) -> httpx.Response:
+    """POST /tasks with short retry for transient session-pool allocation failures."""
+    for attempt in range(1, _SANDBOX_TASK_MAX_ATTEMPTS + 1):
+        started = time.monotonic()
+        try:
+            resp = await sandbox_client.request(
+                "POST",
+                "/tasks",
+                identifier=identifier,
+                json=payload,
+                headers=headers,
+                timeout=30.0,
+            )
+            body_text = resp.text or ""
+            if _is_transient_pool_response(resp):
+                if attempt < _SANDBOX_TASK_MAX_ATTEMPTS:
+                    _log_sandbox_transient_retry(
+                        identifier=task_id,
+                        attempt=attempt,
+                        status_code=resp.status_code,
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    )
+                    await _sleep_with_jitter(_SANDBOX_TASK_BACKOFF_SECONDS[attempt - 1])
+                    continue
+                raise _SandboxTaskSubmitError(
+                    status_code=resp.status_code,
+                    body_text=body_text,
+                )
+
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as http_err:
+            response = http_err.response
+            if _is_transient_pool_response(response) and attempt < _SANDBOX_TASK_MAX_ATTEMPTS:
+                _log_sandbox_transient_retry(
+                    identifier=task_id,
+                    attempt=attempt,
+                    status_code=response.status_code,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+                await _sleep_with_jitter(_SANDBOX_TASK_BACKOFF_SECONDS[attempt - 1])
+                continue
+            raise
+        except _TRANSIENT_TRANSPORT_ERRORS as transport_err:
+            if attempt < _SANDBOX_TASK_MAX_ATTEMPTS:
+                _log_sandbox_transient_retry(
+                    identifier=task_id,
+                    attempt=attempt,
+                    status_code=None,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+                await _sleep_with_jitter(_SANDBOX_TASK_BACKOFF_SECONDS[attempt - 1])
+                continue
+            raise _SandboxTaskSubmitError(
+                status_code=None,
+                body_text=str(transport_err),
+            ) from transport_err
+
+    raise AssertionError("unreachable sandbox retry state")
+
+
+def _log_sandbox_transient_retry(
+    *,
+    identifier: str,
+    attempt: int,
+    status_code: int | None,
+    latency_ms: int,
+) -> None:
+    logger.warning(
+        "sandbox.session.transient_retry",
+        extra={
+            "event": "sandbox.session.transient_retry",
+            "identifier": identifier,
+            "attempt": attempt,
+            "max_attempts": _SANDBOX_TASK_MAX_ATTEMPTS,
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+        },
+    )
 
 
 async def cancel_sandbox_task_for(task_id: str, dev_agent: "DevAgent | None" = None) -> bool:
@@ -1402,32 +1533,30 @@ class DevAgent:
 
         sandbox_client = self._sandbox_client()
 
-        # Submit the task to the sandbox pool. If the pool returns 4xx/5xx (RBAC,
-        # quota, unhealthy), surface a diagnostic message instead of silently
-        # falling back to polling (which would fail with an undefined task_id).
+        # Submit the task to the sandbox pool. Transient allocator/capacity errors
+        # are retried before surfacing the same terminal diagnostic as hard fails.
         try:
-            resp = await sandbox_client.request(
-                "POST",
-                "/tasks",
+            resp = await _post_task_with_transient_retry(
+                sandbox_client,
                 identifier=task_id or "default",
-                json=payload,
+                task_id=task_id,
+                payload=payload,
                 headers=first_call_headers or None,
-                timeout=30.0,
             )
-            resp.raise_for_status()
         except httpx.HTTPStatusError as http_err:
             status = http_err.response.status_code
-            # Truncate body to first 500 chars to avoid log spam
-            body_text = http_err.response.text[:500] if http_err.response.text else ""
-            msg = (
-                f"Sandbox pool rejected task (HTTP {status}): {body_text}\n"
-                f"Hint: Check backend identity RBAC on session pool, "
-                f"quota limits, or pool health status."
-            )
+            body_text = http_err.response.text if http_err.response.text else ""
+            msg = _sandbox_pool_error_message(status, body_text)
             logger.error("Sandbox pool error for task %s: %s", task_id, msg)
             if task_id and task_id in _pipeline_outputs:
                 _buf_append(task_id, {"type": "stderr", "data": msg, "ts": time.time()})
             raise RuntimeError(msg) from http_err
+        except _SandboxTaskSubmitError as submit_err:
+            msg = _sandbox_pool_error_message(submit_err.status_code, submit_err.body_text)
+            logger.error("Sandbox pool error for task %s: %s", task_id, msg)
+            if task_id and task_id in _pipeline_outputs:
+                _buf_append(task_id, {"type": "stderr", "data": msg, "ts": time.time()})
+            raise RuntimeError(msg) from submit_err
 
         task_data = resp.json()
         sandbox_task_id = task_data["id"]
@@ -1448,7 +1577,6 @@ class DevAgent:
         SSE_LINE_TIMEOUT = 60  # no line (incl. keepalive) for 60s → dead connection
         start = time.monotonic()
         last_output_time = time.monotonic()  # tracks meaningful stdout/stderr
-        last_any_traffic = time.monotonic()  # tracks any SSE traffic (incl keepalive)
         exit_code = -1
         output_lines: list[str] = []
         accumulated_text = ""
@@ -1498,8 +1626,6 @@ class DevAgent:
 
                     if not raw_line.startswith("data: "):
                         # Keepalive/comment — proves connection alive but NOT real output
-                        if raw_line.strip():
-                            last_any_traffic = now
                         continue
 
                     line_count += 1
