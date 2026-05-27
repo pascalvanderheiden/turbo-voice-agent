@@ -55,3 +55,5 @@ Ran 9.1/9.2/9.3/9.6 locally for Pascal; deferred 9.4/9.5 (azd up + cold-start) p
 **Commit:** `2a7e013` (includes tests + implementation).
 
 **Next:** Once Kobayashi reviews, fenster-fix commit ready for merge. Phase 9 local test sweep (Kobayashi's e2e suite) can proceed with fixes deployed.
+
+- **2026-05-27:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change (49/50 tasks complete, production verified). See `.squad/decisions/decisions.md`.

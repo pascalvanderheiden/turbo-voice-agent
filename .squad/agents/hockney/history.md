@@ -8,3 +8,5 @@ User: the project maintainer.
 Mobile app provides voice interaction with the same backend as the web frontend. iOS-only target.
 
 ## Learnings
+
+- **2026-05-27:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change (49/50 tasks complete, production verified). See `.squad/decisions/decisions.md`.

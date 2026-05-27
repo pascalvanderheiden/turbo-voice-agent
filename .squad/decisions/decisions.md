@@ -206,3 +206,58 @@ Script assumed `azd env set` succeeded but never verified by reading back the va
 - `.squad/skills/azd-quota-aware-region-selection/SKILL.md` — added "Pitfalls" section documenting these issues
 - Quota dimension fix (2026-05-20) — prior fix that made region selection accurate
 - Deployment parameter orchestrator (2026-05-19) — same stdout discipline pattern applies
+
+---
+
+## Redfoot — Archive sandbox-dynamic-sessions OpenSpec Change
+
+**Author:** Redfoot (Spec Manager)  
+**Date:** 2026-05-27  
+**Status:** Decided  
+**Context:** Post-implementation archive of completed sandbox pool modernization  
+**Commit:** ee82ae7 (`docs(openspec): archive sandbox-dynamic-sessions; update open-source-project status`)
+
+### Decision
+
+Archive the `sandbox-dynamic-sessions` OpenSpec change to `openspec/changes/archive/2026-05-27-sandbox-dynamic-sessions/` after full implementation verification and production deployment.
+
+### Rationale
+
+1. **Implementation Complete**: 49/50 core tasks done. Task 7.1 (cleanup-aci-orphans.sh) marked optional post-migration utility.
+   - Session pool Bicep module + wiring deployed and tested
+   - SessionSandboxClient (19/19 unit tests pass)
+   - ACI infrastructure deleted
+   - Backend test suite: 111 passed, no regressions
+   - Docs updated (AGENTS.md, proposal.md)
+
+2. **Production Verified**: Pascal confirmed end-to-end deployment in production.
+   - Session allocation: subsecond (vs 30–120s ACI prior)
+   - SSE streaming, task completion, session cleanup all working
+
+3. **Spec Deltas Merged**: All capability specs updated and new specs created.
+   - Modified: aci-sandbox-infra, aci-sandbox-lifecycle, copilot-cli-sandbox, sandbox-auth, sandbox-skill-mount
+   - New: dynamic-session-sandbox, session-pool-infra
+   - Deltas integrated into `openspec/specs/` (canonical library)
+
+### Archive Location
+
+`openspec/changes/archive/2026-05-27-sandbox-dynamic-sessions/`
+
+Contains:
+- proposal.md (with Post-Implementation Notes)
+- design.md
+- tasks.md (49/50 tasks checked)
+- specs/ (historical delta snapshots)
+
+### Remaining Work
+
+**open-source-project** change: NOT archived.
+- Sections 1–10, 12 complete (OSS docs, governance, decommission)
+- Sections 11, 13–15 in progress (validation wave: fresh deploy, publish)
+- Target: archive after validation passes
+
+### Follow-Up
+
+1. Cleanup-aci-orphans.sh can be written on-demand if legacy ACI groups discovered post-migration
+2. Session pool observability (App Insights wiring) can be added as future enhancement
+3. Consider documenting session pool scaling patterns as the feature matures

@@ -21,3 +21,5 @@ Frontend features: voice mode UI, notes, dashboard, dev-task pipeline viewer, sl
 - OSS README rewrite now follows a deployment-first structure: hero, screenshot placeholder, key features, architecture, prerequisites, manual deploy, automated deploy, local dev, testing, contributing, license, acknowledgments.
 - Governance templates chosen for OSS prep: MIT license, Contributor Covenant 2.1, and a GitHub Security Advisories-based security policy with response expectations.
 - Frontend env examples now use a dedicated `.env.local.example` file with commented generic placeholders so README setup matches the actual local workflow.
+
+- **2026-05-27:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change (session pool live, subsecond allocation verified in production). See `.squad/decisions/decisions.md`.

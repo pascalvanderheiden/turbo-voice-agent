@@ -476,3 +476,7 @@ The spawned `copilot` CLI reads from `gh` auth state — no `GH_TOKEN` env var n
 **Investigation flagged for Verbal:** Verify session-pool container has `AZURE_STORAGE_ACCOUNT_NAME` set and MSI has Storage Blob Data Reader on the storage account. If both OK but sync still returns 0, blade issue (blob container truly empty) or `sync-skills.sh` error (log it, don't swallow).
 
 **Next:** Await Pascal to execute runbook Phase A.1–A.4 and provide triage output.
+
+## 2026-05-27: Sandbox Dynamic Sessions Archived
+
+**Context:** Redfoot archived `sandbox-dynamic-sessions` OpenSpec change after full implementation verification and production deployment. Session pool live with subsecond allocation confirmed. See `.squad/decisions/decisions.md` for full decision.
