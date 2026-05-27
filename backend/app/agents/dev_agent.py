@@ -84,6 +84,11 @@ def _buf_append(task_id: str, entry: dict) -> None:
         del buf[: len(buf) - _PIPELINE_BUFFER_CAP]
 
 
+def _emit_terminal_error(task_id: str, message: str) -> None:
+    """Emit a terminal error line to the task output buffer."""
+    _buf_append(task_id, {"type": "stderr", "data": f"{message}\n", "ts": time.time()})
+
+
 _SANDBOX_TASK_MAX_ATTEMPTS = 3
 _SANDBOX_TASK_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 _SANDBOX_ALLOCATOR_ERROR = "Error happened when allocating pod"
@@ -320,7 +325,10 @@ class DevAgent:
                             "mode": {
                                 "type": "string",
                                 "enum": ["mockup", "sequential", "slides"],
-                                "description": "Pipeline mode: mockup (quick GUI), sequential (iterative), or slides (presentation deck)",
+                                "description": (
+                                    "Pipeline mode: mockup (quick GUI), sequential (iterative), "
+                                    "or slides (presentation deck)"
+                                ),
                             },
                         },
                         "required": ["title"],
@@ -370,7 +378,11 @@ class DevAgent:
                 "type": "function",
                 "function": {
                     "name": "trigger_dev_pipeline",
-                    "description": "Start the development pipeline for a task. Mockup mode = quick GUI mockup. OpenSpec mode = iterative spec-driven development.",
+                    "description": (
+                        "Start the development pipeline for a task. "
+                        "Mockup mode = quick GUI mockup. "
+                        "OpenSpec mode = iterative spec-driven development."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -549,6 +561,25 @@ class DevAgent:
         except Exception:
             return False
 
+    async def _abort_mockup_pipeline(
+        self,
+        *,
+        svc,
+        task_id: str,
+        stage_name: str,
+        message: str,
+        error: str | None = None,
+    ) -> None:
+        """Mark the mockup pipeline failed and raise a terminal RuntimeError."""
+        reason = error or message
+        _emit_terminal_error(task_id, message)
+        try:
+            await svc.set_iteration_stage_status(task_id, 0, stage_name, "failed", error=reason)
+            await svc.set_status(task_id, "failed")
+        except Exception:
+            logger.exception("Failed to mark mockup pipeline failed for task %s", task_id)
+        raise RuntimeError(message)
+
     async def run_pipeline(self, task_id: str, user_id: str = "default-user") -> None:
         """Run the pipeline based on task mode, delegating to sandbox."""
         logger.info("Pipeline starting: task=%s, user=%s", task_id, user_id)
@@ -675,32 +706,70 @@ class DevAgent:
         # Stage: init — workspace setup + squad initialization
         await svc.set_iteration_stage_status(task_id, 0, "init", "running")
         logger.info("Mockup init: task=%s, model=%s", task_id, model)
-        await self._sandbox_exec(
-            task_id=task_id,
-            command=(
-                f"cd {work_dir} && git init -q"
-                " && git config user.email 'agent@sandbox'"
-                " && git config user.name 'Sandbox Agent'"
-                " && git commit --allow-empty -m 'init' -q"
-                " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
-            ),
-            args=[],
-            stage_label="init",
-            work_dir=work_dir,
-            raise_on_error=False,
-        )
-        await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        try:
+            await self._sandbox_exec(
+                task_id=task_id,
+                command=(
+                    f"cd {work_dir} && git init -q"
+                    " && git config user.email 'agent@sandbox'"
+                    " && git config user.name 'Sandbox Agent'"
+                    " && git commit --allow-empty -m 'init' -q"
+                    " && git remote add origin https://github.com/placeholder/repo.git "
+                    "2>/dev/null || true"
+                ),
+                args=[],
+                stage_label="init",
+                work_dir=work_dir,
+                raise_on_error=True,
+            )
+            await self._run_squad_stage(task_id, work_dir, spec_content, user_id)
+        except Exception as exc:
+            reason = str(exc)
+            await self._abort_mockup_pipeline(
+                svc=svc,
+                task_id=task_id,
+                stage_name="init",
+                message=(
+                    f"❌ Init stage failed — pipeline aborted. {reason}. "
+                    "No mockup app was generated."
+                ),
+                error=reason,
+            )
         self._squad_enabled_tasks[task_id] = True
         await svc.set_iteration_stage_status(task_id, 0, "init", "completed")
 
         # Stage: skills — sync skills from blob storage
         await svc.set_iteration_stage_status(task_id, 0, "skills", "running")
-        await self._sync_skills_stage(task_id)
+        try:
+            await self._sync_skills_stage(task_id, fail_on_error=True)
+        except Exception as exc:
+            reason = str(exc)
+            await self._abort_mockup_pipeline(
+                svc=svc,
+                task_id=task_id,
+                stage_name="skills",
+                message=(
+                    f"❌ Skills stage failed — pipeline aborted. {reason}. "
+                    "No mockup app was generated."
+                ),
+                error=reason,
+            )
         await svc.set_iteration_stage_status(task_id, 0, "skills", "completed")
 
         # Stage: implement — single Copilot CLI invocation with autopilot
         await svc.set_iteration_stage_status(task_id, 0, "implement", "running")
-        logger.info("Mockup implement: task=%s, desc_len=%d", task_id, len(mockup_desc))
+        desc_len = len(mockup_desc) if isinstance(mockup_desc, str) else 0
+        if not isinstance(mockup_desc, str) or len(mockup_desc.strip()) < 20:
+            await self._abort_mockup_pipeline(
+                svc=svc,
+                task_id=task_id,
+                stage_name="implement",
+                message=(
+                    "❌ Spec produced no usable mockup description "
+                    f"(spec_id={task.spec_id}, desc_len={desc_len}). Check the spec content."
+                ),
+            )
+        logger.info("Mockup implement: task=%s, desc_len=%d", task_id, desc_len)
         for attempt in range(2):
             try:
                 await self._sandbox_exec(
@@ -710,7 +779,7 @@ class DevAgent:
                     stage_label=f"implement{'-retry' if attempt else ''}",
                     stall_timeout=600,
                     timeout=2400,
-                    raise_on_error=False,
+                    raise_on_error=True,
                     work_dir=work_dir,
                     continue_session=(attempt > 0),
                     agent="squad",
@@ -730,9 +799,19 @@ class DevAgent:
                                 "stage": "implement-retry",
                             },
                         )
-                else:
-                    logger.warning("Mockup implement failed: %s", exc)
-                    break
+                    continue
+                reason = str(exc)
+                logger.warning("Mockup implement failed: %s", exc)
+                await self._abort_mockup_pipeline(
+                    svc=svc,
+                    task_id=task_id,
+                    stage_name="implement",
+                    message=(
+                        f"❌ Implement stage failed — pipeline aborted. {reason}. "
+                        "No mockup app was generated."
+                    ),
+                    error=reason,
+                )
         await self._checkpoint(task_id, "mockup-implement", work_dir)
         await svc.set_iteration_stage_status(task_id, 0, "implement", "completed")
 
@@ -740,8 +819,16 @@ class DevAgent:
         preview_port = 3000
         try:
             preview_port = await self._start_mockup_dev_server(task_id, work_dir)
-        except Exception as e:
-            logger.warning("Failed to start dev server for preview: %s", e)
+        except Exception as exc:
+            reason = str(exc)
+            logger.warning("Failed to start dev server for preview: %s", exc)
+            await self._abort_mockup_pipeline(
+                svc=svc,
+                task_id=task_id,
+                stage_name="screenshots",
+                message=reason,
+                error=reason,
+            )
 
         # Stage: screenshots — lightweight shell capture from running dev server
         await svc.set_iteration_stage_status(task_id, 0, "screenshots", "running")
@@ -768,7 +855,7 @@ class DevAgent:
         logger.info("Mockup pipeline COMPLETED for task %s", task_id)
 
     async def _run_sequential_pipeline(self, task_id: str, user_id: str) -> None:
-        """Sequential pipeline: init → skills → implement-foundation → implement-feature-N → screenshots."""
+        """Sequential pipeline: init → skills → foundation → features → screenshots."""
         self._squad_enabled_tasks[task_id] = False
         svc = self._service.with_user(user_id)
         task = await svc.get_by_id(task_id)
@@ -797,7 +884,8 @@ class DevAgent:
                 " && git config user.email 'agent@sandbox'"
                 " && git config user.name 'Sandbox Agent'"
                 " && git commit --allow-empty -m 'init' -q"
-                " && git remote add origin https://github.com/placeholder/repo.git 2>/dev/null || true"
+                " && git remote add origin https://github.com/placeholder/repo.git "
+                "2>/dev/null || true"
             ),
             args=[],
             stage_label="init",
@@ -1874,7 +1962,10 @@ class DevAgent:
         try:
             raw = await self._sandbox_exec(
                 task_id=task_id,
-                command=f"test -f {work_dir}/.squad/config.json && squad status --json 2>/dev/null || echo '[]'",
+                command=(
+                    f"test -f {work_dir}/.squad/config.json "
+                    "&& squad status --json 2>/dev/null || echo '[]'"
+                ),
                 args=[],
                 stage_label="squad-status",
                 work_dir=work_dir,
@@ -1966,11 +2057,38 @@ class DevAgent:
         except Exception as e:
             logger.debug("Checkpoint failed (non-critical): %s", e)
 
+    async def _wait_for_preview_ready(
+        self,
+        task_id: str,
+        port: int,
+        *,
+        attempts: int = 15,
+        interval_seconds: float = 2.0,
+    ) -> tuple[bool, int | None]:
+        """Poll the sandbox preview URL until it returns a successful 2xx response."""
+        client = self._sandbox_client()
+        last_status: int | None = None
+        for _ in range(attempts):
+            await asyncio.sleep(interval_seconds)
+            try:
+                probe = await client.request(
+                    "GET",
+                    f"/proxy/{port}/",
+                    identifier=task_id,
+                    timeout=5.0,
+                )
+                last_status = probe.status_code
+                if 200 <= probe.status_code < 300:
+                    return True, last_status
+            except Exception:
+                pass
+        return False, last_status
+
     async def _start_mockup_dev_server(self, task_id: str, work_dir: str) -> int:
         """Start a dev server in the sandbox for live preview.
 
         Tries npm-based dev server first, falls back to npx serve for static apps.
-        Returns the port the server is running on, or 0 if no server started.
+        Returns the port the server is running on.
         """
         client = self._sandbox_client()
         from app.routes.dev import _live_previews
@@ -1984,6 +2102,7 @@ class DevAgent:
             ),
             (f"npx --yes serve {work_dir} -l 3000 --no-clipboard", 3000),
         ]
+        last_status: int | None = None
 
         for cmd, port in strategies:
             resp = await client.request(
@@ -1995,22 +2114,8 @@ class DevAgent:
             )
             resp.raise_for_status()
 
-            # Poll until dev server is healthy (30s per strategy)
-            ready = False
-            for _ in range(15):
-                await asyncio.sleep(2)
-                try:
-                    probe = await client.request(
-                        "GET",
-                        f"/proxy/{port}/",
-                        identifier=task_id,
-                        timeout=5.0,
-                    )
-                    if probe.status_code < 500:
-                        ready = True
-                        break
-                except Exception:
-                    pass
+            ready, status = await self._wait_for_preview_ready(task_id, port)
+            last_status = status if status is not None else last_status
 
             if ready:
                 preview_url = f"/api/dev/{task_id}/preview/"
@@ -2035,11 +2140,14 @@ class DevAgent:
                 }
                 return port
 
-        logger.warning(
-            "No dev server started within timeout for task %s — skipping preview",
-            task_id,
+        status_text = str(last_status) if last_status is not None else "none"
+        msg = (
+            "❌ Preview server never returned 2xx on localhost:3000 — mockup did not start. "
+            f"Last status: {status_text}."
         )
-        return 0
+        logger.warning("No healthy dev server for task %s: %s", task_id, msg)
+        _emit_terminal_error(task_id, msg)
+        raise RuntimeError(msg)
 
     async def _read_sandbox_file(self, path: str, dev_task_id: str = "") -> str | None:
         """Read a text file from the sandbox container via HTTP."""
@@ -2577,7 +2685,7 @@ class DevAgent:
             headers["X-GH-Token"] = gh_token
             _gh_token_sent.add(task_id)
 
-    async def _sync_skills_stage(self, task_id: str) -> None:
+    async def _sync_skills_stage(self, task_id: str, *, fail_on_error: bool = False) -> None:
         """Sync skills from blob storage to the sandbox and report what's available."""
         logger.info("Skills sync: task=%s", task_id)
         client = self._sandbox_client()
@@ -2623,7 +2731,7 @@ class DevAgent:
                     )
 
             logger.info("Skills sync complete: task=%s, synced=%d", task_id, synced)
-        except httpx.ConnectError:
+        except httpx.ConnectError as exc:
             logger.warning("Skills sync skipped for task %s — sandbox not reachable", task_id)
             if task_id in _pipeline_outputs:
                 _buf_append(
@@ -2634,6 +2742,8 @@ class DevAgent:
                         "stage": "skills",
                     },
                 )
+            if fail_on_error:
+                raise RuntimeError("sandbox not reachable during skills sync") from exc
         except Exception as exc:
             logger.warning("Skills sync failed for task %s: %s", task_id, exc)
             if task_id in _pipeline_outputs:
@@ -2645,6 +2755,8 @@ class DevAgent:
                         "stage": "skills",
                     },
                 )
+            if fail_on_error:
+                raise RuntimeError(f"skills sync failed: {exc}") from exc
 
     async def _run_squad_stage(
         self,
@@ -2684,7 +2796,10 @@ class DevAgent:
         try:
             await self._sandbox_exec(
                 task_id=task_id,
-                command=f"mkdir -p {work_dir}/.squad/casting && echo '[]' > {work_dir}/.squad/casting/registry.json",
+                command=(
+                    f"mkdir -p {work_dir}/.squad/casting "
+                    f"&& echo '[]' > {work_dir}/.squad/casting/registry.json"
+                ),
                 args=[],
                 stage_label="squad-registry",
                 work_dir=work_dir,
@@ -2711,7 +2826,9 @@ class DevAgent:
             try:
                 await self._sandbox_exec(
                     task_id=task_id,
-                    command=f"mkdir -p $(dirname {full_path}) && printf '%s' '{escaped}' > {full_path}",
+                    command=(
+                        f"mkdir -p $(dirname {full_path}) && printf '%s' '{escaped}' > {full_path}"
+                    ),
                     args=[],
                     stage_label="squad-config",
                     work_dir=work_dir,
