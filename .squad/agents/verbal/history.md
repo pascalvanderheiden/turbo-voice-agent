@@ -581,3 +581,31 @@ Initial theory (X-GH-Token missing) was partially right but conflated two separa
 - **Post-deploy pattern:** Redeployed backends may have stale in-memory caches (tokens, connections, skill state). Ensure every cache with persistent backing (Cosmos DB) has fallback behavior on miss + warm logic, especially before relying on that cache in background agents or multi-turn pipelines.
 
 **Decision Created:** `verbal-gh-token-validation-gate-2026-05-27.md` (merged to decisions.md)
+
+## 2026-05-27T14:07 — Post-Deploy Diagnostics: Token Error Despite Fallback Fix
+
+**Situation:** Pascal redeployed backend after 9ae0490 (Cosmos fallback for sandbox token cache). Task `ba04ba04-2620-440c-a7d0-20d093355097` still showed "GitHub token required — set it in Settings → Connections".
+
+**Evidence Gathered:**
+
+1. **Deployment verified:** Image deployed at 2026-05-27 13:42:52 UTC (post-fix 9ae0490, committed 10:21 UTC). Revision `ca-backend-2mta7feoalzyq--azd-1779889364` is active.
+
+2. **Fallback code deployed:** Commit 9ae0490 is in current HEAD (f5f3702). Deployment includes the Cosmos fallback logic in `get_sandbox_user_token()`.
+
+3. **No fallback recovery event:** Log Analytics shows NO `sandbox.user_token.cache_miss_recovered` event for the task. This means the fallback code either:
+   - Ran and returned None (Cosmos has no token), OR
+   - Did not run due to unlogged exception
+
+4. **No profile errors in logs:** No ERROR-level logs about fetching Pascal's user profile or Cosmos query failures.
+
+5. **Root cause identified:** The fallback code is running but returning None because **Pascal's Cosmos profile has NO `githubSandboxToken` stored**. The in-memory cache was empty (post-redeploy), the fallback tried Cosmos, and Cosmos returned None.
+
+**Why:** Pascal never connected GitHub in the Settings page → Connections, or the token was never persisted to his Cosmos profile.
+
+**Fix Required:** Pascal must open Settings → Connections and authenticate with GitHub to store the token in his user profile. The fallback logic is working correctly; it just has nothing to fall back to.
+
+**Lessons for future post-deploy verification:**
+1. After deploying token cache fallback, verify users have **pre-existing tokens in Cosmos** before testing.
+2. Log structured event on fallback-returns-None case to distinguish "code path not reached" from "code path ran but found no token."
+3. Consider adding a status-check endpoint that reports whether the user has a sandbox token (in cache or Cosmos) without waiting for a dev-task failure.
+

@@ -1148,3 +1148,56 @@ Session pool allocation errors are often opaque at the infrastructure level:
 ---
 
 **No follow-up work needed.** System is functioning as designed.
+
+# Decision: Mockup Pipeline Fail-Fast and Readiness Hardening
+
+---
+date: 2026-05-27
+author: fenster
+status: SHIPPED
+confidence: HIGH (verified by 44 focused tests)
+---
+
+## Problem
+
+Task `ba04ba04-2620-440c-a7d0-20d093355097` produced misleading success: the implement stage encountered a sandbox submission failure, but the pipeline still checkpointed and advanced to screenshots. The fallback preview path then accepted a 404 `Cannot GET /` response as "ready" because readiness validation allowed any status below 500.
+
+**Root causes:**
+1. **Implement-stage exceptions swallowed:** Error handler in `dev_agent.py:_run_mockup_stage()` logged but did NOT abort. Pipeline continued despite failure.
+2. **Readiness too lenient:** Health check allowed `status < 500` instead of requiring `200 <= status < 300`. Fallback/static servers (4xx) passed validation.
+3. **Missing guard:** Mockup description could be empty or garbage if spec generation partially failed. No pre-check on content length.
+
+## Solution
+
+Hardened `backend/app/agents/dev_agent.py` with three scoped fixes:
+
+1. **Fail-fast on pre-screenshot stages**
+   - `init`, `skills`, `implement` now abort the mockup pipeline when:
+     - Sandbox execution returns non-200 status
+     - Exception is raised
+     - Process exits non-zero
+   - Task and active stage are marked failed; clear terminal error emitted
+
+2. **Strict preview readiness**
+   - Health check now requires `200 <= status < 300` (no 4xx fallback)
+   - Timeout message: `❌ Preview server never returned 2xx on localhost:3000 — mockup did not start. Last status: {status}.`
+
+3. **Guard mockup description**
+   - Implement validates `mockup_desc` is non-empty string with >= 20 characters
+   - Aborts with spec-id diagnostic if invalid
+
+## Rationale
+
+Multi-stage pipelines should fail loudly at the first stage that leaves workspace unusable. Continuing after init/skills/implement failure creates misleading downstream artifacts, wastes sandbox time, and hides the real cause from users. Readiness checks must prove the generated app is serving a successful route, not merely that an HTTP server responded with *any* status.
+
+## Testing
+
+- 44 focused pytest tests: all pass
+- Scenarios covered: init/skills/implement abort, readiness status checks, spec-id validation
+- Commit: `2c1a876`
+
+## Status
+
+**SHIPPED** (commit `2c1a876`). Pipeline now fails loudly at first unusable stage, preventing misleading downstream artifacts.
+
+---
